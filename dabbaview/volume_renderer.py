@@ -20,6 +20,15 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QComboBox,
                               QLabel, QPushButton, QSlider, QFrame,
                               QMessageBox)
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QGuiApplication
+
+# 실제 창이 없는 Qt 플랫폼에서는 VTK 렌더 창 생성 시 크래시 (CI 스모크 테스트 등)
+_HEADLESS_PLATFORMS = ("offscreen", "minimal")
+
+
+def vtk_usable():
+    """VTK가 설치되어 있고 현재 Qt 플랫폼에서 렌더 창을 만들 수 있는지"""
+    return VTK_AVAILABLE and QGuiApplication.platformName() not in _HEADLESS_PLATFORMS
 
 
 # VTK 없을 때 대체 위젯
@@ -148,7 +157,8 @@ class VolumeRenderWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        if not VTK_AVAILABLE:
+        self._vtk_ok = vtk_usable()
+        if not self._vtk_ok:
             layout = QVBoxLayout(self)
             layout.addWidget(VTKNotAvailableWidget())
             return
@@ -219,7 +229,7 @@ class VolumeRenderWidget(QWidget):
 
     def set_series(self, series):
         """DicomSeries로부터 볼륨 데이터 구성"""
-        if not VTK_AVAILABLE or not series or series.num_slices < 2:
+        if not self._vtk_ok or not series or series.num_slices < 2:
             return
 
         series.sort_slices()
@@ -275,7 +285,7 @@ class VolumeRenderWidget(QWidget):
         self._reset_camera()
 
     def _apply_preset(self, name):
-        if not VTK_AVAILABLE:
+        if not self._vtk_ok:
             return
         VolumePresets.apply_preset(
             name, self._volume_property,
@@ -291,7 +301,7 @@ class VolumeRenderWidget(QWidget):
         self._render()
 
     def _on_quality_changed(self, value):
-        if not VTK_AVAILABLE or not self._volume_actor:
+        if not self._vtk_ok or not self._volume_actor:
             return
         # 샘플 거리 조정 (작을수록 고품질)
         dist = 2.0 / value
@@ -299,17 +309,17 @@ class VolumeRenderWidget(QWidget):
         self._render()
 
     def _reset_camera(self):
-        if not VTK_AVAILABLE:
+        if not self._vtk_ok:
             return
         self._renderer.ResetCamera()
         self._render()
 
     def _render(self):
-        if not VTK_AVAILABLE:
+        if not self._vtk_ok:
             return
         self._vtk_widget.GetRenderWindow().Render()
 
     def cleanup(self):
         """위젯 정리"""
-        if VTK_AVAILABLE and hasattr(self, '_vtk_widget'):
+        if self._vtk_ok and hasattr(self, '_vtk_widget'):
             self._vtk_widget.Finalize()
