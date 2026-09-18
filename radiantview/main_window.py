@@ -23,6 +23,7 @@ from .anonymizer import AnonymizeDialog
 from .video_exporter import VideoExportDialog
 from .series_tree import SeriesTreeWidget
 from .cursor_sync import CursorSyncController
+from .image_info_panel import ImageInfoPanel
 
 
 MAX_RECENT_PATHS = 10
@@ -87,6 +88,10 @@ class MainWindow(QMainWindow):
 
         self._init_ui()
         self._cursor_sync = CursorSyncController(self)
+        self._info_panel = ImageInfoPanel(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._info_panel)
+        self._info_panel.hide()
+        self._create_image_actions()
         self._init_menubar()
         self._init_toolbar()
         self._init_statusbar()
@@ -202,18 +207,15 @@ class MainWindow(QMainWindow):
         # View 메뉴
         view_menu = menubar.addMenu("&View")
 
-        reset_view = QAction("Reset View", self)
-        reset_view.setShortcut(QKeySequence("R"))
-        reset_view.triggered.connect(self._viewport.reset_view)
-        view_menu.addAction(reset_view)
-
-        invert_action = QAction("Invert", self)
-        invert_action.setShortcut(QKeySequence("I"))
-        invert_action.triggered.connect(
-            lambda: self._viewport.keyPressEvent(
-                type('', (), {'key': lambda: Qt.Key_I})()))
-        view_menu.addAction(invert_action)
-
+        # 툴바와 같은 QAction을 공유 (단축키 중복 시 Qt가 둘 다 무시함)
+        view_menu.addAction(self._act_reset)
+        view_menu.addSeparator()
+        for action in (self._act_flip_v, self._act_flip_h, self._act_rot_l,
+                       self._act_rot_r, self._act_invert):
+            view_menu.addAction(action)
+        view_menu.addSeparator()
+        view_menu.addAction(self._act_value_lens)
+        view_menu.addAction(self._act_image_panel)
         view_menu.addSeparator()
 
         overlay_action = QAction("Toggle Overlay", self)
@@ -238,8 +240,11 @@ class MainWindow(QMainWindow):
         tools_menu.addSeparator()
 
         clear_meas = QAction("Clear All Measurements", self)
-        clear_meas.triggered.connect(self._viewport.clear_measurements)
+        clear_meas.triggered.connect(
+            lambda: self._target_viewport().clear_measurements())
         tools_menu.addAction(clear_meas)
+
+        file_menu.insertAction(export_video_action, self._act_capture)
 
         # Window presets 메뉴
         preset_menu = menubar.addMenu("&Presets")
@@ -258,7 +263,7 @@ class MainWindow(QMainWindow):
         for name, wc, ww in presets:
             action = QAction(f"{name} (C:{wc} W:{ww})", self)
             action.triggered.connect(
-                lambda checked, c=wc, w=ww: self._viewport.set_window(c, w))
+                lambda checked, c=wc, w=ww: self._target_viewport().set_window(c, w))
             preset_menu.addAction(action)
 
     def _init_toolbar(self):
@@ -282,6 +287,17 @@ class MainWindow(QMainWindow):
              "거리 측정 (클릭→클릭)"),
             ("📐 Angle", DicomViewport.TOOL_ANGLE, "5",
              "각도 측정 (3점 클릭)"),
+            ("✚ 3D Cursor", DicomViewport.TOOL_CURSOR3D, "6",
+             "3D 커서: 클릭 위치의 환자 좌표(mm) 표시\n"
+             "Sync Cursor가 켜져 있으면 다른 뷰에도 전파"),
+            ("🔎 Magnify", DicomViewport.TOOL_MAGNIFY, "7",
+             "돋보기: 누르고 있는 동안 원형 렌즈로 확대\n휠로 2x / 3x / 4x"),
+            ("◌ ROI", DicomViewport.TOOL_ROI, "8",
+             "Freehand ROI: 드래그로 영역을 그리면\n면적·Mean·SD·Min·Max 표시"),
+            ("▱ Area", DicomViewport.TOOL_AREA, "9",
+             "Freehand 면적 측정: 면적(mm²)·둘레"),
+            ("➚ Arrow", DicomViewport.TOOL_ARROW, "0",
+             "2D 화살표: 가리킬 곳에서 누르고 드래그, 놓으면 라벨 입력"),
         ]
 
         for label, tool_id, shortcut, tooltip in tools:
@@ -290,7 +306,7 @@ class MainWindow(QMainWindow):
             action.setShortcut(QKeySequence(shortcut))
             action.setToolTip(tooltip)
             action.triggered.connect(
-                lambda checked, t=tool_id: self._viewport.set_tool(t))
+                lambda checked, t=tool_id: self._set_tool_all(t))
             tool_group.addAction(action)
             toolbar.addAction(action)
             if tool_id == DicomViewport.TOOL_WINDOW:
@@ -298,40 +314,8 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        # 시네 재생
-        cine_action = QAction("▶ Play", self)
-        cine_action.setShortcut(QKeySequence("Space"))
-        cine_action.triggered.connect(self._viewport.toggle_cine)
-        toolbar.addAction(cine_action)
-
-        toolbar.addSeparator()
-
-        # FPS 조절
-        toolbar.addWidget(QLabel(" FPS: "))
-        self._fps_spin = QSpinBox()
-        self._fps_spin.setRange(1, 60)
-        self._fps_spin.setValue(15)
-        self._fps_spin.valueChanged.connect(self._viewport.set_cine_fps)
-        toolbar.addWidget(self._fps_spin)
-
-        toolbar.addSeparator()
-
-        # 슬라이스 슬라이더
-        toolbar.addWidget(QLabel(" Slice: "))
-        self._slice_slider = QSlider(Qt.Horizontal)
-        self._slice_slider.setMinimum(0)
-        self._slice_slider.setMaximum(0)
-        self._slice_slider.setFixedWidth(200)
-        self._slice_slider.valueChanged.connect(self._viewport.go_to_slice)
-        toolbar.addWidget(self._slice_slider)
-
-        self._slice_label = QLabel(" 0/0 ")
-        toolbar.addWidget(self._slice_label)
-
-        toolbar.addSeparator()
-
-        # 크로스 레퍼런스
-        self._sync_action = QAction("⌖ Sync Cursor", self)
+        # 크로스 레퍼런스 (GE AW의 Crosslink)
+        self._sync_action = QAction("⌖ Crosslink", self)
         self._sync_action.setCheckable(True)
         self._sync_action.setShortcut(QKeySequence("C"))
         self._sync_action.setToolTip(
@@ -341,6 +325,86 @@ class MainWindow(QMainWindow):
             "켜져 있는 동안 윈도잉은 가운데 버튼 드래그로 조절하세요.")
         self._sync_action.toggled.connect(self._cursor_sync.set_enabled)
         toolbar.addAction(self._sync_action)
+        toolbar.addAction(self._act_value_lens)
+
+        # ─── 두 번째 줄: 이미지 조작 (GE AW 스타일) + 시네/슬라이스 ───
+        self.addToolBarBreak()
+        image_bar = QToolBar("Image")
+        image_bar.setMovable(False)
+        self.addToolBar(image_bar)
+        for action in (self._act_flip_v, self._act_flip_h, self._act_rot_l,
+                       self._act_rot_r, self._act_invert, self._act_reset):
+            image_bar.addAction(action)
+        image_bar.addSeparator()
+        image_bar.addAction(self._act_capture)
+        image_bar.addAction(self._act_image_panel)
+        image_bar.addSeparator()
+
+        # 시네 재생
+        cine_action = QAction("▶ Play", self)
+        cine_action.setShortcut(QKeySequence("Space"))
+        cine_action.triggered.connect(self._viewport.toggle_cine)
+        image_bar.addAction(cine_action)
+
+        # FPS 조절
+        image_bar.addWidget(QLabel(" FPS: "))
+        self._fps_spin = QSpinBox()
+        self._fps_spin.setRange(1, 60)
+        self._fps_spin.setValue(15)
+        self._fps_spin.valueChanged.connect(self._viewport.set_cine_fps)
+        image_bar.addWidget(self._fps_spin)
+
+        image_bar.addSeparator()
+
+        # 슬라이스 슬라이더
+        image_bar.addWidget(QLabel(" Slice: "))
+        self._slice_slider = QSlider(Qt.Horizontal)
+        self._slice_slider.setMinimum(0)
+        self._slice_slider.setMaximum(0)
+        self._slice_slider.setFixedWidth(180)
+        self._slice_slider.valueChanged.connect(self._viewport.go_to_slice)
+        image_bar.addWidget(self._slice_slider)
+
+        self._slice_label = QLabel(" 0/0 ")
+        image_bar.addWidget(self._slice_label)
+
+    def _create_image_actions(self):
+        """이미지 조작 액션 (메뉴·툴바 공유). 대상 = 현재 탭의 뷰포트"""
+        def make(text, shortcut, tooltip, slot, checkable=False):
+            action = QAction(text, self)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+            action.setToolTip(f"{tooltip} ({shortcut})" if shortcut else tooltip)
+            action.setCheckable(checkable)
+            action.triggered.connect(slot)
+            return action
+
+        self._act_flip_v = make("⇅ Flip V", "V", "상하 반전",
+                                lambda: self._target_viewport().flip_vertical())
+        self._act_flip_h = make("⇆ Flip H", "H", "좌우 반전",
+                                lambda: self._target_viewport().flip_horizontal())
+        self._act_rot_l = make("↺ Rot L", "[", "왼쪽으로 90° 회전",
+                               lambda: self._target_viewport().rotate_left())
+        self._act_rot_r = make("↻ Rot R", "]", "오른쪽으로 90° 회전",
+                               lambda: self._target_viewport().rotate_right())
+        self._act_invert = make("◐ B/W Inverse", "I", "흑백 반전",
+                                lambda: self._target_viewport().toggle_invert())
+        self._act_reset = make("⟲ Reset", "R", "회전/반전 초기화 + 화면 맞춤",
+                               lambda: self._target_viewport().reset_view())
+        self._act_value_lens = make(
+            "HU Lens", "L", "커서 옆에 픽셀 값 표시 (CT: HU, MR: SI, PET: SUVbw)\n"
+                            "상태바에는 항상 좌표와 값이 표시됩니다",
+            self._set_value_lens_all, checkable=True)
+        self._act_capture = make("📷 Capture", "Ctrl+Shift+S",
+                                 "현재 화면을 오버레이·측정선 포함해 이미지로 저장",
+                                 self._capture_image)
+        self._act_image_panel = self._info_panel.toggleViewAction()
+        self._act_image_panel.setText("ⓘ Image")
+        self._act_image_panel.setShortcut(QKeySequence("Ctrl+I"))
+        self._act_image_panel.setToolTip("Image 정보 패널 (시퀀스 상세) (Ctrl+I)")
+        # toggled는 도크가 실제로 보이기 전에 발생 → visibilityChanged에서 갱신
+        self._info_panel.visibilityChanged.connect(
+            lambda visible: visible and self._refresh_image_info())
 
     def _init_statusbar(self):
         """상태바"""
@@ -371,6 +435,14 @@ class MainWindow(QMainWindow):
         self._viewport.zoom_changed.connect(self._on_zoom_changed)
         self._viewport.measurement_completed.connect(
             self._on_measurement_completed)
+
+        for vp in self._all_viewports():
+            vp.cursor_info.connect(self._status_pos.setText)
+            vp.status_message.connect(
+                lambda text: self._statusbar.showMessage(text, 8000))
+            vp.slice_changed.connect(lambda *_: self._refresh_image_info())
+        self._multi_viewport.active_viewport_changed.connect(
+            lambda *_: self._refresh_image_info())
 
     # ─── 파일 열기 ───
 
@@ -560,9 +632,68 @@ class MainWindow(QMainWindow):
         self._slice_slider.setMaximum(max(0, series.num_slices - 1))
         self._slice_slider.setValue(0)
         self._sync_volume_tabs()
+        self._refresh_image_info()
 
     def _on_tab_changed(self, index):
         self._sync_volume_tabs()
+        self._refresh_image_info()
+
+    # ─── 대상 뷰포트 / 전체 적용 ───
+
+    def _all_viewports(self):
+        return [self._viewport] + self._multi_viewport.viewports
+
+    def _target_viewport(self):
+        """이미지 조작 대상: Multi View 탭이면 활성 칸, 그 외에는 2D 뷰포트"""
+        if self._tab_widget.currentWidget() is self._multi_viewport:
+            return self._multi_viewport.active_viewport
+        return self._viewport
+
+    def _set_tool_all(self, tool):
+        for vp in self._all_viewports():
+            vp.set_tool(tool)
+
+    def _set_value_lens_all(self, enabled):
+        for vp in self._all_viewports():
+            vp.set_value_lens(enabled)
+
+    def _refresh_image_info(self):
+        if not self._info_panel.isVisible():
+            return
+        vp = self._target_viewport()
+        ds = vp.current_dataset()
+        total = vp.series.num_slices if vp.series else 0
+        self._info_panel.show_image(ds, vp.current_slice, total)
+
+    def _capture_image(self):
+        """현재 화면을 오버레이·측정선 포함해 저장 (Capture Image Only)"""
+        current = self._tab_widget.currentWidget()
+        if current in (self._viewport, self._multi_viewport):
+            vp = self._target_viewport()
+            if vp.series is None:
+                QMessageBox.information(self, "Info", "캡처할 영상이 없습니다.")
+                return
+            pixmap = vp.capture()
+            name = (vp.series.description or "capture").strip()
+        else:
+            pixmap = current.grab()
+            name = self._tab_widget.tabText(self._tab_widget.currentIndex())
+        name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in name)
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Capture Image", os.path.join(self._last_dir(), f"{name}.png"),
+            "PNG (*.png);;JPEG (*.jpg)")
+        if not filepath:
+            return
+        if not filepath.lower().endswith((".png", ".jpg", ".jpeg")):
+            filepath += ".png"
+        if pixmap.save(filepath, quality=95):
+            self._statusbar.showMessage(f"Captured: {filepath}", 5000)
+        else:
+            QMessageBox.warning(self, "Capture", f"저장하지 못했습니다:\n{filepath}")
+
+    def closeEvent(self, event):
+        self._series_tree.shutdown()
+        super().closeEvent(event)
 
     def _sync_volume_tabs(self):
         """현재 탭이 MPR/3D일 때만 볼륨 구성 (전체 슬라이스 픽셀 로딩 필요)"""
@@ -621,8 +752,10 @@ class MainWindow(QMainWindow):
         dialog.exec_()
 
     def _toggle_overlay(self):
-        self._viewport._show_overlay = not self._viewport._show_overlay
-        self._viewport.update()
+        show = not self._viewport._show_overlay
+        for vp in self._all_viewports():
+            vp._show_overlay = show
+            vp.update()
 
     def _export_image(self):
         if not self._viewport._cached_pixmap:

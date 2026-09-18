@@ -1,10 +1,18 @@
 """
 시리즈 목록 트리: Patient → Study → Series
+- 시리즈마다 대표(중간) 슬라이스 썸네일 + 모달리티 배지
+- 툴팁에 시퀀스 파라미터 요약
 """
+import threading
+
+import cv2
+import numpy as np
 from PyQt5.QtWidgets import (QTreeWidget, QTreeWidgetItem, QHeaderView,
                              QAbstractItemView)
-from PyQt5.QtCore import Qt, QSize, QRectF, QMimeData, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PyQt5.QtCore import Qt, QSize, QRectF, QMimeData, QThread, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
+
+from . import dicom_info
 
 
 # 모달리티별 배지 색상 (없는 모달리티는 회색)
@@ -20,6 +28,7 @@ MODALITY_COLORS = {
 DEFAULT_MODALITY_COLOR = '#6E6E6E'
 
 BADGE_SIZE = QSize(30, 16)
+THUMB_SIZE = 64
 
 ROLE_SERIES_UID = Qt.UserRole
 
@@ -27,31 +36,98 @@ ROLE_SERIES_UID = Qt.UserRole
 SERIES_MIME_TYPE = "application/x-radiantview-series-uid"
 
 
-def _badge_icon(modality, _cache={}):
-    """모달리티 약어가 적힌 색상 배지 아이콘 (HiDPI 대응)"""
+def _series_icon(modality, thumbnail=None):
+    """썸네일(없으면 빈 칸) 좌하단에 모달리티 배지를 얹은 아이콘 (HiDPI 대응)"""
     modality = (modality or '?')[:3]
-    if modality in _cache:
-        return _cache[modality]
     scale = 2
-    pixmap = QPixmap(BADGE_SIZE * scale)
+    size = THUMB_SIZE
+    pixmap = QPixmap(size * scale, size * scale)
     pixmap.setDevicePixelRatio(scale)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(QColor('#111111'))
     p = QPainter(pixmap)
     p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
+    if thumbnail is not None and not thumbnail.isNull():
+        tw, th = thumbnail.width(), thumbnail.height()
+        p.drawImage(QRectF((size - tw) / 2, (size - th) / 2, tw, th), thumbnail)
+    else:
+        p.setPen(QColor('#555555'))
+        font = QFont()
+        font.setPixelSize(9)
+        p.setFont(font)
+        p.drawText(QRectF(0, 0, size, size - 14), Qt.AlignCenter, "…")
+    p.setPen(QColor('#333333'))
+    p.drawRect(QRectF(0.5, 0.5, size - 1, size - 1))
+
+    badge = QRectF(2, size - BADGE_SIZE.height() - 2,
+                   BADGE_SIZE.width(), BADGE_SIZE.height())
     p.setPen(Qt.NoPen)
     p.setBrush(QColor(MODALITY_COLORS.get(modality, DEFAULT_MODALITY_COLOR)))
-    rect = QRectF(0, 0, BADGE_SIZE.width(), BADGE_SIZE.height())
-    p.drawRoundedRect(rect, 4, 4)
+    p.drawRoundedRect(badge, 4, 4)
     font = QFont()
     font.setPixelSize(10)
     font.setBold(True)
     p.setFont(font)
     p.setPen(QColor('white'))
-    p.drawText(rect, Qt.AlignCenter, modality)
+    p.drawText(badge, Qt.AlignCenter, modality)
     p.end()
-    icon = QIcon(pixmap)
-    _cache[modality] = icon
-    return icon
+    return QIcon(pixmap)
+
+
+def make_thumbnail(series, size=THUMB_SIZE):
+    """시리즈 중간 슬라이스를 기본 윈도로 8비트 변환한 QImage (실패 시 None)
+
+    Pixel Spacing 비율을 반영해 size x size 안에 맞춤. 워커 스레드에서 호출 가능.
+    """
+    if series.num_slices == 0:
+        return None
+    index = series.num_slices // 2
+    arr = series.get_pixel_array(index)
+    if arr is None:
+        return None
+    if arr.ndim == 3 and arr.shape[2] in (3, 4):
+        img = np.clip(arr[..., :3], 0, 255).astype(np.uint8)
+    else:
+        if arr.ndim == 3:
+            arr = arr[0]
+        wc, ww = series.get_default_window()
+        img = np.clip((arr - (wc - ww / 2)) / max(ww, 1) * 255, 0, 255).astype(np.uint8)
+    h, w = img.shape[:2]
+    sp = dicom_info.pixel_spacing(series.slices[index]) or (1.0, 1.0)
+    phys_w, phys_h = w * sp[1], h * sp[0]
+    scale = size / max(phys_w, phys_h)
+    tw, th = max(1, round(phys_w * scale)), max(1, round(phys_h * scale))
+    img = np.ascontiguousarray(cv2.resize(img, (tw, th), interpolation=cv2.INTER_AREA))
+    if img.ndim == 3:
+        qimg = QImage(img.data, tw, th, 3 * tw, QImage.Format_RGB888)
+    else:
+        qimg = QImage(img.data, tw, th, tw, QImage.Format_Grayscale8)
+    return qimg.copy()  # numpy 버퍼와 분리
+
+
+class ThumbnailWorker(QThread):
+    """시리즈 썸네일을 백그라운드에서 생성 (UI 스레드 비차단)"""
+
+    thumbnail_ready = pyqtSignal(str, QImage)
+
+    def __init__(self, series_list, parent=None):
+        super().__init__(parent)
+        self._series_list = list(series_list)
+        self._cancel = threading.Event()
+
+    def cancel(self):
+        self._cancel.set()
+
+    def run(self):
+        for series in self._series_list:
+            if self._cancel.is_set():
+                return
+            try:
+                image = make_thumbnail(series)
+            except Exception:
+                image = None
+            if image is not None and not self._cancel.is_set():
+                self.thumbnail_ready.emit(series.series_uid, image)
 
 
 def format_dicom_date(value):
@@ -110,14 +186,18 @@ class SeriesTreeWidget(QTreeWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setHeaderLabels(["Series", "Images"])
-        self.setIconSize(BADGE_SIZE)
-        self.setUniformRowHeights(True)
+        self.setIconSize(QSize(THUMB_SIZE, THUMB_SIZE))
+        self.setUniformRowHeights(False)  # 시리즈 행만 썸네일 높이
         self.setIndentation(14)
         header = self.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.currentItemChanged.connect(self._on_current_item_changed)
+        self._items_by_uid = {}
+        self._modality_by_uid = {}
+        self._thumbnails = {}  # uid → QImage (트리를 다시 그려도 재사용)
+        self._thumb_worker = None
         # 시리즈 항목을 Multi View 뷰포트로 드래그 (환자/검사 항목은 드래그 불가)
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragOnly)
@@ -155,6 +235,8 @@ class SeriesTreeWidget(QTreeWidget):
         """
         self.blockSignals(True)
         self.clear()
+        self._items_by_uid = {}
+        self._modality_by_uid = {}
         first_series_item = None
         target_item = None
 
@@ -190,15 +272,24 @@ class SeriesTreeWidget(QTreeWidget):
                     label = s.description or "(no description)"
                     if s.series_number is not None:
                         label = f"#{s.series_number}  {label}"
+                    ds = s.slices[0] if s.slices else None
+                    detail = self._short_detail(ds)
+                    if detail:
+                        label += f"\n{detail}"
                     item = QTreeWidgetItem([label, str(s.num_slices)])
-                    item.setIcon(0, _badge_icon(s.modality))
+                    item.setIcon(0, _series_icon(s.modality,
+                                                 self._thumbnails.get(s.series_uid)))
                     item.setData(0, ROLE_SERIES_UID, s.series_uid)
                     item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
-                    item.setToolTip(
-                        0, f"{s.modality or '?'}  Series #{s.series_number if s.series_number is not None else '-'}\n"
-                           f"{s.description or '(no description)'}\n"
-                           f"{s.num_slices} images")
+                    tooltip = (dicom_info.sequence_tooltip(
+                        ds, s.description, s.num_slices) if ds is not None else "")
+                    if s.series_number is not None:
+                        tooltip = f"Series #{s.series_number}\n{tooltip}"
+                    item.setToolTip(0, tooltip)
+                    item.setToolTip(1, tooltip)
                     study_item.addChild(item)
+                    self._items_by_uid[s.series_uid] = item
+                    self._modality_by_uid[s.series_uid] = s.modality
                     if first_series_item is None:
                         first_series_item = item
                     if s.series_uid == select_uid:
@@ -207,10 +298,58 @@ class SeriesTreeWidget(QTreeWidget):
         self.expandAll()
         self.blockSignals(False)
 
+        self._start_thumbnails(series_list)
+
         selected = target_item or first_series_item
         if selected is not None:
             # currentItemChanged → series_selected 로 시리즈 표시
             self.setCurrentItem(selected)
+
+    @staticmethod
+    def _short_detail(ds):
+        """트리 두 번째 줄: 방향 · 시퀀스 요약 (예: 'Axial · 2D FSE')"""
+        if ds is None:
+            return ""
+        parts = [dicom_info.orientation_name(ds)]
+        if dicom_info.tag(ds, "Modality") == "MR":
+            seq = dicom_info.mr_sequence_type(ds).split(" [")[0]
+            parts.append(seq)
+        return " · ".join(p for p in parts if p)
+
+    # ─── 썸네일 ───
+
+    def _start_thumbnails(self, series_list):
+        if self._thumb_worker is not None:
+            self._thumb_worker.cancel()
+        pending = [s for s in series_list if s.series_uid not in self._thumbnails]
+        if not pending:
+            self._thumb_worker = None
+            return
+        worker = ThumbnailWorker(pending, self)
+        worker.thumbnail_ready.connect(self._on_thumbnail_ready)
+        worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
+        self._thumb_worker = worker
+        worker.start()
+
+    def _on_worker_finished(self, worker):
+        if self._thumb_worker is worker:
+            self._thumb_worker = None
+        worker.deleteLater()
+
+    def _on_thumbnail_ready(self, uid, image):
+        self._thumbnails[uid] = image
+        item = self._items_by_uid.get(uid)
+        if item is not None:
+            item.setIcon(0, _series_icon(self._modality_by_uid.get(uid), image))
+
+    def thumbnail_for(self, uid):
+        return self._thumbnails.get(uid)
+
+    def shutdown(self):
+        """앱 종료 시 썸네일 스레드 정리"""
+        if self._thumb_worker is not None:
+            self._thumb_worker.cancel()
+            self._thumb_worker.wait(3000)
 
     def _on_current_item_changed(self, current, previous):
         if current is None:

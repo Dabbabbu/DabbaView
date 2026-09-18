@@ -229,16 +229,30 @@ class DicomSeries:
             return 400, 2000  # 기본값
 
         ds = self.slices[0]
-        wc = float(getattr(ds, 'WindowCenter', 400))
-        ww = float(getattr(ds, 'WindowWidth', 2000))
 
-        # WindowCenter/Width가 리스트인 경우 첫 번째 값 사용
-        if hasattr(wc, '__iter__'):
-            wc = float(wc) if not hasattr(wc, '__len__') else float(list(wc)[0])
-        if hasattr(ww, '__iter__'):
-            ww = float(ww) if not hasattr(ww, '__len__') else float(list(ww)[0])
+        def first_float(value):
+            # WindowCenter/Width는 다중값(MultiValue)인 경우가 흔함 → 첫 값 사용
+            if value is None:
+                return None
+            if not isinstance(value, (str, bytes)) and hasattr(value, '__len__'):
+                value = value[0] if len(value) else None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
 
-        return wc, ww
+        wc = first_float(getattr(ds, 'WindowCenter', None))
+        ww = first_float(getattr(ds, 'WindowWidth', None))
+        if wc is not None and ww is not None and ww > 0:
+            return wc, ww
+
+        # 윈도 태그가 없으면 (MR 등) 중간 슬라이스 분포로 자동 설정
+        arr = self.get_pixel_array(len(self.slices) // 2)
+        if arr is not None and arr.size:
+            low, high = np.percentile(arr, [1, 99])
+            if high > low:
+                return float((low + high) / 2), float(high - low)
+        return 400, 2000
 
     def get_dicom_tags(self, index=0):
         """DICOM 태그 정보를 딕셔너리로 반환"""
