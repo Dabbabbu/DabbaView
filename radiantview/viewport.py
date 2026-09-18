@@ -1021,7 +1021,8 @@ class DicomViewport(QWidget):
 
         if self._show_overlay:
             self._draw_overlay(painter)
-            self._draw_scale_bar(painter)
+            has_scale_bar = self._draw_scale_bar(painter)
+            self._draw_window_bottom_right(painter, has_scale_bar)
 
         if self._magnifying and self._hover_pos is not None:
             self._draw_magnifier(painter, pixmap, transform)
@@ -1459,19 +1460,35 @@ class DicomViewport(QWidget):
         dx, dy = self._mm_vector(p0, p1)
         return math.hypot(dx, dy) / 100
 
+    # 우하단 스케일 바의 세로 위치 (W/L 문구를 그 위에 둠)
+    SCALE_BAR_OFFSET = 26  # 아래 가장자리에서 막대까지
+    SCALE_TICK = 6
+
+    def _draw_window_bottom_right(self, painter, above_scale_bar):
+        """우하단 W/L (좌하단 표시와 같은 형식). 스케일 바가 있으면 그 위에"""
+        text = f"W:{self._window_width:.0f} L:{self._window_center:.0f}"
+        painter.setFont(self._overlay_font())
+        fm = painter.fontMetrics()
+        x = self.width() - 10 - fm.horizontalAdvance(text)
+        if above_scale_bar:
+            y = self.height() - self.SCALE_BAR_OFFSET - self.SCALE_TICK - 4 - fm.descent()
+        else:
+            y = self.height() - 8 - fm.descent()
+        self._draw_text_shadow(painter, x, y, text)
+
     def _draw_scale_bar(self, painter):
-        """우하단 스케일 바 (cm 눈금)"""
+        """우하단 스케일 바 (cm 눈금). 그렸으면 True"""
         mm_per_px = self._mm_per_screen_px()
         if not mm_per_px:
-            return
+            return False
         length_mm = dicom_info.nice_scale_length_mm(self.width() * 0.3 * mm_per_px)
         if not length_mm:
-            return
+            return False
         length_px = length_mm / mm_per_px
         margin = 10
         x1 = self.width() - margin
         x0 = x1 - length_px
-        y = self.height() - margin - 16
+        y = self.height() - self.SCALE_BAR_OFFSET
         tick_mm = 10 if length_mm >= 20 else (1 if length_mm <= 10 else 5)
 
         for color, offset in ((QColor(0, 0, 0, 200), 1), (QColor(235, 235, 235), 0)):
@@ -1481,7 +1498,7 @@ class DicomViewport(QWidget):
             n_ticks = int(round(length_mm / tick_mm))
             for i in range(n_ticks + 1):
                 tx = x0 + i * tick_mm / mm_per_px + offset
-                tick = 6 if i in (0, n_ticks) else 3
+                tick = self.SCALE_TICK if i in (0, n_ticks) else 3
                 painter.drawLine(QPointF(tx, y - tick + offset), QPointF(tx, y + offset))
 
         label = f"{length_mm / 10:g}cm" if length_mm >= 10 else f"{length_mm:g}mm"
@@ -1489,6 +1506,7 @@ class DicomViewport(QWidget):
         fm = painter.fontMetrics()
         self._draw_text_shadow(painter, x1 - fm.horizontalAdvance(label),
                                y + 4 + fm.ascent(), label)
+        return True
 
     def _draw_highlight(self, painter):
         if not self._highlight:
