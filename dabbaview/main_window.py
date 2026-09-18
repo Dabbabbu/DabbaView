@@ -363,9 +363,7 @@ class MainWindow(QMainWindow):
 
         tools_menu.addSeparator()
 
-        anon_action = QAction("Anonymize Series...", self)
-        anon_action.triggered.connect(self._show_anonymize)
-        tools_menu.addAction(anon_action)
+        tools_menu.addAction(self._act_anonymize)
 
         tools_menu.addSeparator()
 
@@ -485,7 +483,8 @@ class MainWindow(QMainWindow):
         output_bar.setMovable(False)
         self.addToolBar(output_bar)
         for action in (self._act_reading, self._act_capture, self._act_image_panel,
-                       self._act_send, self._act_print, self._act_settings):
+                       self._act_anonymize, self._act_send, self._act_print,
+                       self._act_settings):
             output_bar.addAction(action)
         output_bar.addSeparator()
 
@@ -577,6 +576,8 @@ class MainWindow(QMainWindow):
                                   self._load_annotations)
         self._act_export_keys = make("Export Key Images...", "", "Key Image를 PNG + 목록(JSON)으로 내보내기",
                                      self._export_key_images)
+        self._act_anonymize = make("🕶 Anonymize", "", "선택적 익명화 후 저장 (개인/기관/검사/촬영 파라미터, 프리셋)",
+                                   self._show_anonymize)
         self._act_reading = make("📝 Reading", "R", "기록 창 (기록 작성·가져오기·인쇄)",
                                  self._open_reading)
         self._act_maximize = make("Maximize Viewport", "Space",

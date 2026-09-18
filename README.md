@@ -55,7 +55,7 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 ### 내보내기 / 네트워크
 - 이미지 내보내기, **Capture**(오버레이·측정선 포함), **동영상**(MP4/AVI/GIF)
 - **DICOM Send** (C-STORE), **DICOM Print** (Basic Grayscale Print), 연결 확인(C-ECHO) — pynetdicom 사용
-- **DICOM 익명화**: 환자 정보·Private 태그 제거, UID 재생성
+- **DICOM 익명화** (툴바 🕶 Anonymize / Tools 메뉴): 개인정보·기관정보·검사정보·촬영 파라미터를 항목별로 선택, 프리셋(최소/표준/완전/연구용), 카테고리별 미리보기에서 변경될 태그 강조, Private 태그 제거, UID 재생성(시리즈 안에서 일관 유지)
 
 > DICOM Send는 원본 파일을 그대로 보내므로 **환자 정보가 포함됩니다.** 외부로 보낼 때는 먼저 익명화하세요.
 
