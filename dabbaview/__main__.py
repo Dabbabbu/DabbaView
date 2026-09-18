@@ -5,13 +5,18 @@
 DabbaView 실행 엔트리포인트
 python -m dabbaview 로 실행
 """
+import os
 import sys
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 from .main_window import MainWindow
+from . import shortcut_fallback
 
 
 def main():
+    # macOS: Control+좌클릭을 우클릭으로 바꾸지 않음 → Control+드래그(ROI W/L)가 좌클릭으로 도착
+    os.environ.setdefault("QT_MAC_DONT_OVERRIDE_CTRL_LMB", "1")
+
     # High DPI 지원
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
@@ -20,6 +25,7 @@ def main():
     app.setApplicationName("DabbaView")
     app.setApplicationVersion("0.1.0")
     app.setOrganizationName("DabbaView")
+    shortcut_fallback.install(app)  # 한글 입력 상태에서도 T/R/P 등 단축키 동작
 
     window = MainWindow()
     window.setAcceptDrops(True)  # 드래그 앤 드롭 활성화

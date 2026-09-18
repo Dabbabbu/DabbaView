@@ -48,6 +48,9 @@ FLIP_V = np.array([[1, 0], [0, -1]])
 
 MAGNIFY_LEVELS = (2.0, 3.0, 4.0)
 
+# Ctrl 조합: macOS에서 ControlModifier = ⌘, MetaModifier = 실제 Control 키 → 둘 다 허용
+CTRL_MODIFIERS = Qt.ControlModifier | Qt.MetaModifier
+
 COLOR_DISTANCE = QColor(255, 255, 0)
 COLOR_ANGLE = QColor(0, 255, 255)
 COLOR_ROI = QColor(255, 140, 0)
@@ -353,7 +356,7 @@ class DicomViewport(QWidget):
         if button == Qt.LeftButton:
             if mods & Qt.AltModifier:
                 return self._mouse.get("alt_left_drag")
-            if mods & Qt.ControlModifier:
+            if mods & CTRL_MODIFIERS:
                 return self._mouse.get("ctrl_left_drag")
             return self._mouse.get("left_drag")
         if button == Qt.RightButton:
@@ -583,7 +586,7 @@ class DicomViewport(QWidget):
             self.update()
             return
 
-        if mods & Qt.ControlModifier:
+        if mods & CTRL_MODIFIERS:
             action = self._mouse.get("ctrl_wheel")
         elif mods & Qt.ShiftModifier:
             action = self._mouse.get("shift_wheel")
