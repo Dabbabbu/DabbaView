@@ -1,7 +1,8 @@
 """
 INFINITT 스타일 시리즈 패널
 
-세로 스크롤 카드 목록. 클릭 = 선택만(노란 테두리), 더블클릭/Enter/드래그 앤 드롭 = 뷰포트에 표시.
+세로 스크롤 카드 목록. 클릭(뗄 때)/Enter = 활성 뷰포트에 로드,
+누른 채 끌면 로드하지 않고 드래그 앤 드롭 (원하는 칸에 놓기).
 카드마다
   - 썸네일 (중간 슬라이스, 80x80) + 좌상단 '시리즈번호/총 슬라이스' (예: 4/31)
   - 시퀀스 설명 (SeriesDescription) + 방향·시퀀스 요약
@@ -16,7 +17,7 @@ from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QImage, QFontMetrics
 from . import dicom_info
 from .series_tree import (SERIES_MIME_TYPE, MODALITY_COLORS, DEFAULT_MODALITY_COLOR,
                           ThumbnailWorker, group_series, format_dicom_date,
-                          format_patient_name)
+                          format_patient_name, ClickToLoadMixin)
 
 CARD_THUMB = 80
 CARD_HEIGHT = CARD_THUMB + 12
@@ -141,11 +142,11 @@ class SeriesCardDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class SeriesPanel(QListWidget):
+class SeriesPanel(ClickToLoadMixin, QListWidget):
     """세로 스크롤 시리즈 카드 목록"""
 
-    series_selected = pyqtSignal(str)   # 클릭 (선택만)
-    series_activated = pyqtSignal(str)  # 더블클릭 / Enter → 뷰포트에 표시
+    series_selected = pyqtSignal(str)   # 누름 / 방향키 (선택 표시)
+    series_activated = pyqtSignal(str)  # 클릭(뗄 때) / Enter → 뷰포트에 로드
     thumbnail_ready = pyqtSignal(str, QImage)
 
     def __init__(self, parent=None):
@@ -165,7 +166,7 @@ class SeriesPanel(QListWidget):
         self._thumbnails = {}
         self._thumb_worker = None
         self.currentItemChanged.connect(self._on_current_changed)
-        self.itemDoubleClicked.connect(self._on_double_clicked)
+        self._click_init()
 
     # 목록 구성
     def populate(self, series_list, select_uid=None):
@@ -232,9 +233,11 @@ class SeriesPanel(QListWidget):
         if current is not None and current.data(ROLE_KIND) == "series":
             self.series_selected.emit(current.data(ROLE_UID))
 
-    def _on_double_clicked(self, item):
-        if item.data(ROLE_KIND) == "series":
-            self.series_activated.emit(item.data(ROLE_UID))
+    def _series_uid_at(self, pos):
+        item = self.itemAt(pos)
+        if item is not None and item.data(ROLE_KIND) == "series":
+            return item.data(ROLE_UID)
+        return None
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):

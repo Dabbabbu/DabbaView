@@ -4,13 +4,14 @@
 - 툴팁에 시퀀스 파라미터 요약
 """
 import threading
+import time
 
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import (QTreeWidget, QTreeWidgetItem, QHeaderView,
-                             QAbstractItemView)
+                             QAbstractItemView, QApplication)
 from PyQt5.QtCore import Qt, QSize, QRectF, QMimeData, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QDrag, QFont, QIcon, QImage, QPainter, QPixmap
 
 from . import dicom_info
 
@@ -180,11 +181,71 @@ def group_series(series_list):
     return result
 
 
-class SeriesTreeWidget(QTreeWidget):
+class ClickToLoadMixin:
+    """클릭 = 로드, 드래그 = 드래그 앤 드롭 (시리즈 패널·트리 공용)
+
+    - 누를 때: 선택 표시만 하고 로드할 시리즈 UID를 기억
+    - startDragDistance 이상 움직이면: 로드 취소, 드래그 시작
+    - 같은 항목 위에서 떼면(= 클릭): series_activated → 활성 뷰포트에 로드
+    - 더블클릭의 두 번째 클릭은 같은 시리즈를 다시 로드하지 않음 (뷰 상태 유지)
+
+    사용 클래스는 _series_uid_at(pos)와 series_activated 시그널을 제공해야 함.
+    """
+
+    def _click_init(self):
+        self._pending_uid = None
+        self._press_pos = None
+        self._last_activation = (None, 0.0)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._pending_uid = self._series_uid_at(event.pos())
+            self._press_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self._pending_uid is not None and event.buttons() & Qt.LeftButton
+                and (event.pos() - self._press_pos).manhattanLength()
+                >= QApplication.startDragDistance()):
+            uid, self._pending_uid = self._pending_uid, None
+            self.start_series_drag(uid)
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        uid, self._pending_uid = self._pending_uid, None
+        super().mouseReleaseEvent(event)
+        if (event.button() == Qt.LeftButton and uid is not None
+                and self._series_uid_at(event.pos()) == uid):
+            self._activate(uid)
+
+    def mouseDoubleClickEvent(self, event):
+        # 두 번째 누름도 클릭처럼 처리 (뗄 때 로드, 단 방금 로드한 시리즈면 무시)
+        self.mousePressEvent(event)
+
+    def _activate(self, uid):
+        last_uid, last_time = self._last_activation
+        now = time.monotonic()
+        if uid == last_uid and (now - last_time) * 1000 < QApplication.doubleClickInterval():
+            return
+        self._last_activation = (uid, now)
+        self.series_activated.emit(uid)
+
+    def start_series_drag(self, uid):
+        """시리즈 드래그 시작 (MIME: SERIES_MIME_TYPE)"""
+        mime = QMimeData()
+        mime.setData(SERIES_MIME_TYPE, uid.encode("utf-8"))
+        mime.setText(uid)
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec_(Qt.CopyAction)
+
+
+class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
     """Patient → Study → Series 계층 트리"""
 
-    series_selected = pyqtSignal(str)   # 클릭 (선택만)
-    series_activated = pyqtSignal(str)  # 더블클릭 / Enter → 뷰포트에 표시
+    series_selected = pyqtSignal(str)   # 누름 / 방향키 (선택 표시)
+    series_activated = pyqtSignal(str)  # 클릭(뗄 때) / Enter → 뷰포트에 로드
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -197,7 +258,7 @@ class SeriesTreeWidget(QTreeWidget):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.currentItemChanged.connect(self._on_current_item_changed)
-        self.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self._click_init()
         self._items_by_uid = {}
         self._modality_by_uid = {}
         self._thumbnails = {}  # uid → QImage (트리를 다시 그려도 재사용)
@@ -366,10 +427,9 @@ class SeriesTreeWidget(QTreeWidget):
             self._thumb_worker.cancel()
             self._thumb_worker.wait(3000)
 
-    def _on_item_double_clicked(self, item, column):
-        uid = item.data(0, ROLE_SERIES_UID)
-        if uid:
-            self.series_activated.emit(uid)
+    def _series_uid_at(self, pos):
+        item = self.itemAt(pos)
+        return item.data(0, ROLE_SERIES_UID) if item is not None else None
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
