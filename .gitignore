@@ -1,0 +1,22 @@
+# Python / 가상환경
+venv/
+__pycache__/
+*.pyc
+
+# 빌드 산출물 (py2app / PyInstaller)
+build/
+dist/
+*.app
+*.spec
+*.log
+.eggs/
+*.egg-info/
+
+# create_icon.py로 생성되는 파일
+resources/RadiantView.iconset/
+resources/icon_1024.png
+radiantview/resources/logo.png
+
+# OS / 로컬 도구 설정
+.DS_Store
+.claude/

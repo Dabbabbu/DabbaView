@@ -1,0 +1,8 @@
+pydicom>=2.4.0
+numpy>=1.24.0
+Pillow>=10.0.0
+PyQt5>=5.15.0
+scipy>=1.11.0
+opencv-python-headless>=4.8.0
+# VTK는 3D Volume Rendering에만 필요 (선택사항)
+# pip install vtk

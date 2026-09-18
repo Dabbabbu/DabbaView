@@ -1,0 +1,3 @@
+# Windows 배치 파일은 CRLF 유지 (LF면 cmd에서 goto/label이 깨질 수 있음)
+*.bat text eol=crlf
+*.sh text eol=lf
