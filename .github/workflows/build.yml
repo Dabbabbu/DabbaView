@@ -14,9 +14,9 @@ jobs:
     name: macOS (.app, py2app)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -48,7 +48,7 @@ jobs:
         # ditto keeps the bundle's symlinks and permissions intact
         run: ditto -c -k --keepParent dist/RadiantView.app RadiantView-macOS.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RadiantView-macOS
           path: RadiantView-macOS.zip
@@ -57,9 +57,9 @@ jobs:
     name: Windows (.exe, PyInstaller)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -81,7 +81,7 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist\RadiantView -DestinationPath RadiantView-Windows.zip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: RadiantView-Windows
           path: RadiantView-Windows.zip
