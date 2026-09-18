@@ -29,7 +29,7 @@ OPTIONS = {
             }
         ],
     },
-    'packages': ['radiantview', 'pydicom', 'numpy', 'PIL', 'scipy', 'cv2'],
+    'packages': ['radiantview', 'pydicom', 'pynetdicom', 'numpy', 'PIL', 'scipy', 'cv2'],
     'includes': ['PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui'],
 }
 

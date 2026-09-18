@@ -48,7 +48,8 @@ def _series_icon(modality, thumbnail=None):
     p.setRenderHint(QPainter.Antialiasing)
     p.setRenderHint(QPainter.SmoothPixmapTransform)
     if thumbnail is not None and not thumbnail.isNull():
-        tw, th = thumbnail.width(), thumbnail.height()
+        scale = min(size / thumbnail.width(), size / thumbnail.height())
+        tw, th = thumbnail.width() * scale, thumbnail.height() * scale
         p.drawImage(QRectF((size - tw) / 2, (size - th) / 2, tw, th), thumbnail)
     else:
         p.setPen(QColor('#555555'))
@@ -110,9 +111,10 @@ class ThumbnailWorker(QThread):
 
     thumbnail_ready = pyqtSignal(str, QImage)
 
-    def __init__(self, series_list, parent=None):
+    def __init__(self, series_list, parent=None, size=THUMB_SIZE):
         super().__init__(parent)
         self._series_list = list(series_list)
+        self._size = size
         self._cancel = threading.Event()
 
     def cancel(self):
@@ -123,7 +125,7 @@ class ThumbnailWorker(QThread):
             if self._cancel.is_set():
                 return
             try:
-                image = make_thumbnail(series)
+                image = make_thumbnail(series, self._size)
             except Exception:
                 image = None
             if image is not None and not self._cancel.is_set():
@@ -198,6 +200,7 @@ class SeriesTreeWidget(QTreeWidget):
         self._modality_by_uid = {}
         self._thumbnails = {}  # uid → QImage (트리를 다시 그려도 재사용)
         self._thumb_worker = None
+        self._external_thumbnails = False  # True면 set_thumbnail로만 받음
         # 시리즈 항목을 Multi View 뷰포트로 드래그 (환자/검사 항목은 드래그 불가)
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragOnly)
@@ -228,7 +231,7 @@ class SeriesTreeWidget(QTreeWidget):
                 return
             stack.extend(item.child(i) for i in range(item.childCount()))
 
-    def populate(self, series_list, select_uid=None):
+    def populate(self, series_list, select_uid=None, emit=True):
         """트리를 다시 구성하고 전부 펼친 뒤 시리즈 선택
 
         select_uid가 있으면 그 시리즈, 없으면 첫 시리즈 선택.
@@ -302,8 +305,10 @@ class SeriesTreeWidget(QTreeWidget):
 
         selected = target_item or first_series_item
         if selected is not None:
-            # currentItemChanged → series_selected 로 시리즈 표시
+            # emit=True: currentItemChanged → series_selected 로 시리즈 표시
+            self.blockSignals(not emit)
             self.setCurrentItem(selected)
+            self.blockSignals(False)
 
     @staticmethod
     def _short_detail(ds):
@@ -318,7 +323,15 @@ class SeriesTreeWidget(QTreeWidget):
 
     # ─── 썸네일 ───
 
+    def use_external_thumbnails(self, enabled=True):
+        self._external_thumbnails = enabled
+
+    def set_thumbnail(self, uid, image):
+        self._on_thumbnail_ready(uid, image)
+
     def _start_thumbnails(self, series_list):
+        if self._external_thumbnails:
+            return
         if self._thumb_worker is not None:
             self._thumb_worker.cancel()
         pending = [s for s in series_list if s.series_uid not in self._thumbnails]

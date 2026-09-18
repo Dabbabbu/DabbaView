@@ -58,6 +58,20 @@ class SeriesGeometry:
         steps = steps[steps > 1e-3]
         return float(np.median(steps)) if len(steps) else None
 
+    def slice_corners(self, index):
+        """슬라이스 영상 네 모서리(픽셀 가장자리)의 환자 좌표 (4, 3)"""
+        rows, cols = self.shapes[index]
+        edges = [(-0.5, -0.5), (cols - 0.5, -0.5), (cols - 0.5, rows - 0.5),
+                 (-0.5, rows - 0.5)]
+        return np.array([self.pixel_to_patient(index, c, r) for c, r in edges])
+
+    def center_point(self, index):
+        rows, cols = self.shapes[index]
+        return self.pixel_to_patient(index, (cols - 1) / 2, (rows - 1) / 2)
+
+    def is_parallel_to(self, index, other, other_index, tolerance=0.95):
+        return abs(float(self.normals[index] @ other.normals[other_index])) >= tolerance
+
     def is_linkable_with(self, other):
         return (other is not None
                 and self.frame_of_reference_uid
@@ -92,3 +106,34 @@ def build_series_geometry(slices):
         return None
     return SeriesGeometry(for_uid, np.array(origins), np.array(rows),
                           np.array(cols), np.array(spacings), np.array(shapes))
+
+
+def reference_line(source, source_index, target, target_index, parallel_tolerance=0.98):
+    """source 슬라이스 평면과 target 영상의 교선 (Scout / Reference Line)
+
+    source 영상 사각형이 target 평면을 가로지르는 선분을 target 픽셀 좌표
+    ((col1, row1), (col2, row2))로 반환. 평행하거나 만나지 않으면 None.
+    """
+    n = target.normals[target_index]
+    if abs(float(source.normals[source_index] @ n)) >= parallel_tolerance:
+        return None  # 평행한 평면은 교선이 없음
+    corners = source.slice_corners(source_index)
+    d = (corners - target.origins[target_index]) @ n  # target 평면까지 부호 거리
+    points = []
+    for k in range(4):
+        p, q = corners[k], corners[(k + 1) % 4]
+        dp, dq = d[k], d[(k + 1) % 4]
+        if dp == 0:
+            points.append(p)
+        if (dp < 0 < dq) or (dq < 0 < dp):
+            points.append(p + (q - p) * (dp / (dp - dq)))
+    # 꼭짓점이 평면 위에 있으면 중복될 수 있음
+    unique = []
+    for p in points:
+        if all(np.linalg.norm(p - u) > 1e-6 for u in unique):
+            unique.append(p)
+    if len(unique) < 2:
+        return None
+    a = target.patient_to_pixel(target_index, unique[0])
+    b = target.patient_to_pixel(target_index, unique[1])
+    return (a[0], a[1]), (b[0], b[1])

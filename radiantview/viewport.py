@@ -4,7 +4,10 @@ DICOM 이미지 뷰포트 위젯
 - 윈도잉 (좌클릭 드래그 / 가운데 버튼), 팬 (우클릭 드래그), 줌 (Ctrl+휠)
 - 슬라이스 스크롤 (휠), 시네 재생
 - 회전 / 상하·좌우 반전 / 흑백 반전
-- 측정: 거리, 각도, Freehand ROI(통계), Freehand 면적, 2D 화살표, 3D 커서
+- 측정: 거리, 각도, Cobb 각, Freehand/타원 ROI(통계), 면적, 화살표, 텍스트, 3D 커서
+- 마우스 매핑(설정 가능): 좌=도구, 우=W/L, 가운데=Pan, Ctrl+좌=Zoom,
+  휠=슬라이스, Ctrl+휠=Zoom, Shift+휠=빠른 이동, 더블클릭=Fit / W/L 리셋
+- Key Image 표시, Reference Line (다른 뷰포트 슬라이스 위치)
 - 돋보기 렌즈, 픽셀 값(HU/SI/SUV) 렌즈, GE 스타일 오버레이 + 스케일 바
 - 크로스 레퍼런스 (Sync Cursor)
 
@@ -24,7 +27,12 @@ from PyQt5.QtGui import (QImage, QPixmap, QPainter, QPen, QColor, QFont,
                          QBrush)
 
 from . import dicom_info
-from .roi import roi_statistics, polygon_area_mm2, polygon_perimeter_mm
+from .annotations import AnnotationStore, image_key
+from .app_settings import MouseBindings
+from .geometry import reference_line
+from .roi import (roi_statistics, polygon_area_mm2, polygon_perimeter_mm,
+                  ellipse_statistics, cobb_angle)
+from .text_dialog import TextAnnotationDialog
 
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "resources", "logo.png")
@@ -43,6 +51,10 @@ COLOR_ROI = QColor(255, 140, 0)
 COLOR_AREA = QColor(120, 220, 255)
 COLOR_ARROW = QColor(255, 80, 200)
 COLOR_CURSOR3D = QColor(255, 60, 60)
+COLOR_ELLIPSE = QColor(80, 255, 120)
+COLOR_COBB = QColor(255, 200, 60)
+COLOR_REFLINE = QColor(255, 230, 0)
+COLOR_KEY = QColor(255, 215, 0)
 
 
 class DicomViewport(QWidget):
@@ -57,6 +69,8 @@ class DicomViewport(QWidget):
     reference_point_selected = pyqtSignal(object)  # 환자 좌표 (mm, ndarray)
     cursor_info = pyqtSignal(str)  # 마우스 위치의 좌표/픽셀 값 (상태바용)
     status_message = pyqtSignal(str)  # 측정 결과 등
+    scrolled = pyqtSignal(int)  # 사용자가 슬라이스를 넘김 (동기화 스크롤용)
+    window_adjusted = pyqtSignal(float, float)  # 사용자가 W/L 변경 (동기화 윈도잉용)
 
     # 도구 모드
     TOOL_WINDOW = 0
@@ -69,6 +83,14 @@ class DicomViewport(QWidget):
     TOOL_ROI = 7
     TOOL_AREA = 8
     TOOL_ARROW = 9
+    TOOL_SELECT = 10   # Selector: 선택만 (좌클릭은 뷰포트 활성화)
+    TOOL_ELLIPSE = 11
+    TOOL_TEXT = 12
+    TOOL_COBB = 13
+
+    # 좌클릭 드래그가 '그리기'인 도구 (더블클릭을 Fit으로 해석하지 않음)
+    DRAWING_TOOLS = (TOOL_MEASURE, TOOL_ANGLE, TOOL_ROI, TOOL_AREA, TOOL_ARROW,
+                     TOOL_ELLIPSE, TOOL_TEXT, TOOL_COBB)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -96,12 +118,20 @@ class DicomViewport(QWidget):
         self._last_mouse_pos = QPoint()
         self._hover_pos = None
 
-        # 도구
-        self._current_tool = self.TOOL_WINDOW
+        # 도구 / 마우스 매핑
+        self._current_tool = self.TOOL_SELECT
+        self._mouse = MouseBindings()
+        self._drag_action = None     # 현재 드래그의 동작 ('tool', 'window', ...)
+        self._scroll_accum = 0.0
 
-        # 주석 (측정 포함): dict 목록, 각 항목은 그린 슬라이스에서만 표시
-        self._annotations = []
+        # 주석 (측정 포함): 영상(SOPInstanceUID)별 공유 저장소
+        self._store = AnnotationStore(self)
+        self._store.changed.connect(self.update)
         self._draft = None  # 그리는 중인 주석
+        self._cursor3d = None  # 3D 커서 (뷰포트당 하나)
+
+        # Reference Line 원천: 호출하면 [(geometry, index, label)] 반환
+        self._reference_sources = None
 
         # 돋보기
         self._magnify_level = MAGNIFY_LEVELS[0]
@@ -141,8 +171,8 @@ class DicomViewport(QWidget):
         self._series = series
         self._current_slice = 0
         self._ref_point = None
-        self._annotations.clear()
         self._draft = None
+        self._cursor3d = None
         self._orient = np.eye(2, dtype=int)
         self._cache_valid = False
 
@@ -272,38 +302,76 @@ class DicomViewport(QWidget):
         self._current_tool = tool
         self._draft = None
         self._magnifying = False
-        cursors = {
-            self.TOOL_WINDOW: Qt.ArrowCursor,
-            self.TOOL_PAN: Qt.OpenHandCursor,
-            self.TOOL_ZOOM: Qt.SizeVerCursor,
-        }
-        self.setCursor(cursors.get(tool, Qt.CrossCursor))
+        self.set_tool_cursor()
         self.update()
 
     def set_value_lens(self, enabled):
         self._value_lens = enabled
         self.update()
 
+    def set_mouse_bindings(self, bindings):
+        """여러 뷰포트가 같은 MouseBindings 객체를 공유 (설정 변경 즉시 반영)"""
+        self._mouse = bindings
+
+    def set_annotation_store(self, store):
+        self._store.changed.disconnect(self.update)
+        self._store = store
+        store.changed.connect(self.update)
+        self.update()
+
+    @property
+    def annotation_store(self):
+        return self._store
+
+    def set_reference_source(self, provider):
+        """provider() → [(SeriesGeometry, slice index, label)] (None이면 표시 안 함)"""
+        self._reference_sources = provider
+        self.update()
+
     # ─── 이벤트 처리 ───
+
+    def _drag_action_for(self, event):
+        """눌린 버튼·수정키 → 드래그 동작 (마우스 매핑 설정)"""
+        button, mods = event.button(), event.modifiers()
+        if button == Qt.LeftButton:
+            if mods & Qt.ControlModifier:
+                return self._mouse.get("ctrl_left_drag")
+            return self._mouse.get("left_drag")
+        if button == Qt.RightButton:
+            return self._mouse.get("right_drag")
+        if button == Qt.MiddleButton:
+            return self._mouse.get("middle_drag")
+        return "none"
 
     def mousePressEvent(self, event):
         self._mouse_pressed = True
         self._mouse_button = event.button()
         self._last_mouse_pos = event.pos()
-        if event.button() != Qt.LeftButton:
-            return
+        self._scroll_accum = 0.0
+        self._drag_action = self._drag_action_for(event)
+        if self._drag_action == "tool":
+            self._tool_press(event)
+        elif self._drag_action == "pan":
+            self.setCursor(Qt.ClosedHandCursor)
+        self.update()
 
+    def _tool_press(self, event):
+        """선택한 도구의 좌클릭 동작"""
         tool = self._current_tool
         img_pos = self._screen_to_image(event.pos())
+        shift = bool(event.modifiers() & Qt.ShiftModifier)
 
         if self._cursor_mode_active():
-            # Sync Cursor: 좌클릭/드래그로 기준점 지정 (윈도잉은 가운데 버튼)
+            # Crosslink: 좌클릭/드래그로 기준점 지정
             self._placing_cursor = True
             self._place_cursor(event.pos())
 
         elif tool == self.TOOL_MEASURE and img_pos:
             if self._draft is None:
                 self._draft = {"type": "distance", "pts": [img_pos, img_pos]}
+            elif shift:
+                # Shift+클릭: 시작점 고정한 채 끝점만 다시 지정 (계속 측정)
+                self._draft["pts"][1] = img_pos
             else:
                 self._draft["pts"][1] = img_pos
                 self._finish_distance()
@@ -322,9 +390,22 @@ class DicomViewport(QWidget):
             kind = "roi" if tool == self.TOOL_ROI else "area"
             self._draft = {"type": kind, "pts": [img_pos]}
 
+        elif tool == self.TOOL_ELLIPSE and img_pos:
+            self._draft = {"type": "ellipse", "pts": [img_pos, img_pos], "circle": shift}
+
+        elif tool == self.TOOL_COBB and img_pos:
+            # 1번 선 드래그 → 2번 선 드래그
+            if self._draft is None:
+                self._draft = {"type": "cobb", "pts": [img_pos, img_pos]}
+            else:
+                self._draft["pts"] += [img_pos, img_pos]
+
         elif tool == self.TOOL_ARROW and img_pos:
             # 누른 곳 = 화살촉, 드래그한 끝 = 꼬리
             self._draft = {"type": "arrow", "pts": [img_pos, img_pos]}
+
+        elif tool == self.TOOL_TEXT and img_pos:
+            self._add_text_annotation(img_pos)
 
         elif tool == self.TOOL_CURSOR3D and img_pos:
             self._place_cursor3d(img_pos)
@@ -334,8 +415,6 @@ class DicomViewport(QWidget):
 
         elif tool == self.TOOL_PAN:
             self.setCursor(Qt.ClosedHandCursor)
-
-        self.update()
 
     def mouseMoveEvent(self, event):
         pos = event.pos()
@@ -353,62 +432,106 @@ class DicomViewport(QWidget):
 
         dx = pos.x() - self._last_mouse_pos.x()
         dy = pos.y() - self._last_mouse_pos.y()
-        left = self._mouse_button == Qt.LeftButton
-        tool = self._current_tool
+        action = self._drag_action
 
-        if self._placing_cursor and left:
-            self._place_cursor(pos)
-
-        elif left and self._draft and self._draft["type"] in ("roi", "area") and img_pos:
-            last = self._image_to_screen_f(self._draft["pts"][-1])
-            if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 2:
-                self._draft["pts"].append(img_pos)
-
-        elif left and self._draft and self._draft["type"] == "arrow" and img_pos:
-            self._draft["pts"][1] = img_pos
-
-        elif left and tool == self.TOOL_CURSOR3D and img_pos:
-            self._place_cursor3d(img_pos)
-
-        elif left and tool == self.TOOL_MAGNIFY:
-            pass  # 렌즈는 hover 위치를 따라감
-
-        elif tool == self.TOOL_WINDOW and left:
-            # 윈도잉: 좌우=Width, 상하=Center
+        if action == "window":
             self._adjust_window(dx, dy)
-
-        elif tool == self.TOOL_PAN and left:
+        elif action == "pan":
             self._pan_x += dx
             self._pan_y += dy
-
-        elif tool == self.TOOL_ZOOM and left:
-            factor = 1.0 + dy * 0.005
-            self._zoom = max(0.1, min(20.0, self._zoom * factor))
-            self.zoom_changed.emit(self._zoom)
-
-        elif self._mouse_button == Qt.RightButton:
-            # 우클릭은 항상 팬
-            self._pan_x += dx
-            self._pan_y += dy
-
-        elif self._mouse_button == Qt.MiddleButton:
-            # 중간 버튼: 윈도잉
-            self._adjust_window(dx, dy)
+        elif action == "zoom":
+            self._zoom_by(1.0 + dy * 0.005)
+        elif action == "scroll":
+            # 세로 드래그 8px마다 한 장
+            self._scroll_accum += dy / 8.0
+            steps = int(self._scroll_accum)
+            if steps:
+                self._scroll_accum -= steps
+                self._go_to_slice(self._current_slice + steps, user=True)
+        elif action == "tool":
+            self._tool_move(pos, img_pos, dx, dy)
 
         self._last_mouse_pos = pos
         self.update()
 
+    def _tool_move(self, pos, img_pos, dx, dy):
+        tool = self._current_tool
+        draft = self._draft
+        if self._placing_cursor:
+            self._place_cursor(pos)
+        elif draft and draft["type"] in ("roi", "area") and img_pos:
+            last = self._image_to_screen_f(draft["pts"][-1])
+            if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 2:
+                draft["pts"].append(img_pos)
+        elif draft and draft["type"] == "ellipse" and img_pos:
+            if draft.get("circle"):
+                # Shift: 원 (mm 기준 같은 반지름)
+                sp = self._spacing() or (1.0, 1.0)
+                x0, y0 = draft["pts"][0]
+                rx = abs(img_pos[0] - x0) * sp[1]
+                ry = abs(img_pos[1] - y0) * sp[0]
+                r = max(rx, ry)
+                img_pos = (x0 + math.copysign(r / sp[1], img_pos[0] - x0),
+                           y0 + math.copysign(r / sp[0], img_pos[1] - y0))
+            draft["pts"][1] = img_pos
+        elif draft and draft["type"] in ("arrow", "cobb") and img_pos:
+            draft["pts"][-1] = img_pos
+        elif tool == self.TOOL_CURSOR3D and img_pos:
+            self._place_cursor3d(img_pos)
+        elif tool == self.TOOL_WINDOW:
+            self._adjust_window(dx, dy)
+        elif tool == self.TOOL_PAN:
+            self._pan_x += dx
+            self._pan_y += dy
+        elif tool == self.TOOL_ZOOM:
+            self._zoom_by(1.0 + dy * 0.005)
+
     def mouseReleaseEvent(self, event):
+        action = self._drag_action
         self._mouse_pressed = False
         self._mouse_button = Qt.NoButton
+        self._drag_action = None
         self._placing_cursor = False
         self._magnifying = False
-        if self._draft and self._draft["type"] in ("roi", "area"):
-            self._finish_freehand()
-        elif self._draft and self._draft["type"] == "arrow":
-            self._finish_arrow()
-        if self._current_tool == self.TOOL_PAN:
-            self.setCursor(Qt.OpenHandCursor)
+        if action == "tool" and self._draft:
+            kind = self._draft["type"]
+            if kind in ("roi", "area"):
+                self._finish_freehand()
+            elif kind == "ellipse":
+                self._finish_ellipse()
+            elif kind == "arrow":
+                self._finish_arrow()
+            elif kind == "cobb" and len(self._draft["pts"]) == 4:
+                self._finish_cobb()
+        if action == "pan" or self._current_tool == self.TOOL_PAN:
+            self.set_tool_cursor()  # 잡은 손 모양 → 원래 커서
+        self.update()
+
+    def set_tool_cursor(self):
+        cursors = {self.TOOL_PAN: Qt.OpenHandCursor, self.TOOL_ZOOM: Qt.SizeVerCursor,
+                   self.TOOL_TEXT: Qt.IBeamCursor}
+        default = (Qt.ArrowCursor if self._current_tool in (self.TOOL_SELECT, self.TOOL_WINDOW)
+                   else Qt.CrossCursor)
+        self.setCursor(cursors.get(self._current_tool, default))
+
+    def mouseDoubleClickEvent(self, event):
+        """좌 더블클릭: Fit / 우 더블클릭: W/L 리셋 (설정 가능)
+
+        그리기 도구 사용 중 좌 더블클릭은 빠른 두 번째 클릭으로 처리.
+        """
+        button = event.button()
+        if button == Qt.LeftButton and (self._current_tool in self.DRAWING_TOOLS
+                                        or self._cursor_mode_active()):
+            self.mousePressEvent(event)
+            return
+        key = {Qt.LeftButton: "left_double", Qt.RightButton: "right_double"}.get(button)
+        action = self._mouse.get(key) if key else "none"
+        if action == "fit":
+            self._fit_to_window()
+        elif action == "reset_window":
+            self.reset_window()
+        elif action == "reset_view":
+            self.reset_view()
         self.update()
 
     def leaveEvent(self, event):
@@ -418,23 +541,40 @@ class DicomViewport(QWidget):
         super().leaveEvent(event)
 
     def wheelEvent(self, event):
-        delta = event.angleDelta().y()
-        modifiers = event.modifiers()
+        # macOS는 Shift+휠을 가로 스크롤(x)로 바꿔 보냄
+        delta = event.angleDelta().y() or event.angleDelta().x()
+        if delta == 0:
+            return
+        mods = event.modifiers()
 
         if self._magnifying:
             # 돋보기 사용 중 휠: 배율 2x ↔ 3x ↔ 4x
             i = MAGNIFY_LEVELS.index(self._magnify_level)
             i = min(len(MAGNIFY_LEVELS) - 1, i + 1) if delta > 0 else max(0, i - 1)
             self._magnify_level = MAGNIFY_LEVELS[i]
-        elif modifiers & Qt.ControlModifier:
-            # Ctrl+휠: 줌
-            factor = 1.1 if delta > 0 else 0.9
-            self._zoom = max(0.1, min(20.0, self._zoom * factor))
-            self.zoom_changed.emit(self._zoom)
-        elif self._series:
-            # 휠: 슬라이스 스크롤
-            self._go_to_slice(self._current_slice + (-1 if delta > 0 else 1))
+            self.update()
+            return
+
+        if mods & Qt.ControlModifier:
+            action = self._mouse.get("ctrl_wheel")
+        elif mods & Qt.ShiftModifier:
+            action = self._mouse.get("shift_wheel")
+        else:
+            action = self._mouse.get("wheel")
+
+        direction = -1 if delta > 0 else 1  # 위로 = 이전 슬라이스
+        if action == "zoom":
+            self._zoom_by(1.1 if delta > 0 else 0.9)
+        elif action == "scroll":
+            self._go_to_slice(self._current_slice + direction, user=True)
+        elif action == "fast_scroll":
+            step = self._mouse.get("fast_scroll_step")
+            self._go_to_slice(self._current_slice + direction * step, user=True)
         self.update()
+
+    def _zoom_by(self, factor):
+        self._zoom = max(0.1, min(20.0, self._zoom * factor))
+        self.zoom_changed.emit(self._zoom)
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -451,26 +591,31 @@ class DicomViewport(QWidget):
             self.toggle_cine()
 
     def _adjust_window(self, dx, dy):
+        # 좌우 = Width, 상하 = Center
         self._window_width = max(1, self._window_width + dx * 4)
         self._window_center += dy * 4
         self._cache_valid = False
         self.window_changed.emit(self._window_center, self._window_width)
+        self.window_adjusted.emit(self._window_center, self._window_width)
 
     # ─── 슬라이스 이동 ───
 
-    def _go_to_slice(self, index):
+    def _go_to_slice(self, index, user=False):
+        """user=True: 사용자가 넘긴 경우 → scrolled 시그널 (동기화 스크롤)"""
         if not self._series:
             return
         index = max(0, min(self._series.num_slices - 1, index))
         if index != self._current_slice:
             self._current_slice = index
             self._cache_valid = False
-            if self._draft and self._draft["type"] == "angle":
+            if self._draft and self._draft["type"] in ("angle", "cobb", "distance"):
                 self._draft = None
             self.slice_changed.emit(index, self._series.num_slices)
+            if user:
+                self.scrolled.emit(index)
 
-    def go_to_slice(self, index):
-        self._go_to_slice(index)
+    def go_to_slice(self, index, user=True):
+        self._go_to_slice(index, user=user)
         self.update()
 
     # ─── 시네 재생 ───
@@ -500,7 +645,7 @@ class DicomViewport(QWidget):
         if not self._series:
             return
         next_slice = (self._current_slice + 1) % self._series.num_slices
-        self._go_to_slice(next_slice)
+        self._go_to_slice(next_slice, user=True)
         self.update()
 
     # ─── 마우스 위치 정보 (상태바 / 픽셀 값 렌즈) ───
@@ -548,7 +693,9 @@ class DicomViewport(QWidget):
             return
         parts = []
         if info["patient"] is not None:
-            parts.append(dicom_info.patient_position_text(info["patient"]) + " mm")
+            x, y, z = info["patient"]
+            parts.append(f"x {x:.1f}  y {y:.1f}  z {z:.1f} mm")
+            parts.append(dicom_info.patient_position_text(info["patient"]))
         value = self.format_value(info)
         if value:
             parts.append(value)
@@ -557,15 +704,25 @@ class DicomViewport(QWidget):
 
     # ─── 3D 커서 ───
 
+    def _image_key(self):
+        return image_key(self._series, self._current_slice)
+
+    def annotations_here(self):
+        """현재 영상의 주석 목록"""
+        return self._store.items(self._image_key())
+
+    def _add_annotation(self, ann):
+        ann["slice"] = self._current_slice
+        self._store.add(self._image_key(), ann)
+
     def _place_cursor3d(self, img_pos):
         """3D 커서는 뷰포트당 하나: 새로 찍으면 이전 위치를 대체"""
         info = self.pixel_info(img_pos)
         if info is None:
             return
-        self._annotations = [a for a in self._annotations if a["type"] != "cursor3d"]
-        self._annotations.append({"type": "cursor3d", "slice": self._current_slice,
-                                  "pts": [img_pos], "patient": info["patient"],
-                                  "value": self.format_value(info)})
+        self._cursor3d = {"type": "cursor3d", "key": self._image_key(),
+                          "pts": [img_pos], "patient": info["patient"],
+                          "value": self.format_value(info)}
         if info["patient"] is not None:
             text = dicom_info.patient_position_text(info["patient"])
             self.status_message.emit(f"3D Cursor: {text} mm")
@@ -582,8 +739,7 @@ class DicomViewport(QWidget):
         p1, p2 = self._draft["pts"]
         dx, dy = self._mm_vector(p1, p2)
         distance = math.hypot(dx, dy)
-        self._annotations.append({"type": "distance", "slice": self._current_slice,
-                                  "pts": [p1, p2], "mm": distance})
+        self._add_annotation({"type": "distance", "pts": [p1, p2], "mm": distance})
         self._draft = None
         self.measurement_completed.emit(distance)
 
@@ -596,8 +752,7 @@ class DicomViewport(QWidget):
             return
         cos_angle = max(-1, min(1, (v1[0] * v2[0] + v1[1] * v2[1]) / (mag1 * mag2)))
         angle = math.degrees(math.acos(cos_angle))
-        self._annotations.append({"type": "angle", "slice": self._current_slice,
-                                  "pts": [p1, p2, p3], "deg": angle})
+        self._add_annotation({"type": "angle", "pts": [p1, p2, p3], "deg": angle})
         self.status_message.emit(f"Angle: {angle:.1f}°")
 
     def _finish_freehand(self):
@@ -606,7 +761,7 @@ class DicomViewport(QWidget):
         if len(pts) < 3:
             return
         sp = self._spacing() or (1.0, 1.0)
-        ann = {"type": draft["type"], "slice": self._current_slice, "pts": pts,
+        ann = {"type": draft["type"], "pts": pts,
                "calibrated": self._spacing() is not None}
         if draft["type"] == "roi":
             ds = self.current_dataset()
@@ -616,8 +771,39 @@ class DicomViewport(QWidget):
         else:
             ann["area"] = polygon_area_mm2(pts, sp)
             ann["perimeter"] = polygon_perimeter_mm(pts, sp)
-        self._annotations.append(ann)
+        self._add_annotation(ann)
         self.status_message.emit(" | ".join(self._annotation_text(ann)))
+
+    def _finish_ellipse(self):
+        draft, self._draft = self._draft, None
+        p1, p2 = draft["pts"]
+        a, b = self._image_to_screen_f(p1), self._image_to_screen_f(p2)
+        if abs(a.x() - b.x()) < 4 or abs(a.y() - b.y()) < 4:
+            return  # 너무 작은 타원은 무시
+        sp = self._spacing() or (1.0, 1.0)
+        label, factor = dicom_info.value_label(self.current_dataset())
+        ann = {"type": "ellipse", "pts": [p1, p2], "label": label,
+               "calibrated": self._spacing() is not None,
+               "stats": ellipse_statistics(self._current_array(), p1, p2, sp, factor)}
+        self._add_annotation(ann)
+        self.status_message.emit(" | ".join(self._annotation_text(ann)))
+
+    def _finish_cobb(self):
+        draft, self._draft = self._draft, None
+        a1, a2, b1, b2 = draft["pts"]
+        angle = cobb_angle(a1, a2, b1, b2, self._spacing() or (1.0, 1.0))
+        if angle is None:
+            return
+        self._add_annotation({"type": "cobb", "pts": [a1, a2, b1, b2], "deg": angle})
+        self.status_message.emit(f"Cobb angle: {angle:.1f}°")
+
+    def _add_text_annotation(self, img_pos):
+        result = TextAnnotationDialog.get_annotation(self)
+        if result is None:
+            return
+        text, size, color = result
+        self._add_annotation({"type": "text", "pts": [img_pos], "text": text,
+                              "size": size, "color": color})
 
     def _finish_arrow(self):
         draft, self._draft = self._draft, None
@@ -628,21 +814,34 @@ class DicomViewport(QWidget):
         text, ok = QInputDialog.getText(self, "2D Arrow", "라벨 (비워두면 화살표만):")
         if not ok:
             return
-        self._annotations.append({"type": "arrow", "slice": self._current_slice,
-                                  "pts": [head, tail], "text": text.strip()})
+        self._add_annotation({"type": "arrow", "pts": [head, tail], "text": text.strip()})
 
     def delete_last_annotation(self):
-        """현재 슬라이스의 마지막 주석 삭제"""
-        for i in range(len(self._annotations) - 1, -1, -1):
-            if self._annotations[i]["slice"] == self._current_slice:
-                del self._annotations[i]
-                break
+        """현재 영상의 마지막 주석 삭제"""
+        self._store.remove_last(self._image_key())
         self.update()
 
     def clear_measurements(self):
-        self._annotations.clear()
+        """모든 영상의 주석 삭제 (공유 저장소)"""
+        self._store.clear()
         self._draft = None
+        self._cursor3d = None
         self.update()
+
+    # ─── Key Image ───
+
+    def is_key_image(self):
+        return self._store.is_key_image(self._image_key())
+
+    def toggle_key_image(self):
+        """현재 영상 Key Image 토글 → 새 상태"""
+        if self._series is None:
+            return False
+        marked = self._store.toggle_key_image(self._series, self._current_slice)
+        self.status_message.emit(
+            f"Key Image {'marked' if marked else 'unmarked'}: "
+            f"{self._series.description} #{self._current_slice + 1}")
+        return marked
 
     # ─── 크로스 레퍼런스 (Sync Cursor) ───
 
@@ -658,7 +857,7 @@ class DicomViewport(QWidget):
     def _cursor_mode_active(self):
         # 측정/팬/줌 도구 사용 중에는 해당 도구 동작 유지
         return (self._sync_cursor_enabled and self._series is not None
-                and self._current_tool == self.TOOL_WINDOW)
+                and self._current_tool in (self.TOOL_SELECT, self.TOOL_WINDOW))
 
     def _place_cursor(self, screen_pos):
         """클릭 위치를 환자 좌표로 변환해 기준점 지정 후 시그널 전송"""
@@ -760,9 +959,11 @@ class DicomViewport(QWidget):
         painter.drawPixmap(0, 0, pixmap)
         painter.restore()
 
+        self._draw_reference_lines(painter)
         self._draw_annotations(painter)
         self._draw_draft(painter)
         self._draw_reference_cursor(painter)
+        self._draw_key_marker(painter)
 
         if self._show_overlay:
             self._draw_overlay(painter)
@@ -789,7 +990,9 @@ class DicomViewport(QWidget):
         if kind == "area":
             return [f"Area {ann['area']:.1f} {unit2}",
                     f"Perim {ann['perimeter']:.1f} mm"]
-        if kind == "roi":
+        if kind == "cobb":
+            return [f"Cobb {ann['deg']:.1f}°"]
+        if kind in ("roi", "ellipse"):
             s, label = ann["stats"], ann.get("label", "")
             lines = [f"Area {s['area_mm2']:.1f} {unit2}"]
             if "mean" in s:
@@ -863,9 +1066,10 @@ class DicomViewport(QWidget):
 
     def _draw_annotations(self, painter):
         occupied = []
-        for ann in self._annotations:
-            if ann["slice"] != self._current_slice:
-                continue
+        items = list(self.annotations_here())
+        if self._cursor3d and self._cursor3d["key"] == self._image_key():
+            items.append(self._cursor3d)
+        for ann in items:
             kind = ann["type"]
             pts = [self._image_to_screen_f(p) for p in ann["pts"]]
             lines = self._annotation_text(ann)
@@ -903,6 +1107,36 @@ class DicomViewport(QWidget):
                 self._draw_label(painter, QPoint(int(pts[1].x()) + 4,
                                                  int(pts[1].y()) + 4),
                                  lines, COLOR_ARROW, occupied)
+            elif kind == "ellipse":
+                rect = QRectF(pts[0], pts[1]).normalized()
+                fill = QColor(COLOR_ELLIPSE)
+                fill.setAlpha(40)
+                painter.setPen(QPen(COLOR_ELLIPSE, 2))
+                painter.setBrush(fill)
+                painter.drawEllipse(rect)
+                painter.setBrush(Qt.NoBrush)
+                self._draw_label(painter, QPoint(int(rect.right()) + 6, int(rect.top())),
+                                 lines, COLOR_ELLIPSE, occupied)
+            elif kind == "cobb":
+                painter.setPen(QPen(COLOR_COBB, 2))
+                painter.drawLine(pts[0], pts[1])
+                painter.drawLine(pts[2], pts[3])
+                for p in pts:
+                    painter.drawEllipse(p, 3, 3)
+                mid = (pts[0] + pts[1] + pts[2] + pts[3]) / 4
+                self._draw_label(painter, QPoint(int(mid.x()) + 10, int(mid.y())),
+                                 lines, COLOR_COBB, occupied)
+            elif kind == "text":
+                font = QFont()
+                font.setPointSize(int(ann.get("size", 14)))
+                font.setBold(True)
+                painter.setFont(font)
+                p = pts[0]
+                painter.setPen(QColor(0, 0, 0, 220))
+                for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    painter.drawText(QPointF(p.x() + ox, p.y() + oy), ann["text"])
+                painter.setPen(QColor(ann.get("color", "#ffff00")))
+                painter.drawText(p, ann["text"])
             elif kind == "cursor3d":
                 p = pts[0]
                 painter.setPen(QPen(COLOR_CURSOR3D, 2))
@@ -932,6 +1166,61 @@ class DicomViewport(QWidget):
             painter.drawPolyline(QPolygonF(pts))
         elif kind == "arrow":
             self._draw_arrow_shape(painter, pts[0], pts[1], COLOR_ARROW)
+        elif kind == "ellipse":
+            painter.setPen(QPen(COLOR_ELLIPSE, 2, Qt.DashLine))
+            painter.drawEllipse(QRectF(pts[0], pts[1]).normalized())
+        elif kind == "cobb":
+            painter.setPen(QPen(COLOR_COBB, 2, Qt.DashLine))
+            for i in range(0, len(pts) - 1, 2):
+                painter.drawLine(pts[i], pts[i + 1])
+
+    def _draw_reference_lines(self, painter):
+        """다른 뷰포트 슬라이스의 위치 (Scout / Reference Line)"""
+        if self._reference_sources is None or self._series is None:
+            return
+        geom = self._series.geometry
+        if geom is None:
+            return
+        rect = self._image_screen_rect()
+        painter.save()
+        painter.setClipRect(rect)
+        font = QFont()
+        font.setPointSize(9)
+        painter.setFont(font)
+        line_h = painter.fontMetrics().height()
+        label_spots = []  # 이미 쓴 라벨 위치 - 겹치는 선(같은 위치의 슬라이스)은 아래로 쌓음
+        for source_geom, index, label in self._reference_sources():
+            seg = reference_line(source_geom, index, geom, self._current_slice)
+            if seg is None:
+                continue
+            (c1, r1), (c2, r2) = seg
+            a = self._image_to_screen_f((c1 + 0.5, r1 + 0.5))
+            b = self._image_to_screen_f((c2 + 0.5, r2 + 0.5))
+            painter.setPen(QPen(COLOR_REFLINE, 1))
+            painter.drawLine(a, b)
+            if label:
+                end = a if a.x() > b.x() else b
+                x = min(end.x(), rect.right() - 60) + 2
+                y = end.y() - 3
+                while any(abs(x - px) < 50 and abs(y - py) < line_h for px, py in label_spots):
+                    y += line_h
+                label_spots.append((x, y))
+                painter.drawText(QPointF(x, y), label)
+        painter.restore()
+
+    def _draw_key_marker(self, painter):
+        if not self.is_key_image():
+            return
+        font = QFont()
+        font.setPointSize(16)
+        font.setBold(True)
+        painter.setFont(font)
+        text = "★ KEY"
+        x = self.width() / 2 - painter.fontMetrics().horizontalAdvance(text) / 2
+        painter.setPen(QColor(0, 0, 0, 220))
+        painter.drawText(QPointF(x + 1, 27), text)
+        painter.setPen(COLOR_KEY)
+        painter.drawText(QPointF(x, 26), text)
 
     def _draw_reference_cursor(self, painter):
         ref = self.reference_pixel()
@@ -1159,12 +1448,26 @@ class DicomViewport(QWidget):
 
     # ─── 공개 API ───
 
-    def set_window(self, center, width):
+    def set_window(self, center, width, user=False):
+        """user=True: 사용자가 바꾼 경우 (프리셋 등) → window_adjusted로 동기화 전파"""
         self._window_center = center
         self._window_width = max(1, width)
         self._cache_valid = False
         self.window_changed.emit(self._window_center, self._window_width)
+        if user:
+            self.window_adjusted.emit(self._window_center, self._window_width)
         self.update()
+
+    def reset_window(self):
+        """DICOM 기본 W/L로 되돌림"""
+        if self._series:
+            wc, ww = self._series.get_default_window()
+            self.set_window(wc, ww, user=True)
+
+    @property
+    def window_level(self):
+        """(center, width) - QWidget.window()와 이름이 겹치지 않도록"""
+        return self._window_center, self._window_width
 
     def reset_view(self):
         """회전/반전을 원래대로 하고 화면에 맞춤"""

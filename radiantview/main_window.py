@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QSplitter, QToolBar,
     QAction, QActionGroup, QFileDialog, QStatusBar,
     QSlider, QLabel, QProgressDialog, QMessageBox,
-    QSpinBox, QApplication, QMenuBar, QTabWidget, QMenu
+    QSpinBox, QApplication, QMenuBar, QTabWidget, QMenu, QStackedWidget,
+    QComboBox, QPushButton, QInputDialog
 )
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QSettings
 from PyQt5.QtGui import QIcon, QKeySequence, QFont
@@ -24,6 +25,17 @@ from .video_exporter import VideoExportDialog
 from .series_tree import SeriesTreeWidget
 from .cursor_sync import CursorSyncController
 from .image_info_panel import ImageInfoPanel
+from .series_panel import SeriesPanel
+from .tile_view import TileView
+from .app_settings import AppSettings
+from .annotations import AnnotationStore
+from .hanging import find_protocol, assign_slots, protocol_from_layout
+from .settings_dialog import SettingsDialog
+from .network_dialogs import DicomSendDialog, DicomPrintDialog
+from .render import render_8bit
+from .multi_viewport import LAYOUTS
+from .series_tree import group_series
+from .dicom_info import orientation_name
 
 
 MAX_RECENT_PATHS = 10
@@ -85,6 +97,8 @@ class MainWindow(QMainWindow):
         self._volume_series = None
         # 마지막으로 연 폴더: 열기 대화상자의 시작 위치로만 사용 (자동 로드 안 함)
         self._settings = QSettings("RadiantView", "RadiantView")
+        self._app_settings = AppSettings(self._settings)
+        self._annotation_store = AnnotationStore(self)
 
         self._init_ui()
         self._cursor_sync = CursorSyncController(self)
@@ -95,6 +109,7 @@ class MainWindow(QMainWindow):
         self._init_menubar()
         self._init_toolbar()
         self._init_statusbar()
+        self._configure_viewports()
         self._connect_signals()
 
         # 다크 테마
@@ -115,10 +130,35 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(4, 4, 4, 4)
 
-        left_layout.addWidget(QLabel("📁 Series"))
+        # 상단: 레이아웃 선택 (INFINITT 방식) + 보기 전환
+        header = QHBoxLayout()
+        header.addWidget(QLabel("Series"))
+        header.addStretch()
+        self._layout_combo = QComboBox()
+        self._layout_combo.addItems(["2D", "1X1", "1X2", "2X2", "3X3", "Default", "ALL"])
+        self._layout_combo.setToolTip(
+            "2D: 단일 뷰 / 1X1~3X3: Multi View (현재 시리즈부터 순서대로)\n"
+            "Default: Hanging Protocol 적용 / ALL: 현재 검사의 모든 시리즈")
+        self._layout_combo.activated[str].connect(self._apply_layout_choice)
+        header.addWidget(self._layout_combo)
+        self._view_toggle = QPushButton("☰")
+        self._view_toggle.setCheckable(True)
+        self._view_toggle.setFixedWidth(32)
+        self._view_toggle.setToolTip("썸네일 목록 ↔ 환자/검사 트리")
+        self._view_toggle.toggled.connect(self._toggle_series_view)
+        header.addWidget(self._view_toggle)
+        left_layout.addLayout(header)
+
+        self._series_stack = QStackedWidget()
+        self._series_panel = SeriesPanel()
+        self._series_panel.series_selected.connect(self._on_series_selected)
         self._series_tree = SeriesTreeWidget()
+        self._series_tree.use_external_thumbnails(True)
         self._series_tree.series_selected.connect(self._on_series_selected)
-        left_layout.addWidget(self._series_tree)
+        self._series_panel.thumbnail_ready.connect(self._series_tree.set_thumbnail)
+        self._series_stack.addWidget(self._series_panel)
+        self._series_stack.addWidget(self._series_tree)
+        left_layout.addWidget(self._series_stack)
 
         splitter.addWidget(left_panel)
 
@@ -137,9 +177,16 @@ class MainWindow(QMainWindow):
             QTabBar::tab:hover { color: #ddd; }
         """)
 
-        # 탭 1: 단일 뷰포트
+        # 탭 1: 단일 뷰포트 (Stack) / Tile
         self._viewport = DicomViewport()
-        self._tab_widget.addTab(self._viewport, "2D View")
+        self._tile_view = TileView()
+        self._tile_view.tile_activated.connect(self._on_tile_activated)
+        self._tile_view.window_changed.connect(
+            lambda c, w: self._viewport.set_window(c, w))
+        self._stack2d = QStackedWidget()
+        self._stack2d.addWidget(self._viewport)
+        self._stack2d.addWidget(self._tile_view)
+        self._tab_widget.addTab(self._stack2d, "2D View")
 
         # 탭 2: 다중 뷰포트
         self._multi_viewport = MultiViewport()
@@ -157,9 +204,8 @@ class MainWindow(QMainWindow):
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
         splitter.addWidget(self._tab_widget)
 
-        # 트리 3단계(환자/검사/시리즈) 라벨이 잘리지 않도록 넓게
         left_panel.setMinimumWidth(220)
-        splitter.setSizes([340, 1060])
+        splitter.setSizes([300, 1100])
         splitter.setStretchFactor(1, 1)
         main_layout.addWidget(splitter)
 
@@ -197,6 +243,15 @@ class MainWindow(QMainWindow):
         export_video_action.triggered.connect(self._export_video)
         file_menu.addAction(export_video_action)
 
+        file_menu.addSeparator()
+        file_menu.addAction(self._act_save_ann)
+        file_menu.addAction(self._act_load_ann)
+        file_menu.addAction(self._act_export_keys)
+        file_menu.addSeparator()
+        file_menu.addAction(self._act_send)
+        file_menu.addAction(self._act_print)
+        file_menu.addSeparator()
+        file_menu.addAction(self._act_settings)
         file_menu.addSeparator()
 
         quit_action = QAction("Quit", self)
@@ -244,30 +299,27 @@ class MainWindow(QMainWindow):
             lambda: self._target_viewport().clear_measurements())
         tools_menu.addAction(clear_meas)
 
+        tools_menu.addSeparator()
+        apply_hp = QAction("Apply Hanging Protocol", self)
+        apply_hp.triggered.connect(lambda: self._apply_hanging(auto=False))
+        tools_menu.addAction(apply_hp)
+        save_hp = QAction("Save Layout as Hanging Protocol...", self)
+        save_hp.triggered.connect(self._save_layout_as_protocol)
+        tools_menu.addAction(save_hp)
+        tools_menu.addAction(self._act_compare)
+        tools_menu.addSeparator()
+        tools_menu.addAction(self._act_key)
+        tools_menu.addAction(self._act_key_view)
+
         file_menu.insertAction(export_video_action, self._act_capture)
 
-        # Window presets 메뉴
-        preset_menu = menubar.addMenu("&Presets")
-        presets = [
-            ("Brain", 40, 80),
-            ("Subdural", 75, 215),
-            ("Stroke", 40, 40),
-            ("Bone", 400, 2000),
-            ("Lung", -600, 1600),
-            ("Abdomen", 60, 400),
-            ("Liver", 80, 150),
-            ("Soft Tissue", 50, 350),
-            ("Spine", 50, 250),
-            ("Mediastinum", 50, 350),
-        ]
-        for name, wc, ww in presets:
-            action = QAction(f"{name} (C:{wc} W:{ww})", self)
-            action.triggered.connect(
-                lambda checked, c=wc, w=ww: self._target_viewport().set_window(c, w))
-            preset_menu.addAction(action)
+        # Window presets 메뉴 (설정에서 추가/편집/삭제, 열 때마다 새로 구성)
+        self._preset_menu = menubar.addMenu("&Presets")
+        self._preset_menu.aboutToShow.connect(self._rebuild_preset_menu)
+        self._rebuild_preset_menu()
 
     def _init_toolbar(self):
-        """도구 모음"""
+        """도구 모음 (3줄): 도구 / 보기·동기화 / 출력·시네"""
         toolbar = QToolBar("Tools")
         toolbar.setIconSize(QSize(24, 24))
         toolbar.setMovable(False)
@@ -275,44 +327,57 @@ class MainWindow(QMainWindow):
 
         tool_group = QActionGroup(self)
         tool_group.setExclusive(True)
-
+        V = DicomViewport
         tools = [
-            ("🖱 Window", DicomViewport.TOOL_WINDOW, "1",
-             "윈도잉 (좌클릭 드래그)"),
-            ("✋ Pan", DicomViewport.TOOL_PAN, "2",
-             "팬 (좌클릭 드래그)"),
-            ("🔍 Zoom", DicomViewport.TOOL_ZOOM, "3",
-             "줌 (좌클릭 드래그 또는 Ctrl+휠)"),
-            ("📏 Distance", DicomViewport.TOOL_MEASURE, "4",
-             "거리 측정 (클릭→클릭)"),
-            ("📐 Angle", DicomViewport.TOOL_ANGLE, "5",
-             "각도 측정 (3점 클릭)"),
-            ("✚ 3D Cursor", DicomViewport.TOOL_CURSOR3D, "6",
-             "3D 커서: 클릭 위치의 환자 좌표(mm) 표시\n"
-             "Sync Cursor가 켜져 있으면 다른 뷰에도 전파"),
-            ("🔎 Magnify", DicomViewport.TOOL_MAGNIFY, "7",
-             "돋보기: 누르고 있는 동안 원형 렌즈로 확대\n휠로 2x / 3x / 4x"),
-            ("◌ ROI", DicomViewport.TOOL_ROI, "8",
-             "Freehand ROI: 드래그로 영역을 그리면\n면적·Mean·SD·Min·Max 표시"),
-            ("▱ Area", DicomViewport.TOOL_AREA, "9",
-             "Freehand 면적 측정: 면적(mm²)·둘레"),
-            ("➚ Arrow", DicomViewport.TOOL_ARROW, "0",
-             "2D 화살표: 가리킬 곳에서 누르고 드래그, 놓으면 라벨 입력"),
+            ("⬚ Select", V.TOOL_SELECT, "S",
+             "Selector: 선택 전용 (좌클릭으로 뷰포트 선택)\n"
+             "우클릭 드래그=W/L, 가운데=Pan, 휠=슬라이스는 항상 동작"),
+            None,
+            ("W/L", V.TOOL_WINDOW, "1", "윈도잉 (좌클릭 드래그)"),
+            ("Pan", V.TOOL_PAN, "2", "팬 (좌클릭 드래그)"),
+            ("Zoom", V.TOOL_ZOOM, "3", "줌 (좌클릭 드래그)"),
+            None,
+            ("Dist", V.TOOL_MEASURE, "4", "거리 측정 (클릭→클릭, Shift+클릭: 끝점만 다시 지정)"),
+            ("Angle", V.TOOL_ANGLE, "5", "각도 측정 (3점 클릭)"),
+            ("Cobb", V.TOOL_COBB, "B", "Cobb 각: 첫 번째 선 드래그 → 두 번째 선 드래그"),
+            None,
+            ("3D Cursor", V.TOOL_CURSOR3D, "6",
+             "3D 커서: 클릭 위치의 환자 좌표(mm)\nCrosslink가 켜져 있으면 다른 뷰에도 전파"),
+            ("Magnify", V.TOOL_MAGNIFY, "7", "돋보기: 누르고 있는 동안 확대 (휠로 2x/3x/4x)"),
+            None,
+            ("ROI", V.TOOL_ROI, "8", "Freehand ROI: 면적·Mean·SD·Min·Max"),
+            ("Ellipse", V.TOOL_ELLIPSE, "E", "타원 ROI (Shift: 원): 면적·Mean·SD·Min·Max"),
+            ("Area", V.TOOL_AREA, "9", "Freehand 면적 측정: 면적(mm²)·둘레"),
+            None,
+            ("Arrow", V.TOOL_ARROW, "0", "2D 화살표: 가리킬 곳에서 누르고 드래그 → 라벨"),
+            ("Text", V.TOOL_TEXT, "T", "텍스트 메모: 클릭 → 내용·크기·색상"),
         ]
-
-        for label, tool_id, shortcut, tooltip in tools:
+        self._tool_actions = {}
+        for entry in tools:
+            if entry is None:
+                toolbar.addSeparator()
+                continue
+            label, tool_id, shortcut, tooltip = entry
             action = QAction(label, self)
             action.setCheckable(True)
             action.setShortcut(QKeySequence(shortcut))
-            action.setToolTip(tooltip)
+            action.setToolTip(f"{tooltip} ({shortcut})")
             action.triggered.connect(
                 lambda checked, t=tool_id: self._set_tool_all(t))
             tool_group.addAction(action)
             toolbar.addAction(action)
-            if tool_id == DicomViewport.TOOL_WINDOW:
-                action.setChecked(True)
+            self._tool_actions[tool_id] = action
+        self._tool_actions[V.TOOL_SELECT].setChecked(True)
 
-        toolbar.addSeparator()
+        # ─── 둘째 줄: 이미지 조작 + 동기화 + Key Image / Tile ───
+        self.addToolBarBreak()
+        view_bar = QToolBar("View")
+        view_bar.setMovable(False)
+        self.addToolBar(view_bar)
+        for action in (self._act_flip_v, self._act_flip_h, self._act_rot_l,
+                       self._act_rot_r, self._act_invert, self._act_reset):
+            view_bar.addAction(action)
+        view_bar.addSeparator()
 
         # 크로스 레퍼런스 (GE AW의 Crosslink)
         self._sync_action = QAction("⌖ Crosslink", self)
@@ -320,53 +385,62 @@ class MainWindow(QMainWindow):
         self._sync_action.setShortcut(QKeySequence("C"))
         self._sync_action.setToolTip(
             "크로스 레퍼런스 (C)\n"
-            "켜면 좌클릭/드래그 위치가 같은 좌표계(Frame of Reference)의\n"
-            "다른 뷰포트·MPR에 십자선으로 표시되고 가장 가까운 슬라이스로 이동합니다.\n"
-            "켜져 있는 동안 윈도잉은 가운데 버튼 드래그로 조절하세요.")
+            "Select/W/L 도구에서 좌클릭/드래그 위치가 같은 좌표계(Frame of Reference)의\n"
+            "다른 뷰포트·MPR에 십자선으로 표시되고 가장 가까운 슬라이스로 이동합니다.")
         self._sync_action.toggled.connect(self._cursor_sync.set_enabled)
-        toolbar.addAction(self._sync_action)
-        toolbar.addAction(self._act_value_lens)
+        view_bar.addAction(self._sync_action)
+        for action in (self._act_ref_lines, self._act_sync_scroll,
+                       self._act_sync_window, self._act_value_lens):
+            view_bar.addAction(action)
+        view_bar.addSeparator()
+        for action in (self._act_key, self._act_key_view, self._act_tile):
+            view_bar.addAction(action)
+        self._tile_grid = QComboBox()
+        self._tile_grid.addItems([f"{n}x{n}" for n in range(2, 7)])
+        self._tile_grid.setCurrentText("4x4")
+        self._tile_grid.setToolTip("Tile 격자 크기")
+        self._tile_grid.currentTextChanged.connect(
+            lambda t: self._tile_view.set_grid(int(t.split("x")[0])))
+        view_bar.addWidget(self._tile_grid)
+        view_bar.addAction(self._act_compare)
 
-        # ─── 두 번째 줄: 이미지 조작 (GE AW 스타일) + 시네/슬라이스 ───
+        # ─── 셋째 줄: 출력 + 시네/슬라이스 ───
         self.addToolBarBreak()
-        image_bar = QToolBar("Image")
-        image_bar.setMovable(False)
-        self.addToolBar(image_bar)
-        for action in (self._act_flip_v, self._act_flip_h, self._act_rot_l,
-                       self._act_rot_r, self._act_invert, self._act_reset):
-            image_bar.addAction(action)
-        image_bar.addSeparator()
-        image_bar.addAction(self._act_capture)
-        image_bar.addAction(self._act_image_panel)
-        image_bar.addSeparator()
+        output_bar = QToolBar("Output")
+        output_bar.setMovable(False)
+        self.addToolBar(output_bar)
+        for action in (self._act_capture, self._act_image_panel, self._act_send,
+                       self._act_print, self._act_settings):
+            output_bar.addAction(action)
+        output_bar.addSeparator()
 
         # 시네 재생
         cine_action = QAction("▶ Play", self)
         cine_action.setShortcut(QKeySequence("Space"))
         cine_action.triggered.connect(self._viewport.toggle_cine)
-        image_bar.addAction(cine_action)
+        output_bar.addAction(cine_action)
 
         # FPS 조절
-        image_bar.addWidget(QLabel(" FPS: "))
+        output_bar.addWidget(QLabel(" FPS: "))
         self._fps_spin = QSpinBox()
         self._fps_spin.setRange(1, 60)
         self._fps_spin.setValue(15)
         self._fps_spin.valueChanged.connect(self._viewport.set_cine_fps)
-        image_bar.addWidget(self._fps_spin)
+        output_bar.addWidget(self._fps_spin)
 
-        image_bar.addSeparator()
+        output_bar.addSeparator()
 
         # 슬라이스 슬라이더
-        image_bar.addWidget(QLabel(" Slice: "))
+        output_bar.addWidget(QLabel(" Slice: "))
         self._slice_slider = QSlider(Qt.Horizontal)
         self._slice_slider.setMinimum(0)
         self._slice_slider.setMaximum(0)
-        self._slice_slider.setFixedWidth(180)
+        self._slice_slider.setFixedWidth(220)
         self._slice_slider.valueChanged.connect(self._viewport.go_to_slice)
-        image_bar.addWidget(self._slice_slider)
+        output_bar.addWidget(self._slice_slider)
 
         self._slice_label = QLabel(" 0/0 ")
-        image_bar.addWidget(self._slice_label)
+        output_bar.addWidget(self._slice_label)
 
     def _create_image_actions(self):
         """이미지 조작 액션 (메뉴·툴바 공유). 대상 = 현재 탭의 뷰포트"""
@@ -398,6 +472,35 @@ class MainWindow(QMainWindow):
         self._act_capture = make("📷 Capture", "Ctrl+Shift+S",
                                  "현재 화면을 오버레이·측정선 포함해 이미지로 저장",
                                  self._capture_image)
+        self._act_ref_lines = make("Ref Lines", "", "Reference Line: Multi View 다른 칸의 슬라이스 위치 표시",
+                                   self._multi_viewport.set_reference_lines, checkable=True)
+        self._act_sync_scroll = make("Sync Scroll", "", "Multi View 동기화 스크롤\n"
+                                     "같은 좌표계·평행한 시리즈는 위치 기준, 비교(Compare) 칸은 간격 유지",
+                                     self._multi_viewport.set_sync_scroll, checkable=True)
+        self._act_sync_window = make("Sync W/L", "", "Multi View 동기화 윈도잉 (같은 모달리티)",
+                                     self._multi_viewport.set_sync_window, checkable=True)
+        self._act_key = make("★ Key", "K", "현재 영상을 Key Image로 표시/해제",
+                             self._toggle_key_image)
+        self._act_key_view = make("Key Images", "Shift+K", "Key Image만 모아보기 (Tile)",
+                                  self._show_key_images)
+        self._act_tile = make("▦ Tile", "Shift+T", "Stack ↔ Tile 모드 (여러 슬라이스를 격자로)",
+                              self._set_tile_mode, checkable=True)
+        self._act_compare = make("Compare", "", "같은 환자의 이전 검사와 나란히 비교\n"
+                                 "(동기화 스크롤·윈도잉 자동 켜짐)", self._compare_prior)
+        self._act_send = make("DICOM Send", "", "PACS 등으로 DICOM 전송 (C-STORE)",
+                              lambda: self._open_network_dialog(DicomSendDialog))
+        self._act_print = make("DICOM Print", "", "DICOM 프린터로 필름 인쇄",
+                               lambda: self._open_network_dialog(DicomPrintDialog))
+        self._act_settings = make("⚙ Settings", "", "마우스 매핑 / W/L 프리셋 / Hanging Protocol / DICOM 노드",
+                                  lambda: self._open_settings())
+        self._act_settings.setShortcut(QKeySequence.Preferences)
+        self._act_settings.setMenuRole(QAction.PreferencesRole)
+        self._act_save_ann = make("Save Annotations...", "", "주석·측정·Key Image를 JSON으로 저장",
+                                  self._save_annotations)
+        self._act_load_ann = make("Load Annotations...", "", "JSON 주석 파일 불러오기",
+                                  self._load_annotations)
+        self._act_export_keys = make("Export Key Images...", "", "Key Image를 PNG + 목록(JSON)으로 내보내기",
+                                     self._export_key_images)
         self._act_image_panel = self._info_panel.toggleViewAction()
         self._act_image_panel.setText("ⓘ Image")
         self._act_image_panel.setShortcut(QKeySequence("Ctrl+I"))
@@ -581,22 +684,24 @@ class MainWindow(QMainWindow):
         if remember:
             self._add_recent_paths(loaded_paths)
 
+        protocol_name = None
         if target_viewport is None:
             self._loader = loader
             self._update_series_list()
+            if self._app_settings.auto_hanging():
+                protocol_name = self._apply_hanging(auto=True)
         else:
             # 기존 목록에 추가하고, 드롭한 뷰포트를 활성화한 뒤 첫 새 시리즈 선택
             new_uids = self._loader.merge(loader)
             self._multi_viewport.set_active(target_viewport)
-            self._series_tree.populate(self._loader.get_series_list(),
-                                       select_uid=new_uids[0])
+            self._update_series_list(select_uid=new_uids[0])
         errors = loader.load_errors
+        message = f"Loaded {loaded} files"
         if errors:
-            self._statusbar.showMessage(
-                f"Loaded {loaded} files ({len(errors)} errors)", 5000)
-        else:
-            self._statusbar.showMessage(
-                f"Loaded {loaded} files", 5000)
+            message += f" ({len(errors)} errors)"
+        if protocol_name:
+            message += f"  ·  Hanging Protocol: {protocol_name}"
+        self._statusbar.showMessage(message, 8000)
 
     def _on_series_dropped(self, viewport_index, uid):
         """트리에서 Multi View 뷰포트로 시리즈를 드롭"""
@@ -605,7 +710,6 @@ class MainWindow(QMainWindow):
             return
         self._multi_viewport.set_active(viewport_index)
         self._select_series(series)
-        self._series_tree.select_uid(uid)
 
     def _on_paths_dropped(self, viewport_index, paths):
         """외부 파일/폴더를 Multi View 뷰포트로 드롭"""
@@ -616,17 +720,28 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage(
                 "Sync Cursor: 같은 좌표계(Frame of Reference)의 시리즈가 없습니다", 3000)
 
-    def _update_series_list(self):
-        """시리즈 트리 갱신 (Patient → Study → Series, 전부 펼치고 첫 시리즈 선택)"""
-        self._series_tree.populate(self._loader.get_series_list())
+    def _update_series_list(self, select_uid=None):
+        """썸네일 패널 + 트리 갱신 (첫 시리즈 또는 select_uid 선택)"""
+        series_list = self._loader.get_series_list()
+        self._series_tree.populate(series_list, select_uid=select_uid, emit=False)
+        self._series_panel.populate(series_list, select_uid=select_uid)  # → 선택 시그널
 
     def _on_series_selected(self, uid):
         series = self._loader.get_series_by_uid(uid)
         if series:
             self._select_series(series)
 
+    def _toggle_series_view(self, tree):
+        self._series_stack.setCurrentWidget(self._series_tree if tree else self._series_panel)
+        self._view_toggle.setText("▦" if tree else "☰")
+
     def _select_series(self, series):
         self._current_series = series
+        # 썸네일 패널과 트리의 선택 표시를 맞춤 (시그널 없이)
+        self._series_panel.select_uid(series.series_uid)
+        self._series_tree.select_uid(series.series_uid)
+        if self._stack2d.currentWidget() is self._tile_view:
+            self._tile_view.set_series(series)
         self._viewport.set_series(series)
         self._multi_viewport.set_series_to_active(series)
         self._slice_slider.setMaximum(max(0, series.num_slices - 1))
@@ -637,6 +752,289 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index):
         self._sync_volume_tabs()
         self._refresh_image_info()
+        # 레이아웃 드롭다운 표시를 현재 화면에 맞춤
+        current = self._tab_widget.currentWidget()
+        if current is self._stack2d:
+            self._layout_combo.setCurrentText("2D")
+        elif current is self._multi_viewport:
+            text = self._multi_viewport.current_layout.upper()
+            if self._layout_combo.findText(text) >= 0:
+                self._layout_combo.setCurrentText(text)
+
+    # ─── 뷰포트 공통 설정 ───
+
+    def _configure_viewports(self):
+        """마우스 매핑·주석 저장소를 모든 뷰포트가 공유"""
+        for vp in self._all_viewports():
+            vp.set_mouse_bindings(self._app_settings.mouse)
+            vp.set_annotation_store(self._annotation_store)
+        self._tile_view.set_annotation_store(self._annotation_store)
+
+    # ─── 레이아웃 / Hanging Protocol ───
+
+    def _study_series(self, series=None):
+        """series(기본: 현재 시리즈)와 같은 검사의 시리즈 목록 (트리 표시 순서)"""
+        series = series or self._current_series
+        if series is None:
+            return []
+        for _pname, _pid, studies in group_series(self._loader.get_series_list()):
+            for _date, _time, _desc, group in studies:
+                if any(s is series for s in group):
+                    return group
+        return [series]
+
+    def _apply_layout_choice(self, choice):
+        if self._current_series is None:
+            return
+        if choice == "2D":
+            self._set_tile_mode(False)
+            self._tab_widget.setCurrentWidget(self._stack2d)
+            return
+        if choice == "Default":
+            self._apply_hanging(auto=False)
+            return
+        study = self._study_series()
+        if choice == "ALL":
+            self._multi_viewport.show_series(study)
+        else:
+            layout = choice.lower()
+            rows, cols = LAYOUTS[layout]
+            # 현재 시리즈부터 검사 순서대로 채움
+            start = next((i for i, s in enumerate(study) if s is self._current_series), 0)
+            ordered = study[start:] + study[:start]
+            self._multi_viewport.show_series(ordered[:rows * cols], layout=layout)
+        self._tab_widget.setCurrentWidget(self._multi_viewport)
+
+    def _apply_hanging(self, auto=False):
+        """현재 검사에 맞는 Hanging Protocol 적용 → 적용한 프로토콜 이름 (없으면 None)
+
+        auto=False이고 맞는 프로토콜이 없으면 2x2로 앞에서부터 배치.
+        """
+        study = self._study_series()
+        if not study:
+            return None
+        protocol = find_protocol(self._app_settings.hanging_protocols(), study)
+        slots = assign_slots(protocol, study) if protocol else []
+        if protocol and any(slots):
+            layout = protocol.get("layout", "2x2")
+            self._multi_viewport.show_series(slots, layout=layout if layout in LAYOUTS else None)
+            self._tab_widget.setCurrentWidget(self._multi_viewport)
+            self._statusbar.showMessage(f"Hanging Protocol: {protocol['name']}", 6000)
+            return protocol["name"]
+        if not auto:
+            self._multi_viewport.show_series(study[:4], layout="2x2")
+            self._tab_widget.setCurrentWidget(self._multi_viewport)
+            self._statusbar.showMessage("맞는 Hanging Protocol이 없어 2x2 기본 배치", 6000)
+        return None
+
+    def _save_layout_as_protocol(self):
+        mv = self._multi_viewport
+        placed = [vp.series for vp in mv.visible_viewports]
+        if not any(placed):
+            QMessageBox.information(self, "Hanging Protocol",
+                                    "Multi View에 시리즈를 배치한 뒤 저장하세요.")
+            return
+        name, ok = QInputDialog.getText(self, "Save Hanging Protocol", "프로토콜 이름:")
+        if not ok or not name.strip():
+            return
+        protocol = protocol_from_layout(name.strip(), mv.current_layout, placed,
+                                        [s for s in placed if s])
+        protocols = [p for p in self._app_settings.hanging_protocols()
+                     if p.get("name") != protocol["name"]]
+        # 사용자 프로토콜을 기본 프로토콜보다 먼저 검사
+        self._app_settings.save_hanging_protocols([protocol] + protocols)
+        self._statusbar.showMessage(f"Hanging Protocol 저장: {protocol['name']}", 6000)
+
+    # ─── 비교 (이전 검사) ───
+
+    def _find_prior(self, series):
+        """같은 환자의 다른 검사에서 가장 비슷한 시리즈 (없으면 None)"""
+        if series is None:
+            return None
+        own_tokens = set((series.description or "").upper().split())
+        orient = orientation_name(series.slices[0]) if series.slices else ""
+        best, best_key = None, None
+        for other in self._loader.get_series_list():
+            if (other.patient_id != series.patient_id or other.study_uid == series.study_uid
+                    or other.modality != series.modality):
+                continue
+            tokens = set((other.description or "").upper().split())
+            same_orient = orientation_name(other.slices[0]) == orient if other.slices else False
+            earlier = other.study_date <= series.study_date
+            key = (same_orient, len(own_tokens & tokens), earlier, other.study_date)
+            if best_key is None or key > best_key:
+                best, best_key = other, key
+        return best
+
+    def _compare_prior(self):
+        current = self._current_series
+        prior = self._find_prior(current)
+        if prior is None:
+            QMessageBox.information(self, "Compare",
+                                    "같은 환자의 다른 날짜 검사에서 비교할 시리즈를 찾지 못했습니다.")
+            return
+        mv = self._multi_viewport
+        mv.show_series([current, prior], layout="1x2")
+        mv.link_compare(0, 1)
+        self._act_sync_scroll.setChecked(True)
+        mv.set_sync_scroll(True)
+        self._act_sync_window.setChecked(True)
+        mv.set_sync_window(True)
+        self._tab_widget.setCurrentWidget(mv)
+        self._statusbar.showMessage(
+            f"Compare: {current.study_date} {current.description}  ↔  "
+            f"{prior.study_date} {prior.description}", 8000)
+
+    # ─── Stack / Tile, Key Image ───
+
+    def _set_tile_mode(self, on):
+        self._act_tile.setChecked(bool(on))
+        if on:
+            if self._current_series is None:
+                self._act_tile.setChecked(False)
+                return
+            self._tile_view.set_series(self._current_series,
+                                       window=self._viewport.window_level,
+                                       start_index=self._viewport.current_slice)
+            self._stack2d.setCurrentWidget(self._tile_view)
+            self._tab_widget.setCurrentWidget(self._stack2d)
+        else:
+            self._stack2d.setCurrentWidget(self._viewport)
+
+    def _on_tile_activated(self, series, index):
+        """Tile에서 더블클릭 → 해당 슬라이스를 Stack 모드로"""
+        self._set_tile_mode(False)
+        if series is not self._current_series:
+            self._select_series(series)
+        self._viewport.go_to_slice(index)
+
+    def _toggle_key_image(self):
+        vp = self._target_viewport()
+        if self._stack2d.currentWidget() is self._tile_view and self._tile_view.items:
+            # Tile 모드: 선택한 칸
+            n = self._tile_view.selected_index
+            if n is not None:
+                series, index = self._tile_view.items[n]
+                self._annotation_store.toggle_key_image(series, index)
+            return
+        vp.toggle_key_image()
+
+    def _key_image_items(self):
+        items = []
+        for _key, info in self._annotation_store.key_images():
+            series = self._loader.get_series_by_uid(info.get("series_uid"))
+            if series is not None and 0 <= info.get("index", -1) < series.num_slices:
+                items.append((series, info["index"]))
+        return items
+
+    def _show_key_images(self):
+        items = self._key_image_items()
+        if not items:
+            QMessageBox.information(self, "Key Images", "표시된 Key Image가 없습니다. (K로 표시)")
+            return
+        self._tile_view.set_items(items, title="★ Key Images",
+                                  window=self._viewport.window_level)
+        self._act_tile.setChecked(True)
+        self._stack2d.setCurrentWidget(self._tile_view)
+        self._tab_widget.setCurrentWidget(self._stack2d)
+
+    def _window_for(self, series):
+        """출력용 W/L: 현재 보고 있는 시리즈면 화면 값, 아니면 DICOM 기본값"""
+        vp = self._target_viewport()
+        if vp.series is series:
+            return vp.window_level
+        return series.get_default_window()
+
+    def _export_key_images(self):
+        items = self._key_image_items()
+        if not items:
+            QMessageBox.information(self, "Export Key Images", "표시된 Key Image가 없습니다.")
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Export Key Images", self._last_dir())
+        if not folder:
+            return
+        import json
+        from PyQt5.QtGui import QImage
+        exported = []
+        for n, (series, index) in enumerate(items, 1):
+            img = render_8bit(series, index, self._window_for(series))
+            if img is None:
+                continue
+            h, w = img.shape
+            name = "".join(c if c.isalnum() or c in "-_" else "_"
+                           for c in (series.description or "series"))
+            filename = f"key_{n:03d}_{name}_im{index + 1}.png"
+            QImage(img.data, w, h, w, QImage.Format_Grayscale8).copy().save(
+                os.path.join(folder, filename))
+            ds = series.slices[index]
+            exported.append({"file": filename, "series": series.description,
+                             "series_number": series.series_number,
+                             "image": index + 1,
+                             "sop_instance_uid": str(getattr(ds, "SOPInstanceUID", ""))})
+        with open(os.path.join(folder, "key_images.json"), "w", encoding="utf-8") as f:
+            json.dump(exported, f, ensure_ascii=False, indent=2)
+        self._statusbar.showMessage(f"Key Image {len(exported)}장 내보냄: {folder}", 8000)
+
+    # ─── 주석 저장 / 불러오기 ───
+
+    def _save_annotations(self):
+        if self._annotation_store.count() == 0 and not self._annotation_store.key_images():
+            QMessageBox.information(self, "Save Annotations", "저장할 주석이 없습니다.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Annotations", os.path.join(self._last_dir(), "annotations.json"),
+            "Annotations (*.json)")
+        if path:
+            self._annotation_store.save_json(path)
+            self._statusbar.showMessage(f"주석 저장: {path}", 6000)
+
+    def _load_annotations(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load Annotations", self._last_dir(),
+                                              "Annotations (*.json)")
+        if not path:
+            return
+        try:
+            count = self._annotation_store.load_json(path)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Load Annotations", str(e))
+            return
+        self._statusbar.showMessage(f"주석 {count}개 불러옴", 6000)
+
+    # ─── 설정 / 네트워크 ───
+
+    def _open_settings(self, tab="mouse"):
+        dialog = SettingsDialog(self._app_settings, self, tab=tab)
+        if dialog.exec_():
+            self._rebuild_preset_menu()
+            self._statusbar.showMessage("설정을 저장했습니다.", 4000)
+
+    def _rebuild_preset_menu(self):
+        menu = self._preset_menu
+        menu.clear()
+        for p in self._app_settings.window_presets():
+            action = menu.addAction(f"{p['name']} (C:{p['center']:g} W:{p['width']:g})")
+            action.triggered.connect(
+                lambda checked=False, c=p["center"], w=p["width"]:
+                self._target_viewport().set_window(c, w, user=True))
+        menu.addSeparator()
+        edit = menu.addAction("Edit Presets...")
+        edit.triggered.connect(lambda: self._open_settings("presets"))
+
+    def _open_network_dialog(self, dialog_class):
+        vp = self._target_viewport()
+        series = vp.series
+        sources = {"image": [], "series": [], "key": []}
+        if series is not None:
+            window = self._window_for(series)
+            sources["image"] = [(series, vp.current_slice, window)]
+            sources["series"] = [(series, i, window) for i in range(series.num_slices)]
+        sources["key"] = [(s, i, self._window_for(s)) for s, i in self._key_image_items()]
+        if not any(sources.values()):
+            QMessageBox.information(self, dialog_class.title, "보낼 영상이 없습니다.")
+            return
+        dialog = dialog_class(self._app_settings, sources, self,
+                              open_settings=self._open_settings)
+        dialog.exec_()
 
     # ─── 대상 뷰포트 / 전체 적용 ───
 
@@ -644,7 +1042,7 @@ class MainWindow(QMainWindow):
         return [self._viewport] + self._multi_viewport.viewports
 
     def _target_viewport(self):
-        """이미지 조작 대상: Multi View 탭이면 활성 칸, 그 외에는 2D 뷰포트"""
+        """이미지 조작 대상: Multi View 탭이면 활성 칸, 그 외에는 2D 뷰포트 (Stack)"""
         if self._tab_widget.currentWidget() is self._multi_viewport:
             return self._multi_viewport.active_viewport
         return self._viewport
@@ -668,7 +1066,10 @@ class MainWindow(QMainWindow):
     def _capture_image(self):
         """현재 화면을 오버레이·측정선 포함해 저장 (Capture Image Only)"""
         current = self._tab_widget.currentWidget()
-        if current in (self._viewport, self._multi_viewport):
+        if current is self._stack2d and self._stack2d.currentWidget() is self._tile_view:
+            pixmap = self._tile_view.grab()
+            name = "tile"
+        elif current in (self._stack2d, self._multi_viewport):
             vp = self._target_viewport()
             if vp.series is None:
                 QMessageBox.information(self, "Info", "캡처할 영상이 없습니다.")
@@ -693,6 +1094,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._series_tree.shutdown()
+        self._series_panel.shutdown()
         super().closeEvent(event)
 
     def _sync_volume_tabs(self):
