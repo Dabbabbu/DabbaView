@@ -1,4 +1,4 @@
-# RadiantView - Python DICOM Viewer
+# DabbaView - Python DICOM Viewer
 
 RadiAnt, GE AW, INFINITT PACS 워크스테이션의 작업 방식을 참고한 Python/PyQt5 기반 DICOM 뷰어입니다.
 macOS(.app)와 Windows(.exe)로 빌드됩니다.
@@ -50,7 +50,7 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 - **판독문 폴더 감시** (Settings → Reading): 새 파일을 파일명·폴더명의 PatientID + 검사일(YYYYMMDD)로 자동 연결, DICOM SR은 StudyInstanceUID로 연결. 예: `1234567_20260917_report.txt`
 - Series 탭: 검사의 시리즈 목록과 시퀀스 파라미터 요약
 
-> 판독문과 가져온 파일 경로에는 환자 정보가 들어 있습니다. 앱 데이터 폴더(macOS: `~/Library/Application Support/RadiantView`)를 공유하거나 저장소에 올리지 마세요.
+> 판독문과 가져온 파일 경로에는 환자 정보가 들어 있습니다. 앱 데이터 폴더(macOS: `~/Library/Application Support/DabbaView`)를 공유하거나 저장소에 올리지 마세요.
 
 ### 내보내기 / 네트워크
 - 이미지 내보내기, **Capture**(오버레이·측정선 포함), **동영상**(MP4/AVI/GIF)
@@ -107,15 +107,15 @@ macOS에서는 표의 `Ctrl`이 **⌘ (Command)** 키입니다.
 - **DICOM Nodes**: 이 컴퓨터의 AE Title, 전송/인쇄 대상 (AE Title, Host, Port)
 - **Reading**: 판독문 폴더(감시), 기본 Creator
 
-설정은 QSettings로 저장됩니다 (macOS: `~/Library/Preferences/com.radiantview.RadiantView.plist`).
+설정은 QSettings로 저장됩니다 (macOS: `~/Library/Preferences/com.dabbaview.DabbaView.plist`).
 
 ## 설치 및 실행
 
 ### 소스에서 실행 (macOS / Windows)
 
 ```bash
-git clone https://github.com/Dabbabbu/RadiantView.git
-cd RadiantView
+git clone https://github.com/Dabbabbu/DabbaView.git
+cd DabbaView
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -129,26 +129,26 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 | 플랫폼 | 명령 | 결과 |
 |---|---|---|
-| macOS | `./build_app.sh` (py2app) | `dist/RadiantView.app` |
-| macOS 대안 | `./build_pyinstaller.sh` | `dist/RadiantView.app` |
-| Windows | `build_windows.bat` (PyInstaller) | `dist\RadiantView\RadiantView.exe` |
+| macOS | `./build_app.sh` (py2app) | `dist/DabbaView.app` |
+| macOS 대안 | `./build_pyinstaller.sh` | `dist/DabbaView.app` |
+| Windows | `build_windows.bat` (PyInstaller) | `dist\DabbaView\DabbaView.exe` |
 
 빌드된 앱은 서명되지 않았습니다. 처음 열 때 macOS는 우클릭 → 열기, Windows는 SmartScreen에서 "추가 정보 → 실행"을 선택하세요.
 
 ### 미리 빌드된 앱 받기
 push할 때마다 GitHub Actions가 macOS와 Windows용으로 빌드하고, 앱이 실행되는지까지 확인합니다.
-[Actions](https://github.com/Dabbabbu/RadiantView/actions) → 최근 빌드 → **Artifacts**에서 zip을 받으세요 (GitHub 로그인 필요, 90일 보관).
+[Actions](https://github.com/Dabbabbu/DabbaView/actions) → 최근 빌드 → **Artifacts**에서 zip을 받으세요 (GitHub 로그인 필요, 90일 보관).
 
 ## 프로젝트 구조
 
 ```
-RadiantView/
+DabbaView/
 ├── run.py                   # 실행 스크립트
 ├── create_icon.py           # 아이콘(.icns/.ico) + 로고 생성
 ├── setup_app.py             # py2app 설정
 ├── build_app.sh / build_pyinstaller.sh / build_windows.bat
 ├── .github/workflows/build.yml   # macOS + Windows 자동 빌드
-└── radiantview/
+└── dabbaview/
     ├── main_window.py       # 메인 윈도우, 툴바, 메뉴
     ├── dicom_loader.py      # 병렬 로딩, 시리즈 분류/정렬, lazy 픽셀 로딩
     ├── dicom_info.py        # 태그 해석, 시퀀스 요약, GE 오버레이 문구, SUV
@@ -183,3 +183,11 @@ RadiantView/
 - [ ] Enhanced 멀티프레임 DICOM의 프레임별 공간 정보 (Crosslink/MPR)
 - [ ] 동영상 내보내기에 회전·반전·측정선 반영
 - [ ] 코드 서명된 macOS/Windows 배포판
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2026 Park Seongho ([Dabbabbu](https://github.com/Dabbabbu))
+
+이 프로젝트는 GPL-3.0 라이선스를 따릅니다. 사용하는 주요 라이브러리 중 PyQt5는 GPL-3.0이며, pydicom·pynetdicom(MIT), NumPy·SciPy(BSD), OpenCV(Apache-2.0), pypdfium2(Apache-2.0/BSD) 등은 GPL-3.0과 함께 배포할 수 있는 라이선스입니다.

@@ -1,7 +1,7 @@
 #!/bin/bash
-# RadiantView macOS .app 빌드 스크립트
+# DabbaView macOS .app 빌드 스크립트
 
-echo "=== RadiantView macOS App Builder ==="
+echo "=== DabbaView macOS App Builder ==="
 echo ""
 
 # 가상환경 확인/생성
@@ -28,22 +28,22 @@ rm -rf build dist
 echo "🔨 앱 빌드 중... (시간이 좀 걸립니다)"
 python setup_app.py py2app
 
-if [ -d "dist/RadiantView.app" ]; then
+if [ -d "dist/DabbaView.app" ]; then
     echo ""
     echo "✅ 빌드 성공!"
-    echo "📍 위치: dist/RadiantView.app"
+    echo "📍 위치: dist/DabbaView.app"
     echo ""
-    echo "실행: open dist/RadiantView.app"
+    echo "실행: open dist/DabbaView.app"
     echo ""
     echo "Applications 폴더에 복사하려면:"
-    echo "  cp -r dist/RadiantView.app /Applications/"
+    echo "  cp -r dist/DabbaView.app /Applications/"
     echo ""
 
     # 앱 바로 열기
     read -p "지금 앱을 실행할까요? (y/n) " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        open dist/RadiantView.app
+        open dist/DabbaView.app
     fi
 else
     echo ""
@@ -51,5 +51,5 @@ else
     echo ""
     echo "대안: PyInstaller로 시도"
     echo "  pip install pyinstaller"
-    echo "  pyinstaller --windowed --name RadiantView --icon resources/RadiantView.icns run.py"
+    echo "  pyinstaller --windowed --name DabbaView --icon resources/DabbaView.icns run.py"
 fi

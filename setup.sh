@@ -1,7 +1,7 @@
 #!/bin/bash
-# RadiantView 설치 및 실행 스크립트 (macOS)
+# DabbaView 설치 및 실행 스크립트 (macOS)
 
-echo "=== RadiantView Setup ==="
+echo "=== DabbaView Setup ==="
 
 # Python 버전 확인
 python3 --version || { echo "Python3가 필요합니다. brew install python3"; exit 1; }

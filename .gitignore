@@ -13,9 +13,9 @@ dist/
 *.egg-info/
 
 # create_icon.py로 생성되는 파일
-resources/RadiantView.iconset/
+resources/DabbaView.iconset/
 resources/icon_1024.png
-radiantview/resources/logo.png
+dabbaview/resources/logo.png
 
 # OS / 로컬 도구 설정
 .DS_Store

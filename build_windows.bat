@@ -1,6 +1,6 @@
 @echo off
-REM RadiantView Windows build script (PyInstaller)
-REM Output: dist\RadiantView\RadiantView.exe
+REM DabbaView Windows build script (PyInstaller)
+REM Output: dist\DabbaView\DabbaView.exe
 
 setlocal
 cd /d "%~dp0"
@@ -8,7 +8,7 @@ cd /d "%~dp0"
 REM Scripts print emoji/Korean text; avoid UnicodeEncodeError on non-UTF-8 consoles
 set PYTHONUTF8=1
 
-echo === RadiantView Windows Build ===
+echo === DabbaView Windows Build ===
 
 if not exist venv (
     echo Creating virtual environment...
@@ -27,15 +27,15 @@ python create_icon.py || goto :error
 
 echo Building...
 REM --add-data: start-screen logo (Windows uses ';' as the src;dest separator)
-pyinstaller --noconfirm --windowed --name RadiantView ^
-    --icon resources\radiantview.ico ^
-    --add-data "radiantview\resources;radiantview\resources" ^
+pyinstaller --noconfirm --windowed --name DabbaView ^
+    --icon resources\dabbaview.ico ^
+    --add-data "dabbaview\resources;dabbaview\resources" ^
     run.py || goto :error
 
-if not exist dist\RadiantView\RadiantView.exe goto :error
+if not exist dist\DabbaView\DabbaView.exe goto :error
 
 echo.
-echo Build succeeded: dist\RadiantView\RadiantView.exe
+echo Build succeeded: dist\DabbaView\DabbaView.exe
 exit /b 0
 
 :error

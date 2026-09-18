@@ -36,7 +36,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          dist/RadiantView.app/Contents/MacOS/RadiantView > smoke.log 2>&1 &
+          dist/DabbaView.app/Contents/MacOS/DabbaView > smoke.log 2>&1 &
           pid=$!
           sleep 10
           if ! kill -0 "$pid" 2>/dev/null; then
@@ -46,12 +46,12 @@ jobs:
 
       - name: Package
         # ditto keeps the bundle's symlinks and permissions intact
-        run: ditto -c -k --keepParent dist/RadiantView.app RadiantView-macOS.zip
+        run: ditto -c -k --keepParent dist/DabbaView.app DabbaView-macOS.zip
 
       - uses: actions/upload-artifact@v7
         with:
-          name: RadiantView-macOS
-          path: RadiantView-macOS.zip
+          name: DabbaView-macOS
+          path: DabbaView-macOS.zip
 
   windows:
     name: Windows (.exe, PyInstaller)
@@ -72,16 +72,16 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          $p = Start-Process -FilePath "dist\RadiantView\RadiantView.exe" -PassThru
+          $p = Start-Process -FilePath "dist\DabbaView\DabbaView.exe" -PassThru
           Start-Sleep -Seconds 10
           if ($p.HasExited) { Write-Error "App exited during startup (code $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id
 
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path dist\RadiantView -DestinationPath RadiantView-Windows.zip
+        run: Compress-Archive -Path dist\DabbaView -DestinationPath DabbaView-Windows.zip
 
       - uses: actions/upload-artifact@v7
         with:
-          name: RadiantView-Windows
-          path: RadiantView-Windows.zip
+          name: DabbaView-Windows
+          path: DabbaView-Windows.zip
