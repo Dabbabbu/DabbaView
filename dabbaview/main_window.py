@@ -23,7 +23,7 @@ from .viewport import DicomViewport
 from .tag_viewer import TagViewer
 from .multi_viewport import MultiViewport
 from .mpr_viewer import MPRWidget
-from .volume_renderer import VolumeRenderWidget, VTK_AVAILABLE
+from .volume_renderer import VolumeRenderWidget, vtk_usable
 from .anonymizer import AnonymizeDialog
 from .video_exporter import VideoExportDialog
 from .series_tree import SeriesTreeWidget
@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
         # 탭 4: 3D Volume
         self._volume_widget = VolumeRenderWidget()
         self._tab_widget.addTab(self._volume_widget,
-                                "3D Volume" if VTK_AVAILABLE else "3D (VTK 필요)")
+                                "3D Volume" if vtk_usable() else "3D (VTK 필요)")
 
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
         # 오른쪽 영역: [◀ 토글 띠 | 탭] - 패널을 접어도 띠는 창 왼쪽 끝에 남음

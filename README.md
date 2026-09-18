@@ -21,8 +21,8 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 - **Multi View**: 1x1 ~ 4x4 (최대 16칸), 트리/패널이나 Finder에서 칸으로 드래그 앤 드롭
 - **레이아웃 드롭다운**: `2D` / `1X1`~`3X3` / `Default`(Hanging Protocol) / `ALL`(검사의 모든 시리즈)
 - **Hanging Protocol**: 폴더를 열면 모달리티·부위에 맞춰 자동 배치 (예: Brain MRI → 2x2 T1/T2/FLAIR/DWI, Spine MRI → 1x2 Sag T1/T2). 편집하거나 현재 배치를 프로토콜로 저장 가능
-- **MPR**: Axial/Sagittal/Coronal 3평면 (mm 기준 실제 비율)
-- **3D Volume Rendering**: VTK 설치 시 (선택사항)
+- **MPR**: Axial/Sagittal/Coronal 3평면 (mm 기준 실제 비율) + Oblique: 크로스헤어 끝 핸들 드래그로 각도 회전, Shift+드래그 1° 단위 미세 조절, 각도 오버레이·리셋
+- **3D Volume Rendering**: VTK (macOS 앱 번들에 포함)
 
 ### 비교 / 동기화
 - **Crosslink (Sync Cursor)**: 한 뷰에서 찍은 위치(mm)를 같은 좌표계(Frame of Reference)의 다른 뷰·MPR에 십자선으로 표시하고 가장 가까운 슬라이스로 이동
@@ -123,7 +123,7 @@ python create_icon.py           # 아이콘과 시작 화면 로고 생성
 python run.py                   # 또는: python run.py /path/to/dicom/folder
 ```
 
-3D Volume Rendering을 쓰려면 `pip install vtk` (나머지 기능은 VTK 없이 동작).
+VTK는 3D Volume Rendering에만 쓰이며, 없으면 3D 탭만 비활성화되고 나머지 기능은 동작합니다.
 
 ### 앱 빌드
 
