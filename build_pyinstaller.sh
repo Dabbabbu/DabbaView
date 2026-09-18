@@ -1,7 +1,7 @@
 #!/bin/bash
 # PyInstaller로 빌드 (py2app이 안 될 경우 대안)
 
-echo "=== RadiantView PyInstaller Build ==="
+echo "=== DabbaView PyInstaller Build ==="
 
 if [ ! -d "venv" ]; then
     python3 -m venv venv
@@ -19,20 +19,20 @@ python create_icon.py
 echo "🔨 빌드 중..."
 pyinstaller \
     --windowed \
-    --name "RadiantView" \
-    --icon "resources/RadiantView.icns" \
-    --add-data "radiantview:radiantview" \
+    --name "DabbaView" \
+    --icon "resources/DabbaView.icns" \
+    --add-data "dabbaview:dabbaview" \
     --hidden-import "pydicom.encoders.gdcm" \
     --hidden-import "pydicom.encoders.pylibjpeg" \
     --hidden-import "pydicom.encoders.native" \
     --noconfirm \
     run.py
 
-if [ -d "dist/RadiantView.app" ]; then
+if [ -d "dist/DabbaView.app" ]; then
     echo ""
-    echo "✅ 빌드 성공! dist/RadiantView.app"
+    echo "✅ 빌드 성공! dist/DabbaView.app"
     echo ""
-    echo "Applications에 복사: cp -r dist/RadiantView.app /Applications/"
+    echo "Applications에 복사: cp -r dist/DabbaView.app /Applications/"
     open dist/
 else
     echo "❌ 빌드 실패"
