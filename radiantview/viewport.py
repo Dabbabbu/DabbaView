@@ -67,6 +67,7 @@ class DicomViewport(QWidget):
     zoom_changed = pyqtSignal(float)  # zoom factor
     measurement_completed = pyqtSignal(float)  # distance in mm
     reference_point_selected = pyqtSignal(object)  # 환자 좌표 (mm, ndarray)
+    cursor3d_placed = pyqtSignal(object)  # 3D Cursor 위치 (mm) - Crosslink와 무관하게 연동
     cursor_info = pyqtSignal(str)  # 마우스 위치의 좌표/픽셀 값 (상태바용)
     status_message = pyqtSignal(str)  # 측정 결과 등
     scrolled = pyqtSignal(int)  # 사용자가 슬라이스를 넘김 (동기화 스크롤용)
@@ -128,7 +129,7 @@ class DicomViewport(QWidget):
         self._store = AnnotationStore(self)
         self._store.changed.connect(self.update)
         self._draft = None  # 그리는 중인 주석
-        self._cursor3d = None  # 3D 커서 (뷰포트당 하나)
+        self._cursor3d = None  # 3D 커서 (뷰포트당 하나, 다른 뷰에서 받은 것 포함)
 
         # Reference Line 원천: 호출하면 [(geometry, index, label)] 반환
         self._reference_sources = None
@@ -585,6 +586,8 @@ class DicomViewport(QWidget):
         elif key in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_last_annotation()
         elif key == Qt.Key_Escape:
+            if self._draft is None:
+                self.clear_cursor3d()
             self._draft = None
             self.update()
         elif key == Qt.Key_Space:
@@ -716,18 +719,69 @@ class DicomViewport(QWidget):
         self._store.add(self._image_key(), ann)
 
     def _place_cursor3d(self, img_pos):
-        """3D 커서는 뷰포트당 하나: 새로 찍으면 이전 위치를 대체"""
+        """3D 커서는 뷰포트당 하나: 새로 찍으면 이전 위치를 대체
+
+        공간 정보가 있으면 환자 좌표(mm)로 저장해 같은 좌표계의 다른 뷰에도 표시.
+        """
         info = self.pixel_info(img_pos)
         if info is None:
             return
+        patient = info["patient"]
         self._cursor3d = {"type": "cursor3d", "key": self._image_key(),
-                          "pts": [img_pos], "patient": info["patient"],
-                          "value": self.format_value(info)}
-        if info["patient"] is not None:
-            text = dicom_info.patient_position_text(info["patient"])
-            self.status_message.emit(f"3D Cursor: {text} mm")
-            # Sync Cursor가 켜져 있으면 다른 뷰에도 전파 (컨트롤러가 판단)
-            self.reference_point_selected.emit(np.asarray(info["patient"]))
+                          "pts": [img_pos], "value": self.format_value(info),
+                          "patient": None if patient is None else np.asarray(patient)}
+        if patient is not None:
+            text = dicom_info.patient_position_text(patient)
+            self.status_message.emit(f"3D Cursor: {text} mm   {self._cursor3d['value']}")
+            self.cursor3d_placed.emit(np.asarray(patient))
+        self.update()
+
+    def show_cursor3d(self, point):
+        """다른 뷰에서 찍은 3D Cursor를 표시 (가장 가까운 슬라이스로 이동)"""
+        geom = self._series.geometry if self._series else None
+        if geom is None:
+            self.clear_cursor3d()
+            return
+        index, _ = geom.nearest_slice(point)
+        self._go_to_slice(index)
+        self._cursor3d = {"type": "cursor3d", "key": None, "pts": [],
+                          "patient": np.asarray(point, dtype=float), "value": ""}
+        self.update()
+
+    def clear_cursor3d(self):
+        if self._cursor3d is not None:
+            self._cursor3d = None
+            self.update()
+
+    def cursor3d_pixel(self):
+        """현재 슬라이스에 투영한 3D Cursor (col, row, 평면까지 거리 mm). 없으면 None"""
+        c = self._cursor3d
+        geom = self._series.geometry if self._series else None
+        if c is None or c["patient"] is None or geom is None:
+            return None
+        return geom.patient_to_pixel(self._current_slice, c["patient"])
+
+    def _cursor3d_for_drawing(self):
+        """이번 화면에 그릴 3D Cursor 주석 dict (없으면 None)"""
+        c = self._cursor3d
+        if c is None:
+            return None
+        projected = self.cursor3d_pixel()
+        if projected is None:
+            # 공간 정보가 없는 영상: 찍은 영상에서만 표시
+            return c if c["key"] == self._image_key() else None
+        col, row, dist = projected
+        arr = self._current_array()
+        h, w = arr.shape[:2]
+        if not (-0.5 <= col <= w - 0.5 and -0.5 <= row <= h - 0.5):
+            return None
+        spacing = self._series.geometry.slice_spacing()
+        tolerance = (spacing / 2 if spacing else 1.0) + 0.5
+        img_pos = (col + 0.5, row + 0.5)
+        # 이 시리즈의 해당 위치 픽셀 값 (다른 시리즈면 값이 다름)
+        return {"type": "cursor3d", "pts": [img_pos], "patient": c["patient"],
+                "value": self.format_value(self.pixel_info(img_pos)),
+                "delta": None if abs(dist) <= tolerance else dist}
 
     # ─── 측정 완료 처리 ───
 
@@ -1007,6 +1061,8 @@ class DicomViewport(QWidget):
                 lines.append(dicom_info.patient_position_text(ann["patient"]))
             if ann.get("value"):
                 lines.append(ann["value"])
+            if ann.get("delta") is not None:
+                lines.append(f"Δ {ann['delta']:+.1f} mm")
             return lines
         if kind == "arrow":
             return [ann["text"]] if ann["text"] else []
@@ -1067,8 +1123,9 @@ class DicomViewport(QWidget):
     def _draw_annotations(self, painter):
         occupied = []
         items = list(self.annotations_here())
-        if self._cursor3d and self._cursor3d["key"] == self._image_key():
-            items.append(self._cursor3d)
+        cursor3d = self._cursor3d_for_drawing()
+        if cursor3d is not None:
+            items.append(cursor3d)
         for ann in items:
             kind = ann["type"]
             pts = [self._image_to_screen_f(p) for p in ann["pts"]]
@@ -1139,7 +1196,9 @@ class DicomViewport(QWidget):
                 painter.drawText(p, ann["text"])
             elif kind == "cursor3d":
                 p = pts[0]
-                painter.setPen(QPen(COLOR_CURSOR3D, 2))
+                off_plane = ann.get("delta") is not None
+                painter.setPen(QPen(COLOR_CURSOR3D, 2, Qt.DashLine if off_plane
+                                    else Qt.SolidLine))
                 painter.drawLine(QPointF(p.x() - 10, p.y()), QPointF(p.x() - 3, p.y()))
                 painter.drawLine(QPointF(p.x() + 3, p.y()), QPointF(p.x() + 10, p.y()))
                 painter.drawLine(QPointF(p.x(), p.y() - 10), QPointF(p.x(), p.y() - 3))

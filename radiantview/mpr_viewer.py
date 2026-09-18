@@ -339,6 +339,13 @@ class MPRWidget(QWidget):
     def clear_reference_point(self):
         pass
 
+    def show_cursor3d(self, point):
+        """다른 뷰의 3D Cursor 위치로 세 평면 이동"""
+        self.set_reference_point(point)
+
+    def clear_cursor3d(self):
+        pass
+
     def set_series(self, series):
         """DicomSeries로부터 3D 볼륨 구성"""
         if not series or series.num_slices < 2:

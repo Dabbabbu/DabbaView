@@ -1,7 +1,8 @@
 """
 INFINITT 스타일 시리즈 패널
 
-세로 스크롤 카드 목록. 카드마다
+세로 스크롤 카드 목록. 클릭 = 선택만(노란 테두리), 더블클릭/Enter/드래그 앤 드롭 = 뷰포트에 표시.
+카드마다
   - 썸네일 (중간 슬라이스, 80x80) + 좌상단 '시리즈번호/총 슬라이스' (예: 4/31)
   - 시퀀스 설명 (SeriesDescription) + 방향·시퀀스 요약
   - 선택된 시리즈는 노란 테두리
@@ -143,8 +144,8 @@ class SeriesCardDelegate(QStyledItemDelegate):
 class SeriesPanel(QListWidget):
     """세로 스크롤 시리즈 카드 목록"""
 
-    series_selected = pyqtSignal(str)
-    series_activated = pyqtSignal(str)  # 더블클릭
+    series_selected = pyqtSignal(str)   # 클릭 (선택만)
+    series_activated = pyqtSignal(str)  # 더블클릭 / Enter → 뷰포트에 표시
     thumbnail_ready = pyqtSignal(str, QImage)
 
     def __init__(self, parent=None):
@@ -234,6 +235,14 @@ class SeriesPanel(QListWidget):
     def _on_double_clicked(self, item):
         if item.data(ROLE_KIND) == "series":
             self.series_activated.emit(item.data(ROLE_UID))
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            item = self.currentItem()
+            if item is not None and item.data(ROLE_KIND) == "series":
+                self.series_activated.emit(item.data(ROLE_UID))
+                return
+        super().keyPressEvent(event)
 
     # 드래그 (Multi View 칸으로)
     def mimeTypes(self):

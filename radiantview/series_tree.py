@@ -183,7 +183,8 @@ def group_series(series_list):
 class SeriesTreeWidget(QTreeWidget):
     """Patient → Study → Series 계층 트리"""
 
-    series_selected = pyqtSignal(str)  # SeriesInstanceUID
+    series_selected = pyqtSignal(str)   # 클릭 (선택만)
+    series_activated = pyqtSignal(str)  # 더블클릭 / Enter → 뷰포트에 표시
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -196,6 +197,7 @@ class SeriesTreeWidget(QTreeWidget):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.currentItemChanged.connect(self._on_current_item_changed)
+        self.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._items_by_uid = {}
         self._modality_by_uid = {}
         self._thumbnails = {}  # uid → QImage (트리를 다시 그려도 재사용)
@@ -363,6 +365,20 @@ class SeriesTreeWidget(QTreeWidget):
         if self._thumb_worker is not None:
             self._thumb_worker.cancel()
             self._thumb_worker.wait(3000)
+
+    def _on_item_double_clicked(self, item, column):
+        uid = item.data(0, ROLE_SERIES_UID)
+        if uid:
+            self.series_activated.emit(uid)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            item = self.currentItem()
+            uid = item.data(0, ROLE_SERIES_UID) if item is not None else None
+            if uid:
+                self.series_activated.emit(uid)
+                return
+        super().keyPressEvent(event)
 
     def _on_current_item_changed(self, current, previous):
         if current is None:

@@ -27,6 +27,9 @@ class CursorSyncController(QObject):
         self._views.append(view)
         view.reference_point_selected.connect(
             lambda point, src=view: self._broadcast(src, point))
+        if hasattr(view, "cursor3d_placed"):
+            view.cursor3d_placed.connect(
+                lambda point, src=view: self._broadcast_cursor3d(src, point))
         view.set_sync_cursor_enabled(self._enabled)
 
     @property
@@ -65,4 +68,18 @@ class CursorSyncController(QObject):
                     skipped += 1
         finally:
             self._broadcasting = False
+        self.synced.emit(linked, skipped)
+
+    def _broadcast_cursor3d(self, source, point):
+        """3D Cursor는 Crosslink 켜짐 여부와 관계없이 같은 좌표계 뷰에 표시"""
+        linked = skipped = 0
+        for view in self._views:
+            if view is source or view.series is None:
+                continue
+            if self.is_linked(source, view):
+                view.show_cursor3d(point)
+                linked += 1
+            else:
+                view.clear_cursor3d()
+                skipped += 1
         self.synced.emit(linked, skipped)

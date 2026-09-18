@@ -151,10 +151,13 @@ class MainWindow(QMainWindow):
 
         self._series_stack = QStackedWidget()
         self._series_panel = SeriesPanel()
-        self._series_panel.series_selected.connect(self._on_series_selected)
+        # 클릭 = 선택만, 더블클릭/Enter/드래그 앤 드롭 = 뷰포트에 표시
+        self._series_panel.series_selected.connect(self._on_series_highlighted)
+        self._series_panel.series_activated.connect(self._on_series_selected)
         self._series_tree = SeriesTreeWidget()
         self._series_tree.use_external_thumbnails(True)
-        self._series_tree.series_selected.connect(self._on_series_selected)
+        self._series_tree.series_selected.connect(self._on_series_highlighted)
+        self._series_tree.series_activated.connect(self._on_series_selected)
         self._series_panel.thumbnail_ready.connect(self._series_tree.set_thumbnail)
         self._series_stack.addWidget(self._series_panel)
         self._series_stack.addWidget(self._series_tree)
@@ -531,6 +534,10 @@ class MainWindow(QMainWindow):
 
         # Multi View 드래그 앤 드롭
         self._multi_viewport.series_dropped.connect(self._on_series_dropped)
+        # 격자 위 버튼으로 바꾼 레이아웃도 드롭다운에 반영
+        self._multi_viewport.layout_changed.connect(
+            lambda name: self._layout_combo.findText(name.upper()) >= 0
+            and self._layout_combo.setCurrentText(name.upper()))
         self._multi_viewport.paths_dropped.connect(self._on_paths_dropped)
 
         self._viewport.slice_changed.connect(self._on_slice_changed)
@@ -721,12 +728,31 @@ class MainWindow(QMainWindow):
                 "Sync Cursor: 같은 좌표계(Frame of Reference)의 시리즈가 없습니다", 3000)
 
     def _update_series_list(self, select_uid=None):
-        """썸네일 패널 + 트리 갱신 (첫 시리즈 또는 select_uid 선택)"""
+        """썸네일 패널 + 트리 갱신 후 첫 시리즈(또는 select_uid)를 표시"""
         series_list = self._loader.get_series_list()
         self._series_tree.populate(series_list, select_uid=select_uid, emit=False)
-        self._series_panel.populate(series_list, select_uid=select_uid)  # → 선택 시그널
+        self._series_panel.populate(series_list, select_uid=select_uid)
+        uid = select_uid or self._series_panel.current_uid()
+        series = self._loader.get_series_by_uid(uid) if uid else None
+        if series is not None:
+            self._select_series(series)
+
+    def _on_series_highlighted(self, uid):
+        """패널/트리에서 클릭: 선택 표시만 (뷰포트 영상은 그대로)
+
+        드래그 앤 드롭을 시작하려고 누른 클릭이 활성 칸의 영상을 바꾸지 않도록.
+        """
+        series = self._loader.get_series_by_uid(uid)
+        if series is None:
+            return
+        self._series_panel.select_uid(uid)
+        self._series_tree.select_uid(uid)
+        self._statusbar.showMessage(
+            f"선택: {series.description}  —  더블클릭 또는 Enter로 표시, "
+            f"Multi View 칸으로 드래그해서 넣기", 5000)
 
     def _on_series_selected(self, uid):
+        """더블클릭/Enter: 2D 뷰와 Multi View 활성 칸에 표시"""
         series = self._loader.get_series_by_uid(uid)
         if series:
             self._select_series(series)

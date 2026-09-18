@@ -11,6 +11,7 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 - **파일·폴더 열기**: 메뉴, 드래그 앤 드롭, Recent Files(최근 10개). 앱 시작 시 자동으로 불러오지 않음
 - **빠른 로딩**: 메타데이터만 병렬로 먼저 읽고 픽셀은 필요할 때 읽음 (확장자 사전 필터링)
 - **시리즈 패널 (INFINITT 스타일)**: 중간 슬라이스 썸네일, `시리즈번호/총 장수`, 시퀀스 이름, 선택 시 노란 테두리, 검사별 묶음
+  - **클릭 = 선택만**, **더블클릭 / Enter = 활성 칸에 표시**, **드래그 앤 드롭 = 원하는 칸에 표시** (트리도 동일)
 - **환자/검사 트리**: Patient → Study → Series (☰ 버튼으로 전환)
 - **시퀀스 툴팁**: TR/TE/TI, Flip Angle, ETL, NEX, Bandwidth, 두께/간격, Matrix, FoV, 시퀀스 종류 (SE/FSE/GRE/EPI/IR, FatSat)
 
@@ -30,7 +31,7 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 
 ### 측정 / 주석
 - 거리, 각도, **Cobb 각**, **Freehand ROI**, **타원 ROI**(면적·Mean·SD·Min·Max), Freehand 면적, 2D 화살표(라벨), **텍스트 메모**(크기·색상)
-- **3D Cursor**: 클릭 위치의 환자 좌표 (R/L, A/P, S/I)
+- **3D Cursor**: 클릭 위치의 환자 좌표 (R/L, A/P, S/I). Crosslink 여부와 관계없이 같은 좌표계의 다른 칸·MPR에도 같은 위치를 표시 (각 시리즈의 픽셀 값, 슬라이스에서 벗어나면 Δ mm)
 - **Pixel Probe**: 상태바에 좌표(x, y, z mm)와 픽셀 값 (CT: HU, MR: SI, PET: SUVbw)
 - 측정·주석은 영상(SOPInstanceUID)별로 저장되며 **JSON 저장/불러오기** 가능
 - **Key Image**: 표시 → 모아보기(Tile) → PNG + 목록(JSON) 내보내기
@@ -81,7 +82,7 @@ macOS에서는 표의 `Ctrl`이 **⌘ (Command)** 키입니다.
 | K | Key Image 표시/해제 | Shift+K | Key Image 모아보기 |
 | Shift+T | Stack ↔ Tile | O | 오버레이 표시/숨김 |
 | Space | 시네 재생/정지 | Delete | 현재 영상의 마지막 주석 삭제 |
-| Esc | 그리던 측정 취소 | Ctrl+T | DICOM 태그 |
+| Esc | 그리던 측정 취소 / 3D Cursor 지우기 | Ctrl+T | DICOM 태그 |
 | Ctrl+I | Image 정보 패널 | Ctrl+Shift+S | Capture |
 | Ctrl+O | 파일 열기 | Ctrl+Shift+O | 폴더 열기 |
 | Ctrl+S | 이미지 내보내기 | Ctrl+Shift+E | 동영상 내보내기 |
