@@ -54,9 +54,13 @@ def migrate_legacy_settings(settings):
 
     새 설정이 비어 있을 때만 복사하고, 이전 설정은 지우지 않는다.
     """
+    # macOS는 시스템 공통 설정(NSGlobalDomain)까지 allKeys()에 포함하므로
+    # 앱 자체 설정만 보도록 fallback을 끔
+    settings.setFallbacksEnabled(False)
     if settings.value("migrated_from_legacy", False, type=bool):
         return 0
     old = QSettings(*LEGACY_SETTINGS)
+    old.setFallbacksEnabled(False)
     copied = 0
     if not settings.allKeys():
         for key in old.allKeys():
