@@ -13,6 +13,7 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 - **시리즈 패널 (INFINITT 스타일)**: 중간 슬라이스 썸네일, `시리즈번호/총 장수`, 시퀀스 이름, 선택 시 노란 테두리, 검사별 묶음
   - **클릭(버튼을 뗄 때) / Enter = 활성 칸에 표시**, 누른 채 **끌면 로드하지 않고 드래그 앤 드롭** → 놓은 칸에 표시 (트리도 동일)
 - **환자/검사 트리**: Patient → Study → Series (☰ 버튼으로 전환)
+- **패널 접기/펼치기**: 패널과 영상 사이의 ◀/▶ 버튼 또는 **F2** — 슬라이드로 접히면 영상이 전체 너비 사용 (상태·너비는 다음 실행 때도 유지)
 - **시퀀스 툴팁**: TR/TE/TI, Flip Angle, ETL, NEX, Bandwidth, 두께/간격, Matrix, FoV, 시퀀스 종류 (SE/FSE/GRE/EPI/IR, FatSat)
 
 ### 화면 구성
@@ -86,7 +87,7 @@ macOS에서는 표의 `Ctrl`이 **⌘ (Command)** 키입니다.
 | Ctrl+I | Image 정보 패널 | Ctrl+Shift+S | Capture |
 | Ctrl+O | 파일 열기 | Ctrl+Shift+O | 폴더 열기 |
 | Ctrl+S | 이미지 내보내기 | Ctrl+Shift+E | 동영상 내보내기 |
-| ⌘, (macOS) | Settings (Windows는 File → Settings) | | |
+| F2 | 시리즈 패널 접기/펼치기 | ⌘, (macOS) | Settings (Windows는 File → Settings) |
 
 ## 설정 (File → Settings, macOS ⌘,)
 - **Mouse**: 버튼·휠·더블클릭 동작 매핑

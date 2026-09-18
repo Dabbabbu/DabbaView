@@ -9,9 +9,10 @@ from PyQt5.QtWidgets import (
     QAction, QActionGroup, QFileDialog, QStatusBar,
     QSlider, QLabel, QProgressDialog, QMessageBox,
     QSpinBox, QApplication, QMenuBar, QTabWidget, QMenu, QStackedWidget,
-    QComboBox, QPushButton, QInputDialog
+    QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QSettings
+from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings,
+                          QVariantAnimation, QEasingCurve, QTimer)
 from PyQt5.QtGui import QIcon, QKeySequence, QFont
 
 from .dicom_loader import DicomLoader
@@ -111,6 +112,7 @@ class MainWindow(QMainWindow):
         self._init_statusbar()
         self._configure_viewports()
         self._connect_signals()
+        self._restore_series_panel()
 
         # 다크 테마
         self._apply_dark_theme()
@@ -124,9 +126,11 @@ class MainWindow(QMainWindow):
 
         # 스플리터: 왼쪽(시리즈 목록) | 오른쪽(뷰포트)
         splitter = QSplitter(Qt.Horizontal)
+        self._splitter = splitter
 
         # ─── 왼쪽 패널: 시리즈 목록 ───
         left_panel = QWidget()
+        self._left_panel = left_panel
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(4, 4, 4, 4)
 
@@ -205,12 +209,36 @@ class MainWindow(QMainWindow):
                                 "3D Volume" if VTK_AVAILABLE else "3D (VTK 필요)")
 
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
-        splitter.addWidget(self._tab_widget)
+        # 오른쪽 영역: [◀ 토글 띠 | 탭] - 패널을 접어도 띠는 창 왼쪽 끝에 남음
+        right = QWidget()
+        right_layout = QHBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        self._panel_toggle = QToolButton()
+        self._panel_toggle.setObjectName("PanelToggle")
+        self._panel_toggle.setFixedWidth(14)
+        self._panel_toggle.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self._panel_toggle.setToolTip("시리즈 패널 접기/펼치기 (F2)")
+        self._panel_toggle.setStyleSheet(
+            "QToolButton#PanelToggle { background: #232323; color: #9a9a9a; border: none;"
+            " border-right: 1px solid #333; font-size: 9px; padding: 0; }"
+            "QToolButton#PanelToggle:hover { background: #094771; color: white; }")
+        self._panel_toggle.clicked.connect(self.toggle_series_panel)
+        right_layout.addWidget(self._panel_toggle)
+        right_layout.addWidget(self._tab_widget)
+        splitter.addWidget(right)
 
         left_panel.setMinimumWidth(220)
         splitter.setSizes([300, 1100])
         splitter.setStretchFactor(1, 1)
+        splitter.setCollapsible(0, True)
+        splitter.setCollapsible(1, False)
+        splitter.splitterMoved.connect(self._on_splitter_moved)
         main_layout.addWidget(splitter)
+
+        self._panel_width = 300
+        self._panel_visible = True
+        self._panel_anim = None
 
     def _init_menubar(self):
         """메뉴바"""
@@ -275,6 +303,11 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._act_value_lens)
         view_menu.addAction(self._act_image_panel)
         view_menu.addSeparator()
+
+        self._act_toggle_panel = QAction("Toggle Series Panel", self)
+        self._act_toggle_panel.setShortcut(QKeySequence("F2"))
+        self._act_toggle_panel.triggered.connect(self.toggle_series_panel)
+        view_menu.addAction(self._act_toggle_panel)
 
         overlay_action = QAction("Toggle Overlay", self)
         overlay_action.setShortcut(QKeySequence("O"))
@@ -749,6 +782,91 @@ class MainWindow(QMainWindow):
         series = self._loader.get_series_by_uid(uid)
         if series:
             self._select_series(series)
+
+    # ─── 시리즈 패널 접기/펼치기 ───
+
+    PANEL_ANIM_MS = 200
+
+    def _restore_series_panel(self):
+        width = self._settings.value("series_panel_width", 300, type=int)
+        self._panel_width = max(220, min(800, width))
+        visible = self._settings.value("series_panel_visible", True, type=bool)
+        self._splitter.setSizes([self._panel_width, 1100])
+        if not visible:
+            self._set_panel_collapsed_now()
+        self._update_panel_toggle()
+
+    def _set_panel_collapsed_now(self):
+        self._left_panel.setMinimumWidth(0)
+        total = sum(self._splitter.sizes())
+        self._splitter.setSizes([0, total])
+        self._panel_visible = False
+
+    def is_series_panel_visible(self):
+        return self._panel_visible
+
+    def toggle_series_panel(self):
+        self.set_series_panel_visible(not self._panel_visible)
+
+    def set_series_panel_visible(self, visible, animate=True):
+        """시리즈 패널을 슬라이드로 펼치거나 접음 (상태는 QSettings에 저장)"""
+        if self._panel_anim is not None:
+            self._panel_anim.stop()
+            self._panel_anim = None
+        sizes = self._splitter.sizes()
+        total = sum(sizes)
+        current = sizes[0]
+        if not visible and current > 0:
+            self._panel_width = current  # 펼칠 때 원래 너비로
+        target = min(self._panel_width, max(0, total - 300)) if visible else 0
+        self._left_panel.setMinimumWidth(0)  # 애니메이션 중에는 0까지 줄어들 수 있게
+        self._panel_visible = visible
+        self._update_panel_toggle()
+        self._save_panel_state()
+
+        def apply(width):
+            self._splitter.setSizes([int(width), total - int(width)])
+
+        def finished():
+            self._panel_anim = None
+            apply(target)
+            if visible:
+                self._left_panel.setMinimumWidth(220)
+
+        if not animate:
+            finished()
+            return
+        anim = QVariantAnimation(self)
+        anim.setDuration(self.PANEL_ANIM_MS)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.setStartValue(float(current))
+        anim.setEndValue(float(target))
+        anim.valueChanged.connect(apply)
+        anim.finished.connect(finished)
+        self._panel_anim = anim
+        anim.start()
+
+    def _on_splitter_moved(self, pos, index):
+        """경계를 손으로 끌어서 접거나 넓힌 경우도 반영"""
+        width = self._splitter.sizes()[0]
+        if width > 0:
+            self._panel_width = width
+        visible = width > 0
+        if visible != self._panel_visible:
+            self._panel_visible = visible
+            if visible:
+                self._left_panel.setMinimumWidth(220)
+            self._update_panel_toggle()
+        self._save_panel_state()
+
+    def _update_panel_toggle(self):
+        self._panel_toggle.setText("◀" if self._panel_visible else "▶")
+        self._act_toggle_panel.setText(
+            "Hide Series Panel" if self._panel_visible else "Show Series Panel")
+
+    def _save_panel_state(self):
+        self._settings.setValue("series_panel_visible", self._panel_visible)
+        self._settings.setValue("series_panel_width", int(self._panel_width))
 
     def _toggle_series_view(self, tree):
         self._series_stack.setCurrentWidget(self._series_tree if tree else self._series_panel)
