@@ -123,6 +123,9 @@ class DicomViewport(QWidget):
         self._current_tool = self.TOOL_SELECT
         self._mouse = MouseBindings()
         self._drag_action = None     # 현재 드래그의 동작 ('tool', 'window', ...)
+        self._zoom_anchor = None     # 드래그 줌 기준점 (누른 위치)
+        self._wl_roi = None          # ROI 자동 W/L 사각형 (이미지 좌표 두 모서리)
+        self._show_annotations = True
         self._scroll_accum = 0.0
 
         # 주석 (측정 포함): 영상(SOPInstanceUID)별 공유 저장소
@@ -306,6 +309,16 @@ class DicomViewport(QWidget):
         self.set_tool_cursor()
         self.update()
 
+    def set_overlay_visible(self, visible):
+        """환자 정보 오버레이 + 측정/주석 표시 (T / O)"""
+        self._show_overlay = visible
+        self._show_annotations = visible
+        self.update()
+
+    @property
+    def overlay_visible(self):
+        return self._show_overlay
+
     def set_value_lens(self, enabled):
         self._value_lens = enabled
         self.update()
@@ -335,6 +348,8 @@ class DicomViewport(QWidget):
         """눌린 버튼·수정키 → 드래그 동작 (마우스 매핑 설정)"""
         button, mods = event.button(), event.modifiers()
         if button == Qt.LeftButton:
+            if mods & Qt.AltModifier:
+                return self._mouse.get("alt_left_drag")
             if mods & Qt.ControlModifier:
                 return self._mouse.get("ctrl_left_drag")
             return self._mouse.get("left_drag")
@@ -350,8 +365,12 @@ class DicomViewport(QWidget):
         self._last_mouse_pos = event.pos()
         self._scroll_accum = 0.0
         self._drag_action = self._drag_action_for(event)
+        self._zoom_anchor = event.pos()
         if self._drag_action == "tool":
             self._tool_press(event)
+        elif self._drag_action == "roi_window":
+            img_pos = self._screen_to_image(event.pos())
+            self._wl_roi = [img_pos, img_pos] if img_pos else None
         elif self._drag_action == "pan":
             self.setCursor(Qt.ClosedHandCursor)
         self.update()
@@ -441,7 +460,10 @@ class DicomViewport(QWidget):
             self._pan_x += dx
             self._pan_y += dy
         elif action == "zoom":
-            self._zoom_by(1.0 + dy * 0.005)
+            self._zoom_by(1.0 + dy * 0.005, self._zoom_anchor)
+        elif action == "roi_window":
+            if self._wl_roi is not None and img_pos:
+                self._wl_roi[1] = img_pos
         elif action == "scroll":
             # 세로 드래그 8px마다 한 장
             self._scroll_accum += dy / 8.0
@@ -485,7 +507,7 @@ class DicomViewport(QWidget):
             self._pan_x += dx
             self._pan_y += dy
         elif tool == self.TOOL_ZOOM:
-            self._zoom_by(1.0 + dy * 0.005)
+            self._zoom_by(1.0 + dy * 0.005, self._zoom_anchor)
 
     def mouseReleaseEvent(self, event):
         action = self._drag_action
@@ -494,6 +516,8 @@ class DicomViewport(QWidget):
         self._drag_action = None
         self._placing_cursor = False
         self._magnifying = False
+        if action == "roi_window":
+            self._apply_roi_window()
         if action == "tool" and self._draft:
             kind = self._draft["type"]
             if kind in ("roi", "area"):
@@ -565,7 +589,8 @@ class DicomViewport(QWidget):
 
         direction = -1 if delta > 0 else 1  # 위로 = 이전 슬라이스
         if action == "zoom":
-            self._zoom_by(1.1 if delta > 0 else 0.9)
+            # 위로 = 확대, 아래로 = 축소 (커서 아래 지점을 고정)
+            self._zoom_by(1.1 if delta > 0 else 1 / 1.1, event.pos())
         elif action == "scroll":
             self._go_to_slice(self._current_slice + direction, user=True)
         elif action == "fast_scroll":
@@ -573,25 +598,67 @@ class DicomViewport(QWidget):
             self._go_to_slice(self._current_slice + direction * step, user=True)
         self.update()
 
-    def _zoom_by(self, factor):
+    def _zoom_by(self, factor, anchor=None):
+        """줌. anchor(화면 좌표)가 있으면 그 아래의 영상 지점이 그대로 머물도록 팬 보정"""
+        before = self._screen_to_image(anchor) if anchor is not None else None
         self._zoom = max(0.1, min(20.0, self._zoom * factor))
+        if before is not None:
+            after = self._image_to_screen_f(before)
+            self._pan_x += anchor.x() - after.x()
+            self._pan_y += anchor.y() - after.y()
         self.zoom_changed.emit(self._zoom)
 
+    # ─── ROI 자동 W/L (Ctrl+좌클릭 드래그) ───
+
+    def _apply_roi_window(self):
+        roi, self._wl_roi = self._wl_roi, None
+        arr = self._current_array()
+        if roi is None or arr is None or arr.ndim != 2:
+            self.update()
+            return
+        h, w = arr.shape
+        (x0, y0), (x1, y1) = roi
+        c0, c1 = sorted((int(math.floor(x0)), int(math.ceil(x1))))
+        r0, r1 = sorted((int(math.floor(y0)), int(math.ceil(y1))))
+        c0, c1 = max(0, c0), min(w, c1)
+        r0, r1 = max(0, r0), min(h, r1)
+        if c1 - c0 < 2 or r1 - r0 < 2:
+            self.update()
+            return  # 너무 작은 사각형 (단순 Ctrl+클릭)
+        values = arr[r0:r1, c0:c1]
+        if self._mouse.get("roi_window_method") == "mean2sd":
+            mean, sd = float(values.mean()), float(values.std())
+            low, high = mean - 2 * sd, mean + 2 * sd
+        else:
+            low, high = float(values.min()), float(values.max())
+        width = max(1.0, high - low)
+        center = (low + high) / 2
+        self.set_window(center, width, user=True)
+        self.status_message.emit(
+            f"ROI W/L: W {width:.0f}  L {center:.0f}  ({values.size} px, "
+            f"{'mean±2SD' if self._mouse.get('roi_window_method') == 'mean2sd' else 'min–max'})")
+
+    def _draw_wl_roi(self, painter):
+        if not self._wl_roi:
+            return
+        a = self._image_to_screen_f(self._wl_roi[0])
+        b = self._image_to_screen_f(self._wl_roi[1])
+        painter.setPen(QPen(QColor(255, 255, 255), 1, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(QRectF(a, b).normalized())
+
     def keyPressEvent(self, event):
+        # R/I/Space 등은 메인 윈도우 단축키(QAction)가 처리
         key = event.key()
-        if key == Qt.Key_R:
-            self.reset_view()
-        elif key == Qt.Key_I:
-            self.toggle_invert()
-        elif key in (Qt.Key_Delete, Qt.Key_Backspace):
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_last_annotation()
         elif key == Qt.Key_Escape:
             if self._draft is None:
                 self.clear_cursor3d()
             self._draft = None
             self.update()
-        elif key == Qt.Key_Space:
-            self.toggle_cine()
+        else:
+            super().keyPressEvent(event)
 
     def _adjust_window(self, dx, dy):
         # 좌우 = Width, 상하 = Center
@@ -1014,10 +1081,12 @@ class DicomViewport(QWidget):
         painter.restore()
 
         self._draw_reference_lines(painter)
-        self._draw_annotations(painter)
-        self._draw_draft(painter)
+        if self._show_annotations:
+            self._draw_annotations(painter)
+            self._draw_draft(painter)
+            self._draw_key_marker(painter)
         self._draw_reference_cursor(painter)
-        self._draw_key_marker(painter)
+        self._draw_wl_roi(painter)
 
         if self._show_overlay:
             self._draw_overlay(painter)

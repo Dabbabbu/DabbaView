@@ -19,7 +19,13 @@ DRAG_ACTIONS = {
     "pan": "Pan (이동)",
     "zoom": "Zoom",
     "scroll": "슬라이스 스크롤",
+    "roi_window": "ROI 자동 W/L (사각형)",
     "none": "없음",
+}
+# ROI 자동 W/L 계산 방식
+ROI_WINDOW_METHODS = {
+    "minmax": "Min–Max (Center=(min+max)/2, Width=max−min)",
+    "mean2sd": "Mean ± 2SD (이상값에 덜 민감)",
 }
 # 휠 동작
 WHEEL_ACTIONS = {
@@ -41,6 +47,7 @@ MOUSE_BINDING_LABELS = {
     "right_drag": ("우클릭 드래그", DRAG_ACTIONS),
     "middle_drag": ("가운데 버튼 드래그", DRAG_ACTIONS),
     "ctrl_left_drag": ("Ctrl(⌘) + 좌클릭 드래그", DRAG_ACTIONS),
+    "alt_left_drag": ("Alt(⌥) + 좌클릭 드래그", DRAG_ACTIONS),
     "wheel": ("휠", WHEEL_ACTIONS),
     "ctrl_wheel": ("Ctrl(⌘) + 휠", WHEEL_ACTIONS),
     "shift_wheel": ("Shift + 휠", WHEEL_ACTIONS),
@@ -52,14 +59,17 @@ DEFAULT_MOUSE_BINDINGS = {
     "left_drag": "tool",
     "right_drag": "window",
     "middle_drag": "pan",
-    "ctrl_left_drag": "zoom",
+    "ctrl_left_drag": "roi_window",
+    "alt_left_drag": "pan",
     "wheel": "scroll",
     "ctrl_wheel": "zoom",
     "shift_wheel": "fast_scroll",
     "left_double": "fit",
     "right_double": "reset_window",
     "fast_scroll_step": 5,
+    "roi_window_method": "minmax",
 }
+MOUSE_BINDINGS_VERSION = 2  # 2: Ctrl+좌클릭 = Zoom → ROI 자동 W/L
 
 
 class MouseBindings:
@@ -72,7 +82,10 @@ class MouseBindings:
 
     def update(self, values):
         for key, value in values.items():
-            if key == "fast_scroll_step":
+            if key == "roi_window_method":
+                if value in ROI_WINDOW_METHODS:
+                    self._values[key] = value
+            elif key == "fast_scroll_step":
                 try:
                     self._values[key] = max(1, min(50, int(value)))
                 except (TypeError, ValueError):
@@ -132,7 +145,11 @@ class AppSettings:
 
     def __init__(self, qsettings):
         self._qs = qsettings
-        self.mouse = MouseBindings(self._load_json("mouse_bindings", {}))
+        saved = self._load_json("mouse_bindings", {})
+        # 이전 기본값(Ctrl+좌클릭=Zoom)으로 저장된 설정은 새 기본값으로 이전
+        if saved.get("version", 1) < MOUSE_BINDINGS_VERSION and saved.get("ctrl_left_drag") == "zoom":
+            saved["ctrl_left_drag"] = "roi_window"
+        self.mouse = MouseBindings(saved)
 
     # 내부 헬퍼
     def _load_json(self, key, default):
@@ -151,7 +168,8 @@ class AppSettings:
     # 마우스
     def save_mouse(self, values):
         self.mouse.update(values)
-        self._save_json("mouse_bindings", self.mouse.to_dict())
+        self._save_json("mouse_bindings", dict(self.mouse.to_dict(),
+                                               version=MOUSE_BINDINGS_VERSION))
 
     def reset_mouse(self):
         # 뷰포트들이 같은 객체를 참조하므로 새로 만들지 않고 값만 되돌림
@@ -185,6 +203,19 @@ class AppSettings:
 
     def set_auto_hanging(self, enabled):
         self._qs.setValue("auto_hanging", bool(enabled))
+
+    # Reading (판독)
+    def report_folder(self):
+        return self._qs.value("report_folder", "", type=str)
+
+    def set_report_folder(self, folder):
+        self._qs.setValue("report_folder", folder or "")
+
+    def report_creator(self):
+        return self._qs.value("report_creator", "", type=str)
+
+    def set_report_creator(self, name):
+        self._qs.setValue("report_creator", name.strip())
 
     # DICOM 노드
     def dicom_nodes(self):

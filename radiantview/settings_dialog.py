@@ -9,7 +9,8 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
 from PyQt5.QtCore import Qt
 
 from .app_settings import (MOUSE_BINDING_LABELS, DEFAULT_MOUSE_BINDINGS,
-                           DEFAULT_WINDOW_PRESETS, DEFAULT_HANGING_PROTOCOLS)
+                           DEFAULT_WINDOW_PRESETS, DEFAULT_HANGING_PROTOCOLS,
+                           ROI_WINDOW_METHODS)
 from .multi_viewport import LAYOUTS
 from . import dicom_net as net
 
@@ -57,7 +58,7 @@ def _append_row(table, values):
 
 class SettingsDialog(QDialog):
 
-    TABS = ("mouse", "presets", "hanging", "nodes")
+    TABS = ("mouse", "presets", "hanging", "nodes", "reading")
 
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
@@ -71,6 +72,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._presets_tab(), "W/L Presets")
         self._tabs.addTab(self._hanging_tab(), "Hanging Protocols")
         self._tabs.addTab(self._nodes_tab(), "DICOM Nodes")
+        self._tabs.addTab(self._reading_tab(), "Reading")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -100,6 +102,12 @@ class SettingsDialog(QDialog):
         self._fast_step.setSuffix(" 장")
         self._fast_step.setValue(self._settings.mouse.get("fast_scroll_step"))
         form.addRow("빠른 이동 간격:", self._fast_step)
+        self._roi_method = QComboBox()
+        for value, text in ROI_WINDOW_METHODS.items():
+            self._roi_method.addItem(text, value)
+        self._roi_method.setCurrentIndex(
+            max(0, self._roi_method.findData(self._settings.mouse.get("roi_window_method"))))
+        form.addRow("ROI 자동 W/L 계산:", self._roi_method)
         layout.addLayout(form)
         reset = QPushButton("PACS 표준 기본값으로")
         reset.clicked.connect(self._reset_mouse)
@@ -111,6 +119,8 @@ class SettingsDialog(QDialog):
         for key, combo in self._mouse_combos.items():
             combo.setCurrentIndex(combo.findData(DEFAULT_MOUSE_BINDINGS[key]))
         self._fast_step.setValue(DEFAULT_MOUSE_BINDINGS["fast_scroll_step"])
+        self._roi_method.setCurrentIndex(
+            self._roi_method.findData(DEFAULT_MOUSE_BINDINGS["roi_window_method"]))
 
     # ─── 프리셋 ───
     def _presets_tab(self):
@@ -241,6 +251,37 @@ class SettingsDialog(QDialog):
         (QMessageBox.information if ok else QMessageBox.warning)(
             self, "C-ECHO", f"{node['ae_title']}@{node['host']}:{node['port']}\n{message}")
 
+    # ─── Reading ───
+    def _reading_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+        folder_row = QHBoxLayout()
+        self._report_folder = QLineEdit(self._settings.report_folder())
+        self._report_folder.setPlaceholderText("판독문 파일이 저장되는 폴더 (선택)")
+        browse = QPushButton("찾아보기…")
+        browse.clicked.connect(self._browse_report_folder)
+        folder_row.addWidget(self._report_folder, 1)
+        folder_row.addWidget(browse)
+        form.addRow("판독문 폴더:", folder_row)
+        self._report_creator = QLineEdit(self._settings.report_creator())
+        form.addRow("기본 Creator:", self._report_creator)
+        layout.addLayout(form)
+        layout.addWidget(QLabel(
+            "판독문 폴더를 지정하면 새 파일을 감시해서 불러온 검사와 자동으로 연결합니다.\n"
+            "매칭: 파일명(또는 폴더명)에 PatientID와 검사일(YYYYMMDD)이 있으면 그 검사,\n"
+            "날짜가 없으면 그 환자의 검사가 하나일 때만 연결합니다. DICOM SR은 StudyInstanceUID로 연결합니다.\n"
+            "예: 1234567_20260917_report.txt\n"
+            "지원: .txt .rtf .jpg .png .bmp .tiff .pdf .dcm(SR)"))
+        layout.addStretch()
+        return page
+
+    def _browse_report_folder(self):
+        from PyQt5.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, "판독문 폴더", self._report_folder.text())
+        if folder:
+            self._report_folder.setText(folder)
+
     # ─── 저장 ───
     def _save(self):
         try:
@@ -252,10 +293,13 @@ class SettingsDialog(QDialog):
             return
         values = {key: combo.currentData() for key, combo in self._mouse_combos.items()}
         values["fast_scroll_step"] = self._fast_step.value()
+        values["roi_window_method"] = self._roi_method.currentData()
         self._settings.save_mouse(values)
         self._settings.save_window_presets(presets)
         self._settings.save_hanging_protocols(protocols)
         self._settings.set_auto_hanging(self._auto_hanging.isChecked())
         self._settings.save_dicom_nodes(nodes)
         self._settings.set_local_ae_title(self._local_ae.text())
+        self._settings.set_report_folder(self._report_folder.text().strip())
+        self._settings.set_report_creator(self._report_creator.text())
         self.accept()

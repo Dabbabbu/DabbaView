@@ -43,6 +43,15 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 - **GE 스타일 오버레이**: 기관·환자·성별/나이/체중, 날짜·시리즈/영상 번호·위치·FoV·Matrix·두께, 시퀀스·장비·코일·TR/TE/TI·FA/ETL/NEX·W/L, 우하단 W/L + 스케일 바
 - **Image 정보 패널**: 현재 영상의 환자·검사·시리즈·획득 파라미터 상세
 
+### Reading (판독) — R
+- INFINITT 판독 창 형태: 제목(모달리티, 환자명, ID, 성별, 검사일시, Study Description, Body Part, 임상정보), 판독문 편집기(`====== [Conclusion] =======`로 결론 구분), Creator / Approver / Approver2 / My Comment, Study Comment · Exam Date(상태) · Report Date
+- 버튼: Edit, Import, Copy, Print, Save, Approve, Close — 저장하면 StudyInstanceUID별 JSON (이 컴퓨터의 앱 데이터 폴더), 다시 열면 불러옴
+- **Import**: .txt(UTF-8/CP949) · .rtf → 본문에 삽입, .jpg/.png/.bmp/.tiff/.pdf → 이미지 탭(확대/축소), DICOM SR(.dcm) → 텍스트 추출. 파일명에 다른 환자 ID가 있으면 경고
+- **판독문 폴더 감시** (Settings → Reading): 새 파일을 파일명·폴더명의 PatientID + 검사일(YYYYMMDD)로 자동 연결, DICOM SR은 StudyInstanceUID로 연결. 예: `1234567_20260917_report.txt`
+- Series 탭: 검사의 시리즈 목록과 시퀀스 파라미터 요약
+
+> 판독문과 가져온 파일 경로에는 환자 정보가 들어 있습니다. 앱 데이터 폴더(macOS: `~/Library/Application Support/RadiantView`)를 공유하거나 저장소에 올리지 마세요.
+
 ### 내보내기 / 네트워크
 - 이미지 내보내기, **Capture**(오버레이·측정선 포함), **동영상**(MP4/AVI/GIF)
 - **DICOM Send** (C-STORE), **DICOM Print** (Basic Grayscale Print), 연결 확인(C-ECHO) — pynetdicom 사용
@@ -57,10 +66,11 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 | 좌클릭 드래그 | 선택한 도구 (기본: Selector = 선택만) |
 | **우클릭 드래그** | **항상 W/L** (좌우 = Width, 상하 = Level) |
 | **가운데 버튼 드래그** | **항상 Pan** |
-| Ctrl(⌘) + 좌클릭 드래그 | Zoom |
+| Ctrl(⌘) + 좌클릭 드래그 | **ROI 자동 W/L**: 사각형을 그리면 그 영역으로 W/L 설정 (Min–Max 또는 Mean±2SD, Settings에서 선택) |
+| Alt(⌥) + 좌클릭 드래그 | Pan (도구 무관) |
 | 휠 | 슬라이스 이동 (위 = 이전, 아래 = 다음) |
 | Shift + 휠 | 5장씩 빠르게 이동 |
-| Ctrl(⌘) + 휠 | Zoom |
+| Ctrl(⌘) + 휠 | Zoom (위 = 확대, 커서 위치 기준) |
 | 좌측 더블클릭 | 화면에 맞춤 (Fit to Window) |
 | 우측 더블클릭 | W/L을 DICOM 기본값으로 리셋 |
 
@@ -76,13 +86,14 @@ macOS에서는 표의 `Ctrl`이 **⌘ (Command)** 키입니다.
 | B | Cobb 각 | 6 | 3D Cursor |
 | 7 | 돋보기 | 8 | Freehand ROI |
 | E | 타원 ROI (Shift: 원) | 9 | 면적 |
-| 0 | 화살표 | T | 텍스트 |
+| 0 | 화살표 | A | 텍스트 메모 |
 | V / H | 상하 / 좌우 반전 | [ / ] | 왼쪽 / 오른쪽 90° 회전 |
-| I | 흑백 반전 | R | 회전·반전 초기화 + 화면 맞춤 |
+| I | 흑백 반전 | Shift+R | 회전·반전 초기화 + 화면 맞춤 |
 | C | Crosslink | L | HU Lens (커서 옆 픽셀 값) |
 | K | Key Image 표시/해제 | Shift+K | Key Image 모아보기 |
-| Shift+T | Stack ↔ Tile | O | 오버레이 표시/숨김 |
-| Space | 시네 재생/정지 | Delete | 현재 영상의 마지막 주석 삭제 |
+| Shift+T | Stack ↔ Tile | T / O | 환자 정보 + 측정/주석 표시/숨김 |
+| Space | Multi View: 선택한 칸만 크게 ↔ 복귀 | P | 시네 재생/정지 |
+| R | Reading(판독) 창 | Delete | 현재 영상의 마지막 주석 삭제 |
 | Esc | 그리던 측정 취소 / 3D Cursor 지우기 | Ctrl+T | DICOM 태그 |
 | Ctrl+I | Image 정보 패널 | Ctrl+Shift+S | Capture |
 | Ctrl+O | 파일 열기 | Ctrl+Shift+O | 폴더 열기 |
@@ -94,6 +105,7 @@ macOS에서는 표의 `Ctrl`이 **⌘ (Command)** 키입니다.
 - **W/L Presets**: 프리셋 추가/편집/삭제
 - **Hanging Protocols**: 모달리티, 부위 키워드, 레이아웃, 칸별 시리즈 키워드
 - **DICOM Nodes**: 이 컴퓨터의 AE Title, 전송/인쇄 대상 (AE Title, Host, Port)
+- **Reading**: 판독문 폴더(감시), 기본 Creator
 
 설정은 QSettings로 저장됩니다 (macOS: `~/Library/Preferences/com.radiantview.RadiantView.plist`).
 
