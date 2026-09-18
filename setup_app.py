@@ -29,8 +29,10 @@ OPTIONS = {
             }
         ],
     },
-    'packages': ['radiantview', 'pydicom', 'pynetdicom', 'numpy', 'PIL', 'scipy', 'cv2'],
-    'includes': ['PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui'],
+    'packages': ['radiantview', 'pydicom', 'pynetdicom', 'numpy', 'PIL', 'scipy', 'cv2',
+                 'pypdfium2', 'pypdfium2_raw', 'striprtf'],
+    'includes': ['PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui',
+                 'PyQt5.QtPrintSupport'],
 }
 
 setup(

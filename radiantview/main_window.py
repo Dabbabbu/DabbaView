@@ -36,6 +36,7 @@ from .network_dialogs import DicomSendDialog, DicomPrintDialog
 from .render import render_8bit
 from .multi_viewport import LAYOUTS
 from .series_tree import group_series
+from .reading import ReadingDialog, ReportStore, ReportLibrary
 from .dicom_info import orientation_name
 
 
@@ -100,6 +101,9 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("RadiantView", "RadiantView")
         self._app_settings = AppSettings(self._settings)
         self._annotation_store = AnnotationStore(self)
+        self._report_store = ReportStore()
+        self._report_library = ReportLibrary(self)
+        self._reading_dialogs = {}  # study_uid → 열린 Reading 창
 
         self._init_ui()
         self._cursor_sync = CursorSyncController(self)
@@ -113,6 +117,7 @@ class MainWindow(QMainWindow):
         self._configure_viewports()
         self._connect_signals()
         self._restore_series_panel()
+        self._report_library.set_folder(self._app_settings.report_folder())
 
         # 다크 테마
         self._apply_dark_theme()
@@ -309,10 +314,15 @@ class MainWindow(QMainWindow):
         self._act_toggle_panel.triggered.connect(self.toggle_series_panel)
         view_menu.addAction(self._act_toggle_panel)
 
-        overlay_action = QAction("Toggle Overlay", self)
-        overlay_action.setShortcut(QKeySequence("O"))
+        overlay_action = QAction("Toggle Overlay (정보 + 주석)", self)
+        overlay_action.setShortcuts([QKeySequence("T"), QKeySequence("O")])
         overlay_action.triggered.connect(self._toggle_overlay)
         view_menu.addAction(overlay_action)
+        view_menu.addAction(self._act_maximize)
+
+        # Reading
+        reading_menu = menubar.addMenu("&Reading")
+        reading_menu.addAction(self._act_reading)
 
         # Tools 메뉴
         tools_menu = menubar.addMenu("&Tools")
@@ -386,7 +396,7 @@ class MainWindow(QMainWindow):
             ("Area", V.TOOL_AREA, "9", "Freehand 면적 측정: 면적(mm²)·둘레"),
             None,
             ("Arrow", V.TOOL_ARROW, "0", "2D 화살표: 가리킬 곳에서 누르고 드래그 → 라벨"),
-            ("Text", V.TOOL_TEXT, "T", "텍스트 메모: 클릭 → 내용·크기·색상"),
+            ("Text", V.TOOL_TEXT, "A", "텍스트 메모: 클릭 → 내용·크기·색상"),
         ]
         self._tool_actions = {}
         for entry in tools:
@@ -445,14 +455,15 @@ class MainWindow(QMainWindow):
         output_bar = QToolBar("Output")
         output_bar.setMovable(False)
         self.addToolBar(output_bar)
-        for action in (self._act_capture, self._act_image_panel, self._act_send,
-                       self._act_print, self._act_settings):
+        for action in (self._act_reading, self._act_capture, self._act_image_panel,
+                       self._act_send, self._act_print, self._act_settings):
             output_bar.addAction(action)
         output_bar.addSeparator()
 
         # 시네 재생
         cine_action = QAction("▶ Play", self)
-        cine_action.setShortcut(QKeySequence("Space"))
+        cine_action.setShortcut(QKeySequence("P"))
+        cine_action.setToolTip("시네 재생/정지 (P)")
         cine_action.triggered.connect(self._viewport.toggle_cine)
         output_bar.addAction(cine_action)
 
@@ -499,7 +510,7 @@ class MainWindow(QMainWindow):
                                lambda: self._target_viewport().rotate_right())
         self._act_invert = make("◐ B/W Inverse", "I", "흑백 반전",
                                 lambda: self._target_viewport().toggle_invert())
-        self._act_reset = make("⟲ Reset", "R", "회전/반전 초기화 + 화면 맞춤",
+        self._act_reset = make("⟲ Reset", "Shift+R", "회전/반전 초기화 + 화면 맞춤",
                                lambda: self._target_viewport().reset_view())
         self._act_value_lens = make(
             "HU Lens", "L", "커서 옆에 픽셀 값 표시 (CT: HU, MR: SI, PET: SUVbw)\n"
@@ -537,6 +548,11 @@ class MainWindow(QMainWindow):
                                   self._load_annotations)
         self._act_export_keys = make("Export Key Images...", "", "Key Image를 PNG + 목록(JSON)으로 내보내기",
                                      self._export_key_images)
+        self._act_reading = make("📝 Reading", "R", "기록 창 (기록 작성·가져오기·인쇄)",
+                                 self._open_reading)
+        self._act_maximize = make("Maximize Viewport", "Space",
+                                  "Multi View: 선택한 칸만 크게 ↔ 원래 배치",
+                                  self._toggle_maximize)
         self._act_image_panel = self._info_panel.toggleViewAction()
         self._act_image_panel.setText("ⓘ Image")
         self._act_image_panel.setShortcut(QKeySequence("Ctrl+I"))
@@ -735,6 +751,7 @@ class MainWindow(QMainWindow):
             new_uids = self._loader.merge(loader)
             self._multi_viewport.set_active(target_viewport)
             self._update_series_list(select_uid=new_uids[0])
+        self._report_library.set_studies(self._studies_for_matching())
         errors = loader.load_errors
         message = f"Loaded {loaded} files"
         if errors:
@@ -1143,6 +1160,8 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self._app_settings, self, tab=tab)
         if dialog.exec_():
             self._rebuild_preset_menu()
+            if self._app_settings.report_folder() != self._report_library.folder:
+                self._report_library.set_folder(self._app_settings.report_folder())
             self._statusbar.showMessage("설정을 저장했습니다.", 4000)
 
     def _rebuild_preset_menu(self):
@@ -1291,10 +1310,59 @@ class MainWindow(QMainWindow):
         dialog.exec_()
 
     def _toggle_overlay(self):
-        show = not self._viewport._show_overlay
+        """환자 정보 오버레이 + 측정/주석 표시 토글 (T / O)"""
+        show = not self._viewport.overlay_visible
         for vp in self._all_viewports():
-            vp._show_overlay = show
-            vp.update()
+            vp.set_overlay_visible(show)
+        self._statusbar.showMessage(f"Overlay {'ON' if show else 'OFF'}", 2000)
+
+    def _toggle_maximize(self):
+        """Space: Multi View에서 선택한 칸만 크게 ↔ 원래 배치"""
+        if self._tab_widget.currentWidget() is not self._multi_viewport:
+            self._statusbar.showMessage("Space: Multi View에서 선택한 칸을 크게 봅니다", 3000)
+            return
+        mv = self._multi_viewport
+        if mv.num_visible <= 1 and not mv.is_maximized:
+            return
+        maximized = mv.toggle_maximize()
+        self._statusbar.showMessage(
+            "선택한 칸 최대화 (Space로 복귀)" if maximized else "원래 레이아웃", 3000)
+
+    # ─── Reading (기록) ───
+
+    def _studies_for_matching(self):
+        return [{"study_uid": s.study_uid, "patient_id": s.patient_id,
+                 "study_date": s.study_date}
+                for s in {s.study_uid: s for s in self._loader.get_series_list()}.values()
+                if s.study_uid]
+
+    def _open_reading(self):
+        series = self._target_viewport().series or self._current_series
+        if series is None:
+            QMessageBox.information(self, "Reading", "먼저 검사를 여세요.")
+            return
+        study_uid = series.study_uid
+        dialog = self._reading_dialogs.get(study_uid)
+        try:
+            if dialog is not None:
+                dialog.isVisible()  # 이미 삭제된 창이면 RuntimeError
+        except RuntimeError:
+            dialog = None
+        if dialog is None:
+            dialog = ReadingDialog(self._study_series(series), self._report_store,
+                                   self._report_library, self._app_settings,
+                                   self._studies_for_matching(), self)
+            # 닫힌 창만 목록에서 제거 (늦게 온 시그널이 새 창을 지우지 않도록)
+            dialog.finished.connect(
+                lambda *_, d=dialog: self._reading_dialogs.get(study_uid) is d
+                and self._reading_dialogs.pop(study_uid))
+
+            dialog.setAttribute(Qt.WA_DeleteOnClose)
+            self._reading_dialogs[study_uid] = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        return dialog
 
     def _export_image(self):
         if not self._viewport._cached_pixmap:

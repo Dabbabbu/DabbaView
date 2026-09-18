@@ -59,6 +59,7 @@ class MultiViewport(QWidget):
         self._reference_lines = False
         self._compare_offsets = {}  # (i, j) → j 슬라이스 - i 슬라이스
         self._syncing = False
+        self._maximized = False  # Space: 활성 칸만 크게
         self._init_ui()
 
     def _init_ui(self):
@@ -163,6 +164,7 @@ class MultiViewport(QWidget):
         """레이아웃 변경 ('1x1' ~ '4x4')"""
         if layout_id not in LAYOUTS:
             return
+        self._maximized = False  # 레이아웃을 바꾸면 최대화 해제
         self._current_layout = layout_id
         btn = self._layout_buttons.get(layout_id)
         if btn is not None:
@@ -187,6 +189,13 @@ class MultiViewport(QWidget):
         for vp in self._viewports:
             self._grid_layout.removeWidget(vp)
             vp.hide()
+        if self._maximized:
+            # 활성 칸만 전체 크기로 (다른 칸은 숨김, 시리즈·동기화 상태는 유지)
+            vp = self.active_viewport
+            self._grid_layout.addWidget(vp, 0, 0)
+            vp.show()
+            vp.set_highlight(None)
+            return
         rows, cols = LAYOUTS[self._current_layout]
         for i in range(rows * cols):
             self._grid_layout.addWidget(self._viewports[i], i // cols, i % cols)
@@ -194,11 +203,26 @@ class MultiViewport(QWidget):
         self._highlight_active()
         self._refresh_reference_lines()
 
+    def toggle_maximize(self):
+        """활성 칸만 크게 ↔ 원래 레이아웃. 새 상태(True=최대화) 반환"""
+        if not self._maximized and self.num_visible <= 1:
+            return False
+        self._maximized = not self._maximized
+        self._apply_layout()
+        return self._maximized
+
+    @property
+    def is_maximized(self):
+        return self._maximized
+
     def set_active(self, index):
         """활성 뷰포트 설정"""
         if 0 <= index < len(self._viewports):
             self._active_index = index
-            self._highlight_active()
+            if self._maximized:
+                self._apply_layout()  # 최대화 중이면 새 활성 칸을 크게
+            else:
+                self._highlight_active()
             self.active_viewport_changed.emit(index)
 
     def _highlight_active(self):
