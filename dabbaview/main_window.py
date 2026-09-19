@@ -247,6 +247,7 @@ class MainWindow(QMainWindow):
         self._library_panel = LibraryPanel(self._library)
         self._library_panel.open_requested.connect(self._open_library_study)
         self._library_panel.rename_requested.connect(self._rename_requested)
+        self._library_panel.export_requested.connect(self._export_library)
         self._left_tabs.addTab(self._library_panel, "★ Library")
         self._act_library_add = QAction("☆ Library", self)
         self._act_library_add.setShortcut(QKeySequence("Ctrl+D"))
@@ -407,6 +408,10 @@ class MainWindow(QMainWindow):
         library_add.setShortcutContext(Qt.WidgetShortcut)   # 실제 단축키는 창 액션이 처리 (중복 방지)
         library_add.triggered.connect(self._add_current_study_to_library)
         file_menu.addAction(library_add)
+        export_library = QAction("📤 Export Library...", self)
+        export_library.triggered.connect(lambda: self._export_library(
+            self._library_panel.selected_uids(), None))
+        file_menu.addAction(export_library)
         show_library = QAction("Library 보기", self)
         show_library.triggered.connect(lambda: self._left_tabs.setCurrentWidget(self._library_panel))
         file_menu.addAction(show_library)
@@ -1776,12 +1781,52 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage("이 시리즈에는 StudyInstanceUID가 없어 Library에 넣을 수 없습니다.", 5000)
             return
         info = study_info(self._loader.get_series_list(), series.study_uid)
+        members = [s for s in self._loader.get_series_list() if s.study_uid == series.study_uid]
+        members.sort(key=lambda s: (s.series_number is None, s.series_number or 0))
+        info["series_list"] = [{"number": s.series_number if s.series_number is not None else "",
+                                "description": s.description, "modality": s.modality,
+                                "images": s.num_slices} for s in members]
         entry, created = self._library.add_study(info)
+        try:   # 내보내기용 대표 썸네일 (현재 시리즈 중간 슬라이스)
+            from .library_export import save_series_thumbnail
+            save_series_thumbnail(self._library, series.study_uid, series)
+        except Exception:  # noqa: BLE001 - 썸네일 실패는 무시
+            pass
         self._statusbar.showMessage(
             ("★ Library에 추가" if created else "★ 이미 Library에 있음 — 정보 갱신")
             + f": {entry.get('patient_name', '')} {entry.get('study_date', '')} "
               f"{entry.get('description', '')}  (Library 탭에서 컬렉션·메모·태그)", 6000)
         self._library_panel.select_study(series.study_uid)
+
+    def _export_library(self, selected, collection):
+        from .library_export_dialog import LibraryExportDialog
+        dialog = LibraryExportDialog(self._library, selected, collection, self._study_measurements, self)
+        dialog.exec_()
+
+    def _study_measurements(self, study_uid):
+        """불러온 스터디의 ROI·측정 → 표 행 (Library 내보내기)"""
+        from .annotations import MEASURE_TYPES, ROI_TYPES, image_key
+        from .roi_tools import type_name
+        rows = []
+        for series in self._series_of_study(study_uid):
+            for k in range(series.num_slices):
+                for ann in self._annotation_store.items(image_key(series, k)):
+                    kind = ann.get("type")
+                    if kind not in ROI_TYPES + MEASURE_TYPES:
+                        continue
+                    stats = ann.get("stats") or {}
+                    if kind in ROI_TYPES:
+                        value = f"{stats.get('area_mm2', 0):.1f} mm²"
+                    elif kind in ("distance", "path"):
+                        value = f"{ann.get('mm', 0):.1f} mm"
+                    elif kind == "area":
+                        value = f"{ann.get('area', 0):.1f} mm²"
+                    else:
+                        value = f"{ann.get('deg', 0):.1f}°"
+                    fmt = lambda key: f"{stats[key]:.1f}" if key in stats else ""
+                    rows.append([series.description, k + 1, type_name(ann), ann.get("name", ""), value,
+                                 fmt("mean"), fmt("std"), fmt("min"), fmt("max")])
+        return rows
 
     def _update_library_star(self, *_args):
         series = self._current_series

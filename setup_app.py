@@ -84,6 +84,8 @@ OPTIONS = {
                  'pylibjpeg', 'libjpeg', 'openjpeg', '_gdcm',
                  # 메모리 사용량 표시
                  'psutil',
+                 # Library 내보내기: PDF / Word / Excel
+                 'reportlab', 'docx', 'openpyxl', 'et_xmlfile', 'lxml',
                  # 분석: Python 콘솔·히스토그램 그래프, 입자 분석·Canny
                  'matplotlib', 'skimage',
                  # 클라우드: Google Drive (정적 API 문서·CA 파일 포함) / OneDrive / 키체인
