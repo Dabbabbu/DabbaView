@@ -25,12 +25,25 @@ def library_versions():
                                 ("VTK", "vtkmodules", "__version__"),
                                 ("nibabel", "nibabel", "__version__"),
                                 ("pynrrd", "nrrd", "__version__"),
-                                ("SimpleITK", "SimpleITK", "__version__"),
-                                ("onnxruntime", "onnxruntime", "__version__")):
+                                ("SimpleITK", "SimpleITK", "__version__")):
         try:
             rows.append((label, str(getattr(importlib.import_module(module), attr))))
         except Exception:  # noqa: BLE001 - 설치 안 됐거나 버전 표기가 없으면 생략
             continue
+    # onnxruntime은 import하면 원격 수집이 시작되므로 버전만 따로 확인
+    import sys
+    try:
+        if "onnxruntime" in sys.modules:
+            rows.append(("onnxruntime", sys.modules["onnxruntime"].__version__))
+        else:
+            from importlib import metadata, util
+            if util.find_spec("onnxruntime") is not None:
+                try:
+                    rows.append(("onnxruntime", metadata.version("onnxruntime")))
+                except metadata.PackageNotFoundError:
+                    rows.append(("onnxruntime", "포함됨 (모델 사용 시 로드)"))
+    except Exception:  # noqa: BLE001
+        pass
     return rows
 
 

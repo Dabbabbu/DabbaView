@@ -13,16 +13,21 @@ ONNX 세그멘테이션 모델 로컬 추론 (onnxruntime)
 import numpy as np
 from scipy import ndimage
 
-try:
+import importlib.util
+
+# onnxruntime은 실제로 모델을 쓸 때만 import: import하는 순간 내장 원격 수집(telemetry)이
+# 시작되고, 앱 종료 때 그 정리 과정이 충돌(abort)하는 일이 있어 대부분의 세션에서는 피함
+ONNX_AVAILABLE = importlib.util.find_spec("onnxruntime") is not None
+
+
+def load_ort():
+    """onnxruntime 모듈 (처음 쓸 때 import)"""
     import onnxruntime as ort
-    ONNX_AVAILABLE = True
-    try:   # 내장 원격 수집(telemetry) 스레드가 앱 종료 중에 충돌(abort)하는 일이 있어 끔
+    try:
         ort.disable_telemetry_events()
     except Exception:  # noqa: BLE001 - 버전에 따라 없음
         pass
-except ImportError:  # pragma: no cover - 설치 안 된 환경
-    ort = None
-    ONNX_AVAILABLE = False
+    return ort
 
 
 class OnnxModelError(Exception):
@@ -34,7 +39,7 @@ class OnnxSegmenter:
         if not ONNX_AVAILABLE:
             raise OnnxModelError("onnxruntime이 설치되어 있지 않습니다 (pip install onnxruntime).")
         try:
-            self.session = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+            self.session = load_ort().InferenceSession(path, providers=["CPUExecutionProvider"])
         except Exception as e:  # noqa: BLE001 - onnxruntime 예외 종류가 다양
             raise OnnxModelError(f"모델을 불러오지 못했습니다: {e}") from e
         inp = self.session.get_inputs()[0]
