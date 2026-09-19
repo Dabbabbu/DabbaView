@@ -4,6 +4,12 @@
 버그 수정만 → patch (2.1.0 → 2.1.1), 기능 추가·개선 → minor (2.1.x → 2.2.0), 대규모 변경 → major (2.x → 3.0.0).
 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면·README).
 
+## 2.2.0 — 2026-09-19
+
+### 추가 · 개선
+- View ▸ 패널: 닫은 탭 · 패널 다시 열기 (★ Library Ctrl+Shift+L, Image Ctrl+I, AI Ctrl+Shift+A, Python Console F3).
+- View ▸ 오버레이 항목: Phase Encoding 방향 · 방향 문자(A/P · R/L · S/I) · 스캔 커버리지 선을 각각 켜고 끔. 기본값은 Settings ▸ Display, T 키는 전체.
+
 ## 2.1.0 — 2026-09-19
 
 ### 추가 · 개선

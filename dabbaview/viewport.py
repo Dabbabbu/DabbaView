@@ -172,6 +172,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
 
         # 오버레이 정보 표시
         self._show_overlay = True
+        self._overlay_items = {"phase": True, "orientation": True, "coverage": True}
 
         # 반전
         self._inverted = False
@@ -565,6 +566,11 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 r = seg.brush_radius
                 painter.drawEllipse(QPointF(img_pos[0], img_pos[1]), r, r)
         painter.restore()
+
+    def set_overlay_items(self, items):
+        """위상 인코딩 방향 · 방향 문자 · 스캔 커버리지 선을 각각 켜고 끔 (T 키는 전체)"""
+        self._overlay_items.update(items)
+        self.update()
 
     def set_overlay_visible(self, visible):
         """환자 정보 오버레이 + 측정/주석 표시 (T / O)"""
@@ -1532,8 +1538,10 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._draw_wl_roi(painter)
 
         if self._show_overlay:
-            self._draw_orientation(painter)
-            self._draw_phase(painter)
+            if self._overlay_items.get("orientation", True):
+                self._draw_orientation(painter)
+            if self._overlay_items.get("phase", True):
+                self._draw_phase(painter)
             self._draw_overlay(painter)
             self._draw_colorbars(painter)
             has_scale_bar = self._draw_scale_bar(painter)
@@ -1822,7 +1830,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             dash.setDashPattern([3, 4])
             dash.setCosmetic(True)
             painter.setPen(dash)
-            for seg in self._coverage_segments(source_geom, geom):
+            show_coverage = self._show_overlay and self._overlay_items.get("coverage", True)
+            for seg in (self._coverage_segments(source_geom, geom) if show_coverage else []):
                 if seg[0] == index:
                     continue
                 painter.drawLine(*seg[1:])
@@ -1914,7 +1923,9 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                  "left": (-right, rect.left() + 6, rect.center().y(), "l"),
                  "bottom": (down, rect.center().x(), rect.bottom() - 6, "b"),
                  "top": (-down, rect.center().x(),
-                         max(rect.top() + 6, 10 + fm.height() if self._phase_direction() else 0) + fm.ascent(),
+                         max(rect.top() + 6, 10 + fm.height()
+                             if self._overlay_items.get("phase", True) and self._phase_direction() else 0)
+                         + fm.ascent(),
                          "t")}   # 위상 표시(맨 위 가운데) 아래로
         for _name, (vec, x, y, side) in spots.items():
             text = self._direction_letters(vec)

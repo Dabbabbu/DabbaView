@@ -239,6 +239,10 @@ class ReadingDialog(QDialog):
         layout = QVBoxLayout(self)
         self._tabs = QTabWidget()
         layout.addWidget(self._tabs)
+        # 붙인 파일 탭: 마우스를 올리면 X (Report · Series 탭은 닫지 않음)
+        from .panel_close import HoverCloseTabs
+        HoverCloseTabs(self._tabs.tabBar(), self._close_file_tab,
+                       closable=lambda i: self._tabs.widget(i) in self._file_tabs.values())
 
         # Report 탭
         page = QWidget()
@@ -431,6 +435,13 @@ class ReadingDialog(QDialog):
         self._tabs.setTabToolTip(index, f"{path}\n{'직접 연결' if manual else '기록 폴더에서 자동 매칭'}")
         self._file_tabs[path] = widget
         return widget
+
+    def _close_file_tab(self, index):
+        widget = self._tabs.widget(index)
+        for path, w in list(self._file_tabs.items()):
+            if w is widget:
+                del self._file_tabs[path]
+        self._tabs.removeTab(index)
 
     def _refresh_matched_files(self):
         if self._library is None:

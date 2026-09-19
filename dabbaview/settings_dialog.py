@@ -62,7 +62,7 @@ def _append_row(table, values):
 
 class SettingsDialog(QDialog):
 
-    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache", "acr")
+    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache", "acr", "display")
 
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
@@ -83,6 +83,7 @@ class SettingsDialog(QDialog):
         from .clinical.tools_acr import ACRCriteriaWidget
         self._acr = ACRCriteriaWidget(app_settings)
         self._tabs.addTab(self._acr, "ACR QC")
+        self._tabs.addTab(self._display_tab(), "Display")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -91,6 +92,24 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    # ─── 표시 ───
+    def _display_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("영상 위 표시 항목의 기본값 (View ▸ 오버레이 항목에서 바로 바꿀 수도 있음, "
+                                "T 키는 오버레이 전체)"))
+        items = self._settings.overlay_items()
+        self._overlay_checks = {}
+        for key, text in (("phase", "Phase Encoding 방향 표시 (0018,1312)"),
+                          ("orientation", "방향 문자 A/P · R/L · S/I (영상 가장자리)"),
+                          ("coverage", "스캔 커버리지 선 (Ref Lines: 다른 시리즈 전체 슬라이스 점선)")):
+            cb = QCheckBox(text)
+            cb.setChecked(items.get(key, True))
+            layout.addWidget(cb)
+            self._overlay_checks[key] = cb
+        layout.addStretch(1)
+        return page
 
     # ─── 마우스 ───
     def _mouse_tab(self):
@@ -556,6 +575,7 @@ class SettingsDialog(QDialog):
         self._settings.set_report_creator(self._report_creator.text())
         self._settings.set_dicom_edit_backup(self._dicom_backup.isChecked())
         self._acr.save()
+        self._settings.set_overlay_items({k: cb.isChecked() for k, cb in self._overlay_checks.items()})
         self._settings.set_monai_url(self._monai_url.text())
         self._settings.set_monai_token(self._monai_token.text())
         for key, widget in (("python", self._model_python), ("nnunet_folder", self._nnunet_folder),

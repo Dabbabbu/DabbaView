@@ -251,6 +251,8 @@ class MainWindow(QMainWindow):
         self._configure_viewports()
         self._connect_signals()
         self._restore_series_panel()
+        self._install_panel_close()
+        self._install_overlay_items()
         self._report_library.set_folder(self._app_settings.report_folder())
 
         # 다크 테마
@@ -281,6 +283,7 @@ class MainWindow(QMainWindow):
             "QTabBar::tab:hover { color: #ddd; }")
         outer_layout.addWidget(self._left_tabs)
         series_page = QWidget()
+        self._series_page = series_page
         left_layout = QVBoxLayout(series_page)
         left_layout.setContentsMargins(0, 4, 0, 0)
         self._left_tabs.addTab(series_page, "Series")
@@ -525,6 +528,7 @@ class MainWindow(QMainWindow):
 
         # View 메뉴
         view_menu = menubar.addMenu("&View")
+        self._view_menu = view_menu
 
         # 툴바와 같은 QAction을 공유 (단축키 중복 시 Qt가 둘 다 무시함)
         view_menu.addAction(self._act_reset)
@@ -2250,6 +2254,7 @@ class MainWindow(QMainWindow):
             self._rebuild_preset_menu()
             if self._app_settings.report_folder() != self._report_library.folder:
                 self._report_library.set_folder(self._app_settings.report_folder())
+            self._apply_overlay_items()
             self._statusbar.showMessage("설정을 저장했습니다.", 4000)
 
     def _rebuild_preset_menu(self):
@@ -2490,6 +2495,116 @@ class MainWindow(QMainWindow):
             return
         dialog = AnonymizeDialog(self._current_series, self)
         dialog.exec_()
+
+    # ─── 탭 · 패널 닫기 (X) ───
+    def _panel_docks(self):
+        return [d for d in (self._info_panel, self._ai_panel, getattr(self, "_analysis_dock", None),
+                            getattr(self, "_roi_manager", None), self._plot_dock, self._console) if d is not None]
+
+    def _install_panel_close(self):
+        """모든 탭 · 도크: 마우스를 올리면 X, 누르면 부드럽게 닫힘. View ▸ 패널에서 다시 열기"""
+        from .panel_close import HoverCloseTabs, HoverTitleBar
+        self._left_pages = [("Series", self._series_page), ("★ Library", self._library_panel)]
+        self._left_actions = {}
+        HoverCloseTabs(self._left_tabs.tabBar(), self._close_left_tab)
+        menu = self._view_menu.addMenu("패널 (닫은 탭 · 패널 다시 열기)")
+        for label, page in self._left_pages:
+            action = QAction(f"{label} 탭", self, checkable=True)
+            action.setChecked(True)
+            action.toggled.connect(lambda on, pg=page, lb=label: self._set_left_tab(pg, lb, on))
+            menu.addAction(action)
+            self._left_actions[id(page)] = action
+        self._left_actions[id(self._library_panel)].setShortcut(QKeySequence("Ctrl+Shift+L"))
+        menu.addAction(self._act_toggle_panel)
+        menu.addSeparator()
+        for dock in self._panel_docks():
+            action = dock.toggleViewAction()
+            if action not in menu.actions():
+                menu.addAction(action)
+            dock.setTitleBarWidget(HoverTitleBar(dock, lambda d=dock: self._close_dock(d)))
+            for signal in (dock.visibilityChanged, dock.dockLocationChanged, dock.topLevelChanged):
+                signal.connect(lambda *_: QTimer.singleShot(0, self._scan_dock_tabs))
+        self._panel_menu = menu
+        QTimer.singleShot(0, self._scan_dock_tabs)
+
+    def _scan_dock_tabs(self):
+        """도크를 겹치면 Qt가 만드는 탭 줄에도 호버 X"""
+        from PyQt5.QtWidgets import QTabBar
+        from .panel_close import HoverCloseTabs
+        for bar in self.findChildren(QTabBar):
+            if bar.parent() is self and not bar.property("dv_hover_close"):
+                bar.setProperty("dv_hover_close", True)
+                HoverCloseTabs(bar, lambda i, b=bar: self._close_dock_tab(b, i))
+
+    def _close_dock_tab(self, bar, index):
+        title = bar.tabText(index).replace("&", "")
+        dock = next((d for d in self._panel_docks() if d.windowTitle().replace("&", "") == title), None)
+        if dock is not None:
+            self._close_dock(dock)
+
+    def _close_dock(self, dock):
+        from .panel_close import fade_out, reopen_hint
+        action = dock.toggleViewAction()
+        fade_out(dock.widget(), dock.close)
+        self._statusbar.showMessage(reopen_hint(action.text().strip() or dock.windowTitle(), action), 8000)
+
+    def _close_left_tab(self, index):
+        from .panel_close import fade_out, reopen_hint
+        page = self._left_tabs.widget(index)
+        action = self._left_actions.get(id(page))
+        if action is None:
+            return
+        fade_out(page, lambda: action.setChecked(False))
+        self._statusbar.showMessage(reopen_hint(action.text(), action), 8000)
+
+    def _set_left_tab(self, page, label, on):
+        tabs = self._left_tabs
+        index = tabs.indexOf(page)
+        if on:
+            if index < 0:   # 원래 순서 자리에
+                order = [pg for _l, pg in self._left_pages]
+                pos = sum(1 for pg in order[:order.index(page)] if tabs.indexOf(pg) >= 0)
+                tabs.insertTab(pos, page, label)
+            tabs.setCurrentWidget(page)
+            if not self._panel_visible:
+                self.set_series_panel_visible(True)
+        elif index >= 0:
+            tabs.removeTab(index)
+            if tabs.count() == 0:   # 탭이 다 닫히면 왼쪽 패널도 접음
+                self.set_series_panel_visible(False)
+
+    # ─── 오버레이 항목 (위상 방향 · 방향 문자 · 스캔 범위 선) ───
+    OVERLAY_ITEMS = [("phase", "Phase Encoding 방향 표시"), ("orientation", "방향 문자 (A/P · R/L · S/I)"),
+                     ("coverage", "스캔 커버리지 선 (Ref Lines 점선)")]
+
+    def _install_overlay_items(self):
+        menu = self._view_menu.addMenu("오버레이 항목")
+        self._overlay_actions = {}
+        items = self._app_settings.overlay_items()
+        for key, text in self.OVERLAY_ITEMS:
+            action = QAction(text, self, checkable=True)
+            action.setChecked(items.get(key, True))
+            action.toggled.connect(self._overlay_items_changed)
+            menu.addAction(action)
+            self._overlay_actions[key] = action
+        menu.addSeparator()
+        note = menu.addAction("T: 오버레이 전체 켜기/끄기 · 기본값은 Settings ▸ Display")
+        note.setEnabled(False)
+        self._apply_overlay_items()
+
+    def _overlay_items_changed(self, *_):
+        items = {k: a.isChecked() for k, a in self._overlay_actions.items()}
+        self._app_settings.set_overlay_items(items)   # 다음 실행의 기본값
+        self._apply_overlay_items()
+
+    def _apply_overlay_items(self):
+        items = self._app_settings.overlay_items()
+        for key, action in getattr(self, "_overlay_actions", {}).items():
+            action.blockSignals(True)
+            action.setChecked(items.get(key, True))
+            action.blockSignals(False)
+        for vp in self._all_viewports():
+            vp.set_overlay_items(items)
 
     def _toggle_overlay(self):
         """환자 정보 오버레이 + 측정/주석 표시 토글 (T / O)"""
