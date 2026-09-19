@@ -15,7 +15,7 @@ import numpy as np
 from PyQt5.QtWidgets import (QTreeWidget, QTreeWidgetItem, QHeaderView,
                              QAbstractItemView, QApplication)
 from PyQt5.QtCore import Qt, QSize, QRectF, QMimeData, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QDrag, QFont, QIcon, QImage, QPainter, QPixmap
+from PyQt5.QtGui import QColor, QCursor, QDrag, QFont, QIcon, QImage, QPainter, QPixmap
 
 from . import dicom_info
 
@@ -276,8 +276,16 @@ class ClickToLoadMixin:
         drag.exec_(Qt.CopyAction)
 
 
+ROLE_PATIENT_KEY = Qt.UserRole + 20   # 환자 항목: 환자 키 / 첫 시리즈 UID
+ROLE_FIRST_UID = Qt.UserRole + 21
+
+
 class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
-    """Patient → Study → Series 계층 트리"""
+    """Patient → Study → Series 계층 트리
+
+    ▶/▼(가지 표시) = 접기·펼치기, 환자 이름 클릭 = 그 환자만 펼치고 첫 시리즈 로드,
+    검사 이름 클릭 = 접기·펼치기. 기본은 선택된 시리즈의 환자만 펼침.
+    """
 
     series_selected = pyqtSignal(str)   # 누름 / 방향키 (선택 표시)
     series_activated = pyqtSignal(str)  # 클릭(뗄 때) / Enter → 뷰포트에 로드
@@ -293,6 +301,7 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.currentItemChanged.connect(self._on_current_item_changed)
+        self.itemClicked.connect(self._on_item_clicked)
         self._click_init()
         self._items_by_uid = {}
         self._modality_by_uid = {}
@@ -323,6 +332,10 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
         while stack:
             item = stack.pop()
             if item.data(0, ROLE_SERIES_UID) == uid:
+                parent = item.parent()
+                while parent is not None:   # 접혀 있으면 펼쳐서 보이게
+                    parent.setExpanded(True)
+                    parent = parent.parent()
                 self.blockSignals(True)
                 self.setCurrentItem(item)
                 self.blockSignals(False)
@@ -349,10 +362,15 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
             patient_text = format_patient_name(pname)
             if pid:
                 patient_text += f"  (ID: {pid})"
-            patient_item = QTreeWidgetItem([patient_text, ""])
+            p_images = sum(s.num_slices for *_rest, g in studies for s in g)
+            patient_item = QTreeWidgetItem([patient_text, f"{p_images:,}"])
             patient_item.setFont(0, bold)
-            patient_item.setToolTip(0, f"Patient: {pname}\nID: {pid or '-'}")
+            patient_item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
+            patient_item.setToolTip(0, f"Patient: {pname}\nID: {pid or '-'}\n"
+                                       f"{len(studies)} studies · {p_images:,} images\n"
+                                       "이름 클릭: 이 환자의 첫 시리즈 열기")
             patient_item.setFlags(Qt.ItemIsEnabled)
+            patient_item.setData(0, ROLE_PATIENT_KEY, f"{pid}|{pname}")
             self.addTopLevelItem(patient_item)
 
             for study_date, study_time, study_desc, series_group in studies:
@@ -389,6 +407,8 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
                     item.setToolTip(0, tooltip)
                     item.setToolTip(1, tooltip)
                     study_item.addChild(item)
+                    if patient_item.data(0, ROLE_FIRST_UID) is None:
+                        patient_item.setData(0, ROLE_FIRST_UID, s.series_uid)
                     self._items_by_uid[s.series_uid] = item
                     self._modality_by_uid[s.series_uid] = s.modality
                     if first_series_item is None:
@@ -396,12 +416,19 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
                     if s.series_uid == select_uid:
                         target_item = item
 
-        self.expandAll()
+        selected = target_item or first_series_item
+        # 기본: 선택된 시리즈의 환자만 펼침 (그 환자의 검사는 모두 펼침)
+        current_patient = self._patient_of(selected)
+        for i in range(self.topLevelItemCount()):
+            patient_item = self.topLevelItem(i)
+            open_ = patient_item is current_patient
+            patient_item.setExpanded(open_)
+            for j in range(patient_item.childCount()):
+                patient_item.child(j).setExpanded(True)
         self.blockSignals(False)
 
         self._start_thumbnails(series_list)
 
-        selected = target_item or first_series_item
         if selected is not None:
             # emit=True: currentItemChanged → series_selected 로 시리즈 표시
             self.blockSignals(not emit)
@@ -461,6 +488,45 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
         if self._thumb_worker is not None:
             self._thumb_worker.cancel()
             self._thumb_worker.wait(3000)
+
+    @staticmethod
+    def _patient_of(item):
+        while item is not None and item.parent() is not None:
+            item = item.parent()
+        return item
+
+    def collapse_all(self):
+        self.collapseAll()
+
+    def expand_all(self):
+        self.expandAll()
+        if self.currentItem() is not None:
+            self.scrollToItem(self.currentItem())
+
+    def open_patient(self, patient_item):
+        """환자 간 빠른 전환: 이 환자만 펼치고 첫 시리즈 로드"""
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            top.setExpanded(top is patient_item)
+        for j in range(patient_item.childCount()):
+            patient_item.child(j).setExpanded(True)
+        uid = patient_item.data(0, ROLE_FIRST_UID)
+        if uid:
+            self.select_uid(uid)
+            self.scrollToItem(patient_item, QAbstractItemView.PositionAtTop)
+            self.series_activated.emit(uid)
+
+    def _on_item_clicked(self, item, _column):
+        if item.data(0, ROLE_SERIES_UID):
+            return
+        # 가지 표시(▶/▼) 영역을 누른 것은 Qt가 이미 접기/펼치기를 처리함
+        pos = self._press_pos or self.viewport().mapFromGlobal(QCursor.pos())
+        if pos.x() < self.visualItemRect(item).left():
+            return
+        if item.parent() is None:
+            self.open_patient(item)
+        else:
+            item.setExpanded(not item.isExpanded())
 
     def _series_uid_at(self, pos):
         item = self.itemAt(pos)
