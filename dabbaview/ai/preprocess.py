@@ -99,15 +99,16 @@ def apply(volume, mask, options, progress=None):
     if options.resample:
         step("리샘플링")
         target = np.array(options.target_spacing, dtype=float)
+        # 첫 복셀 위치는 그대로, 간격은 정확히 목표 값 (끝은 원래 범위 안에서 잘림)
         old_shape = np.array(array.shape, dtype=float)
-        array = ndimage.zoom(array, spacing / target, order=1)
+        new_shape = tuple(int(n) for n in np.floor((old_shape - 1) * spacing / target) + 1)
+        stride = target / spacing        # 새 인덱스 1칸 = 원래 인덱스 stride칸
+        array = ndimage.affine_transform(array, stride, output_shape=new_shape, order=1,
+                                         mode="nearest")
         if mask is not None:
-            mask = ndimage.zoom(mask, spacing / target, order=0)
-        # zoom은 양 끝 복셀 중심을 고정 → 실제 간격 = 원래 길이 / (새 샘플 수 - 1)
-        new_shape = np.array(array.shape, dtype=float)
-        new_spacing = np.where(new_shape > 1,
-                               spacing * (old_shape - 1) / np.maximum(new_shape - 1, 1),
-                               spacing)
+            mask = ndimage.affine_transform(mask, stride, output_shape=new_shape, order=0,
+                                            mode="nearest")
+        new_spacing = target
         scale = new_spacing / spacing   # (Δk, Δrow, Δcol) 비율
         affine[:3, 0] *= scale[2]
         affine[:3, 1] *= scale[1]

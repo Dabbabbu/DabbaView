@@ -9,6 +9,7 @@ import os
 import sys
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
+from . import __version__
 from .main_window import MainWindow
 from . import shortcut_fallback
 
@@ -23,7 +24,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("DabbaView")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion(__version__)
     app.setOrganizationName("DabbaView")
     shortcut_fallback.install(app)  # 한글 입력 상태에서도 T/R/P 등 단축키 동작
 

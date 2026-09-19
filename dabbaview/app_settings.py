@@ -233,6 +233,38 @@ class AppSettings:
     def set_monai_token(self, token):
         self._qs.setValue("monai_label_token", (token or "").strip())
 
+    # Deploy Web (DabbaView-Web GitHub Actions)
+    def deploy_repo(self):
+        return self._qs.value("deploy_repo", "Dabbabbu/DabbaView-Web", type=str) \
+            or "Dabbabbu/DabbaView-Web"
+
+    def deploy_workflow(self):
+        return self._qs.value("deploy_workflow", "deploy.yml", type=str) or "deploy.yml"
+
+    def deploy_branch(self):
+        return self._qs.value("deploy_branch", "main", type=str) or "main"
+
+    def set_deploy_target(self, repo, workflow, branch):
+        self._qs.setValue("deploy_repo", (repo or "").strip())
+        self._qs.setValue("deploy_workflow", (workflow or "").strip())
+        self._qs.setValue("deploy_branch", (branch or "").strip())
+
+    def github_token(self):
+        return self._qs.value("github_token", "", type=str)
+
+    def set_github_token(self, token):
+        """주의: QSettings(plist/레지스트리)에 평문 저장"""
+        if token:
+            self._qs.setValue("github_token", token.strip())
+        else:
+            self._qs.remove("github_token")
+
+    def deploy_sync_version(self):
+        return self._qs.value("deploy_sync_version", True, type=bool)
+
+    def set_deploy_sync_version(self, enabled):
+        self._qs.setValue("deploy_sync_version", bool(enabled))
+
     # DICOM 노드
     def dicom_nodes(self):
         return self._load_json("dicom_nodes", [])

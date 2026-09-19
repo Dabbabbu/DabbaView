@@ -191,6 +191,14 @@ class VolumeRenderWidget(QWidget):
         self._reset_btn.clicked.connect(self._reset_camera)
         ctrl.addWidget(self._reset_btn)
 
+        self._mesh_label = QLabel("")
+        ctrl.addWidget(self._mesh_label)
+        self._clear_mesh_btn = QPushButton("메시 지우기")
+        self._clear_mesh_btn.setToolTip("불러온 STL 메시를 3D 화면에서 제거")
+        self._clear_mesh_btn.clicked.connect(self.clear_meshes)
+        self._clear_mesh_btn.setVisible(False)
+        ctrl.addWidget(self._clear_mesh_btn)
+
         ctrl.addStretch()
         layout.addLayout(ctrl)
 
@@ -225,6 +233,7 @@ class VolumeRenderWidget(QWidget):
         self._volume_property.SetSpecular(0.3)
 
         self._volume_actor = None
+        self._mesh_actors = []
         self._vtk_widget.Initialize()
 
     def set_series(self, series):
@@ -246,25 +255,28 @@ class VolumeRenderWidget(QWidget):
         if len(uniform) < 2:
             return
 
-        volume = np.stack(uniform, axis=0).astype(np.int16)
-        self._set_volume_data(volume)
+        volume = np.clip(np.stack(uniform, axis=0), -32768, 32767).astype(np.int16)
+        # 환자 좌표(LPS mm)에 놓아 실제 비율로 보이고 STL 메시와도 겹치도록
+        from .ai.volume import series_spacing_affine
+        _spacing, affine = series_spacing_affine(series)
+        if len(uniform) != len(slices):
+            affine = np.eye(4)
+        self._set_volume_data(volume, affine)
 
-    def _set_volume_data(self, volume_np):
-        """numpy 볼륨을 VTK에 전달"""
+    def _set_volume_data(self, volume_np, affine=None):
+        """numpy 볼륨 (k, row, col)을 VTK에 전달. affine: (col, row, k) 인덱스 → LPS mm"""
+        from vtkmodules.util.numpy_support import numpy_to_vtk
         self._volume_data = volume_np
         d, h, w = volume_np.shape
 
-        # VTK 이미지 데이터 생성
+        # VTK 이미지 데이터 (인덱스 공간) - 위치·간격·방향은 액터 행렬로
         vtk_data = vtk.vtkImageData()
         vtk_data.SetDimensions(w, h, d)
         vtk_data.SetSpacing(1.0, 1.0, 1.0)
         vtk_data.SetOrigin(0, 0, 0)
-
-        flat = volume_np.flatten(order='C')
-        vtk_array = vtk.vtkShortArray()
-        vtk_array.SetNumberOfValues(len(flat))
-        for i, v in enumerate(flat):
-            vtk_array.SetValue(i, int(v))
+        # C 순서 (k, row, col) = x(col)가 가장 빠름 → VTK 점 순서와 같음
+        vtk_array = numpy_to_vtk(np.ascontiguousarray(volume_np).ravel(), deep=True,
+                                 array_type=vtk.VTK_SHORT)
         vtk_data.GetPointData().SetScalars(vtk_array)
 
         # 볼륨 매퍼
@@ -278,6 +290,12 @@ class VolumeRenderWidget(QWidget):
         self._volume_actor = vtk.vtkVolume()
         self._volume_actor.SetMapper(mapper)
         self._volume_actor.SetProperty(self._volume_property)
+        if affine is not None:
+            matrix = vtk.vtkMatrix4x4()
+            for r in range(4):
+                for c in range(4):
+                    matrix.SetElement(r, c, float(affine[r, c]))
+            self._volume_actor.SetUserMatrix(matrix)
         self._renderer.AddVolume(self._volume_actor)
 
         # 프리셋 적용
@@ -318,6 +336,52 @@ class VolumeRenderWidget(QWidget):
         if not self._vtk_ok:
             return
         self._vtk_widget.GetRenderWindow().Render()
+
+    # ─── STL 메시 ───
+
+    MESH_COLORS = [(0.95, 0.85, 0.7), (0.9, 0.4, 0.4), (0.4, 0.6, 0.95),
+                   (0.5, 0.85, 0.5), (0.9, 0.8, 0.3)]
+
+    def add_mesh(self, path):
+        """STL 메시 추가 (좌표는 LPS mm로 가정 - 3D Slicer 기본 내보내기와 같음)"""
+        if not self._vtk_ok:
+            return False
+        reader = vtk.vtkSTLReader()
+        reader.SetFileName(path)
+        reader.Update()
+        polydata = reader.GetOutput()
+        if polydata is None or polydata.GetNumberOfPoints() == 0:
+            raise ValueError(f"STL을 읽지 못했습니다: {path}")
+        normals = vtk.vtkPolyDataNormals()
+        normals.SetInputData(polydata)
+        normals.Update()
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputData(normals.GetOutput())
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        color = self.MESH_COLORS[len(self._mesh_actors) % len(self.MESH_COLORS)]
+        actor.GetProperty().SetColor(*color)
+        actor.GetProperty().SetSpecular(0.3)
+        self._renderer.AddActor(actor)
+        self._mesh_actors.append((path, actor))
+        self._update_mesh_label()
+        self._reset_camera()
+        return polydata.GetNumberOfCells()
+
+    def clear_meshes(self):
+        if not self._vtk_ok:
+            return
+        for _path, actor in self._mesh_actors:
+            self._renderer.RemoveActor(actor)
+        self._mesh_actors = []
+        self._update_mesh_label()
+        self._render()
+
+    def _update_mesh_label(self):
+        import os
+        names = [os.path.basename(p) for p, _ in self._mesh_actors]
+        self._mesh_label.setText(("  메시: " + ", ".join(names)) if names else "")
+        self._clear_mesh_btn.setVisible(bool(names))
 
     def cleanup(self):
         """위젯 정리"""

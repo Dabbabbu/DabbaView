@@ -12,6 +12,9 @@ dist/
 .eggs/
 *.egg-info/
 
+# setup_app.py가 빌드할 때 생성
+dabbaview/_build_info.py
+
 # create_icon.py로 생성되는 파일
 resources/DabbaView.iconset/
 resources/icon_1024.png

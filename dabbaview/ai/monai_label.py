@@ -24,6 +24,7 @@ import uuid
 import numpy as np
 
 from . import nifti
+from ..net_ssl import ssl_context
 
 TIMEOUT = 600  # 추론은 오래 걸릴 수 있음
 
@@ -71,7 +72,8 @@ class MonaiLabelClient:
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            context = ssl_context() if url.startswith("https") else None
+            with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
                 return resp.read(), resp.headers.get("Content-Type", "")
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:300]

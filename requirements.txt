@@ -9,3 +9,7 @@ pypdfium2>=4.0
 striprtf>=0.0.26
 vtk>=9.3  # 3D Volume Rendering
 onnxruntime>=1.17  # AI Research: ONNX 모델 로컬 추론
+nibabel>=5.0  # NIfTI 불러오기/변환
+pynrrd>=1.0  # NRRD 불러오기/변환
+SimpleITK>=2.3  # MetaImage(.mha/.mhd) 불러오기/변환
+certifi  # HTTPS 인증서 (Deploy Web, MONAI Label)
