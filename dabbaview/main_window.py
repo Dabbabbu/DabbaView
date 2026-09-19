@@ -1043,9 +1043,9 @@ class MainWindow(QMainWindow):
     def _choose_copy_destination(self, info):
         """복사할 로컬 폴더 선택 (여유 공간 확인). 취소하면 None"""
         import shutil
-        default = self._settings.value("local_copy_dir", "") or os.path.join(
-            os.path.expanduser("~"), "Documents", "DabbaView Local")
-        os.makedirs(default, exist_ok=True)
+        default = self._settings.value("local_copy_dir", "") or ""
+        if not os.path.isdir(default):   # 폴더를 미리 만들지 않음 (고르기 전에는 아무것도 생기지 않게)
+            default = os.path.join(os.path.expanduser("~"), "Documents")
         dest = QFileDialog.getExistingDirectory(
             self, "로컬 복사본을 저장할 폴더 (선택한 폴더 안에 같은 이름으로 복사)", default)
         if not dest:
