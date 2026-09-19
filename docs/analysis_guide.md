@@ -1,301 +1,327 @@
 # DabbaView AI & Analysis Guide
 
-버전 2.0.0
+버전 2.0.0 · 예시는 **3.0T 심장 MRI(CMR) 임상 영상**을 중심으로 구성했습니다.
 
-> 화면은 설치된 DabbaView 2.0.0을 실제로 실행해서 찍었습니다.
-> - 예시 데이터: 합성 CT 팬텀, 합성 MR(cine · DWI · DCE), 합성 화질 팬텀, 그리고 **실제 ACR 대형 팬텀 영상** (GE SIGNA Architect 3.0T 콘솔 화면 캡처).
-> - 분석 결과는 연구·교육용입니다. 진단용으로 검증된 소프트웨어가 아니므로 원래 판독 워크스테이션·검증된 도구와 대조하세요.
+> **이 가이드의 예시**
+> - GE SIGNA Architect 3.0T를 쓰는 MRI실의 실제 업무 흐름을 따라갑니다.
+>   - SCMR 인증 준비: Cine, T1/T2 Mapping, LGE, Perfusion, Flow
+>   - 반기마다 하는 ACR 팬텀 정도관리
+>   - 화질 평가(MTF · NPS)와 AI 연구
+> - 화면은 설치된 DabbaView 2.0.0을 실제로 실행해서 찍었습니다.
+> - 임상 영상은 공개 문서에 싣기 위해 DabbaView **익명화** 기능으로 환자 이름·ID·생년월일·기관·검사일(2026-01-01로 통일)·오더 정보를 모두 지운 사본입니다 (`CMR^CASE-A` 등). 원본 문자열이 파일 어디에도 남지 않았는지 확인했습니다.
+> - 결과값은 단일 증례에서 도구가 계산한 값입니다. 임상 판단과 정상 범위는 기관 기준과 검증된 소프트웨어를 따르세요. DabbaView는 연구·교육용이며 진단용으로 인증되지 않았습니다.
 
 ## 목차
 
-1. [분석 메뉴 개요](#1-분석-메뉴-개요)
-2. [Cardiac — EF 계산](#2-cardiac--ef-계산)
-3. [Neuro — ADC 컬러맵](#3-neuro--adc-컬러맵)
-4. [Oncology — 종양 부피와 RECIST](#4-oncology--종양-부피와-recist)
-5. [Lung — 폐결절](#5-lung--폐결절)
-6. [Diffusion — ADC 맵과 신호 감쇠](#6-diffusion--adc-맵과-신호-감쇠)
-7. [Perfusion — DCE Ktrans](#7-perfusion--dce-ktrans)
-8. [Image Quality — MTF · SNR · 왜곡 · Auto IQ](#8-image-quality--mtf--snr--왜곡--auto-iq)
-9. [ACR Phantom QC — 실제 데이터 자동 분석](#9-acr-phantom-qc--실제-데이터-자동-분석)
-10. [AI 도구 — TotalSegmentator · MedSAM · ONNX](#10-ai-도구--totalsegmentator--medsam--onnx)
-11. [세그멘테이션](#11-세그멘테이션)
-12. [데이터 내보내기](#12-데이터-내보내기)
-13. [Python 콘솔](#13-python-콘솔)
-14. [오픈 데이터셋](#14-오픈-데이터셋)
+**심장 MRI**
+1. [Cine — LV EF](#1-cine--lv-ef)
+2. [T1 / T2 Mapping](#2-t1--t2-mapping)
+3. [LGE — 5SD 경색 정량](#3-lge--5sd-경색-정량)
+4. [Bull's Eye (AHA 17분절)](#4-bulls-eye-aha-17분절)
+5. [Perfusion — First-pass 시간-신호 곡선](#5-perfusion--first-pass-시간-신호-곡선)
+6. [Flow — Phase Contrast 대동맥 유량](#6-flow--phase-contrast-대동맥-유량)
+
+**정도관리 · 화질**
+
+7. [ACR 팬텀 원클릭 분석](#7-acr-팬텀-원클릭-분석)
+8. [MTF (에지 방법)](#8-mtf-에지-방법)
+9. [Auto IQ Assessment](#9-auto-iq-assessment)
+
+**확산 · AI · 연구**
+
+10. [DWI → ADC Map (L-spine 적용 방법 포함)](#10-dwi--adc-map-l-spine-적용-방법-포함)
+11. [TotalSegmentator 자동 세그멘테이션](#11-totalsegmentator-자동-세그멘테이션)
+12. [Python 콘솔 — 심근 T1 히스토그램](#12-python-콘솔--심근-t1-히스토그램)
+13. [부록: 분석 메뉴, 데이터 내보내기, 오픈 데이터셋](#13-부록)
 
 기본 조작은 [사용자 매뉴얼](manual.md)을 보세요.
 
 ---
 
-## 1. 분석 메뉴 개요
+## 1. Cine — LV EF
 
-| Analysis 메뉴 | 하위 메뉴 (예: Cardiac) |
+**증례 A** (3T SAX bSSFP cine: 9 슬라이스 × 30 위상, 두께 8 mm / 간격 10 mm)
+
+| ED (이완기 말) | ES (수축기 말) |
 |---|---|
-| ![Analysis 메뉴](images/a01_analysis_menu.png) | ![Cardiac](images/a02_cardiac_menu.png) |
+| ![ED](images/g01_cine_ef.jpg) | ![ES](images/g01b_cine_es.jpg) |
 
-1. 메뉴바 **Analysis**에서 카테고리를 고르고 하위 도구를 누릅니다. 카테고리는 다음과 같습니다.
-   - Cardiac · Neuro · Oncology · Lung · MSK · Vascular · Diffusion · Perfusion · Spectroscopy · **Image Quality Assessment** · **ACR Phantom QC**
-2. 오른쪽 **Analysis 패널**에 도구 입력 화면이 열립니다. 결과는 아래쪽 표·그래프에 나오고 **복사 / CSV**로 저장할 수 있습니다.
-3. 맵(ADC, Ktrans, 균일도 지도 등)은 **새 시리즈**로 만들어집니다. 원본은 바뀌지 않습니다.
-4. 대부분의 도구는 **현재 보고 있는 영상과 그 위에 그린 ROI**를 씁니다. 먼저 영상을 띄우고 필요한 ROI나 선을 그린 뒤 실행하세요.
+1. SAX CINE 시리즈를 엽니다.
+2. **Analysis → Cardiac → LV/RV 윤곽 & 기능**을 엽니다.
+3. 첨부(apex)부터 기저부(base)까지 LV가 보이는 슬라이스마다 ED와 ES 위상에서 윤곽을 저장합니다.
+   1. Freehand ROI(**8**)로 **LV 내막**을 그리고 종류 `LV Endo`로 둔 채 **현재 ROI → 윤곽 저장**을 누릅니다.
+   2. 종류를 `LV Epi`로 바꾸고 **외막**을 그려 저장합니다.
+   3. 휠로 위상을 넘기며 ED(가장 큰 내강)와 ES(가장 작은 내강)를 찾습니다.
+   4. 저장한 윤곽은 영상 위에 색으로 남습니다.
+4. **계산**을 누르면 Simpson 원반 합산(면적 × 슬라이스 간격)으로 결과가 나옵니다.
 
-## 2. Cardiac — EF 계산
+   | 지표 | 증례 A |
+   |---|---|
+   | LV EDV | **108 mL** |
+   | LV ESV | **45 mL** |
+   | LV SV | 64 mL |
+   | **LV EF** | **58.7 %** |
+   | LV 심근 질량 | 105 g (1.05 g/mL) |
+   | ED / ES 위상 | 1 ms / 393 ms |
 
-![LV 윤곽과 EF](images/a03_cardiac_ef.jpg)
+> 💡 **슬라이스마다 TriggerTime이 다른 GE cine**: 같은 위상이라도 슬라이스마다 트리거 시각이 몇 ms씩 다릅니다. DabbaView는 윤곽을 **위치별 위상 순번**으로 묶어 ED/ES를 정합니다. (이 가이드를 만들며 실제 영상에서 발견해 고친 부분입니다.)
+>
+> 이 예시의 윤곽은 혈액풀 임계값과 심근 방사 프로파일로 자동 생성했습니다. 기관 판독 규칙(유두근·육주 포함 여부, 기저부 슬라이스 선택)에 맞춰 직접 그리거나 수정하세요.
 
-예시: 합성 cine SAX (슬라이스 3개 × 위상, ED/ES)
+## 2. T1 / T2 Mapping
 
-1. cine SAX 시리즈를 엽니다.
-2. **Analysis → Cardiac → LV/RV 윤곽 기능**을 누릅니다.
-3. 첫 슬라이스·위상에서 Freehand ROI(8)로 LV 내막을 그리고, 종류를 `LV Endo`로 둔 채 **현재 ROI → 윤곽 저장**을 누릅니다.
-4. 종류를 `LV Epi`로 바꾸고 외막을 그려 저장합니다.
-5. 슬라이스와 위상(ED·ES)마다 반복합니다. 저장한 윤곽은 영상 위에 색으로 남습니다.
-6. **슬라이스 간격**을 확인하고 **계산**을 누릅니다.
-   - 결과: EDV · ESV · SV · **EF** · 심근 질량 (예시: EDV 16.9 mL, ESV 8.3 mL, EF 51 %)
-   - 그래프: 위상별 LV 부피 곡선
-7. **Bull's Eye Plot (AHA 17분절)** 을 누르면 분절별 값이 나옵니다.
+### Native T1 (MOLLI 5(3)3, 증례 B)
 
-![Bull's Eye](images/a04_bullseye.png)
+![T1 map](images/g02_t1_map.jpg)
 
-## 3. Neuro — ADC 컬러맵
+1. 원본 MOLLI 영상 시리즈(`ORIG [Loc:…] Pre SAx MOLLI 5(3)3`, 위치마다 TI 8개)를 불러옵니다.
+2. **Analysis → Cardiac → T1 / T2 / T2\* Mapping**을 엽니다.
+3. **입력 시리즈**에서 위치 세 곳의 MOLLI 시리즈를 체크하고 종류를 `T1 (MOLLI, Look-Locker 보정)`으로 둡니다.
+4. **🔍 파라미터 확인**을 누르면 TI를 DICOM에서 읽어 표시합니다 (142, 222, 925, … 3315 ms).
+5. **🗺 맵 생성**을 누르면 픽셀마다 3-파라미터 피팅과 Look-Locker 보정을 합니다. 결과는 `T1 map` 새 시리즈와 Jet 컬러맵으로 나옵니다.
+6. 중격 중간벽에 작은 타원 ROI(**E**)를 그리고 **ROI 평균**을 누릅니다.
+   - 결과: 중격 native T1 **1181 ± 26 ms** (중앙값 1171 ms, 55 픽셀)
 
-![ADC 컬러맵](images/a05_neuro_adc.jpg)
+### T2 (다중 에코, 증례 A)
 
-1. ADC 맵 시리즈를 엽니다. 없으면 먼저 [6번](#6-diffusion--adc-맵과-신호-감쇠)으로 만듭니다.
-2. **Analysis → Neuro → ADC / FA 컬러맵**을 누릅니다.
-3. 맵 종류(ADC / FA)와 컬러맵(Jet · Viridis · Hot …)을 고르고 **🎨 적용**을 누릅니다.
-4. 단위를 자동으로 판별하고 표준 표시 범위를 적용합니다. 오른쪽에 컬러바가 나옵니다.
-5. **DWI–ADC 미스매치** 도구는 진성 확산 제한(DWI↑ ADC↓)과 T2 shine-through를 AI 라벨로 구분해 보여 줍니다. **FLAIR 병변 볼륨**도 같은 메뉴에 있습니다.
+![T2 map](images/g03_t2_map.jpg)
 
-## 4. Oncology — 종양 부피와 RECIST
+1. `SAx T2Map BH` 시리즈(4 위치 × TE 10 / 36 / 62 / 88 ms)를 체크하고 종류를 `T2`로 두고 **맵 생성**을 누릅니다.
+2. 중격 ROI 결과: **43.4 ± 0.9 ms**
+3. 부종이 의심되면 같은 방법으로 분절별 값을 비교하거나, [Bull's Eye](#4-bulls-eye-aha-17분절)에서 맵 평균을 봅니다.
 
-![RECIST](images/a06_recist.jpg)
+> 3T MOLLI·T2 값은 시퀀스와 장비마다 달라서, SCMR 권고대로 **기관별 정상 범위**를 만들어 비교하세요. DabbaView의 맵은 GE가 만든 T1 Map 시리즈와 함께 열어 두고 같은 ROI로 비교할 수 있습니다.
 
-예시: 합성 CT의 간 병변 (지름 36 mm 구)
+## 3. LGE — 5SD 경색 정량
 
-1. CT를 열고 병변이 보이는 슬라이스로 갑니다.
-2. **Landmark (F)** 도구로 병변 중심을 클릭합니다.
-3. **Analysis → Oncology → 종양 볼륨 + RECIST**를 엽니다.
-4. **자동 분할 ±** 값(시드 HU ± 범위)을 정하고 **🌱 랜드마크에서 자동 분할 후 측정**을 누릅니다.
-   - 병변이 AI 라벨로 칠해집니다.
-   - 가장 긴 슬라이스에 **장경(LD)·단경(SA)** 측정선이 그려집니다.
-5. 결과: 부피, 장경, 단경, 최대 3D 지름, 평균 HU (예시: 24.0 mL, 이론값 24.4 mL)
-6. 이미 칠한 라벨이 있으면 **📏 측정 (라벨)** 만 누릅니다.
-7. **Follow-up 비교**에서 이전 검사와 비교합니다. 부피 변화율, RECIST 반응, 배가 시간(두 검사의 StudyDate 사용)이 나옵니다.
+![LGE](images/g05_lge.jpg)
 
-## 5. Lung — 폐결절
+**증례 A** (PSMDE SAX 9 슬라이스, 조영 15분 후)
 
-![폐결절](images/a07_lung_nodule.jpg)
+1. `MAG:SAX PSMDE` 시리즈를 엽니다.
+2. **윤곽 & 기능** 도구에서 슬라이스마다 LV Endo·Epi를 저장합니다 (1번과 같은 방법).
+3. 정상으로 보이는(remote) 심근, 예를 들어 중격 중간벽에 작은 ROI를 그립니다.
+4. **Analysis → Cardiac → LGE 경색 분석**에서 방법 `n-SD (remote ROI)`, n = **5**로 두고 **🩸 LGE 계산**을 누릅니다.
+5. 결과:
+   - 임계값 = remote 평균 + 5 SD. 경색 영역은 AI 라벨 `LGE`로 표시됩니다.
+   - 증례 A: 심근 76 mL (80 g) 중 LGE 3.0 mL, **LV 심근의 3.9 %**
+6. 방법을 `FWHM`으로 바꾸면 심근 최대 신호의 50 %를 기준으로 계산합니다.
 
-1. 폐 창(C −600 / W 1600)으로 결절을 찾습니다.
-2. **Landmark (F)** 로 결절 중심을 클릭합니다.
-3. **Analysis → Lung → 폐결절 측정**에서 임계값(기본 −500 HU)과 최대 반경을 정하고 **🫁 결절 분할·측정**을 누릅니다.
-4. 결과: 부피, 장경, 단경, 최대 3D 지름, 평균·SD HU (예시: 0.83 mL, 장경 12.0 mm)
-   - 혈관은 열림 연산으로 떼어냅니다. 결과는 AI 라벨 `Nodule`로 남습니다.
-5. 같은 메뉴에 **Doubling Time**, **폐기종 LAA%(−950 HU, Perc15)**, **GGO** 도구가 있습니다.
+> 자동 임계값은 심내막 경계의 혈액풀 부분 용적에 민감합니다. 3.9 %처럼 작은 값은 영상에서 **라벨 위치를 확인**하고, 필요하면 내막 윤곽을 안쪽으로 조정한 뒤 다시 계산하세요.
 
-## 6. Diffusion — ADC 맵과 신호 감쇠
+## 4. Bull's Eye (AHA 17분절)
 
-![신호 감쇠 곡선](images/a08_diffusion_decay.jpg)
-
-1. 다중 b 값 DWI 시리즈를 엽니다.
-2. **Analysis → Diffusion → ADC 맵**에서 시리즈를 체크하고 **b-value 감지**를 누릅니다. b 값은 DICOM 태그·설명에서 자동으로 읽습니다.
-3. **계산**을 누르면 단일 지수 피팅으로 `ADC map` 새 시리즈가 만들어집니다.
-4. ROI(E)를 그리고 **b-value 신호 감쇠 곡선**을 누르면 ROI 평균 신호와 피팅 곡선, ADC가 나옵니다.
-5. **IVIM**은 D · D* · f 맵을 만들고, ROI 비선형 피팅 결과를 보여 줍니다.
-
-## 7. Perfusion — DCE Ktrans
-
-![DCE Ktrans](images/a09_dce_ktrans.jpg)
-
-1. DCE 동적 시리즈를 엽니다.
-2. **Analysis → Perfusion → DCE Tofts**를 엽니다.
-3. 동맥에 작은 ROI를 그리고 **AIF: 현재 ROI 저장**을 누릅니다.
-   - 저장하지 않으면 자동 AIF나 Parker 집단 AIF를 쓸 수 있습니다.
-4. AIF 방식을 고르고 **계산**을 누릅니다.
-   - `DCE Ktrans`, `DCE ve`, `DCE kep` 맵이 새 시리즈로 만들어집니다.
-   - 그래프에는 AIF와 조직 곡선이 나옵니다.
-5. 만들어진 Ktrans 시리즈를 열고 Jet 컬러맵을 적용하면 위 화면처럼 보입니다 (예시 중심 Ktrans 0.25 /min, 이론값 0.25).
-6. **DSC**(CBV · CBF · MTT, 감마 바리에이트)와 **시간-신호 곡선(TIC)** 도 같은 메뉴에 있습니다.
-
-## 8. Image Quality — MTF · SNR · 왜곡 · Auto IQ
-
-도구가 자동으로 놓은 ROI는 `IQ …` 이름의 주석입니다. ROI Manager에서 보고 옮길 수 있고, 옮긴 뒤 **다시 계산**을 누르면 됩니다.
-
-### MTF (Edge method)
-
-![MTF](images/a10_iq_mtf.jpg)
-
-1. 팬텀의 선명한 경계(에지)가 보이는 영상을 엽니다.
-2. **Dist (4)** 로 에지를 **가로지르는** 직선을 하나 그립니다.
-3. **Analysis → Image Quality Assessment → MTF**에서 ROI 폭을 정하고 **📈 MTF 계산**을 누릅니다.
-   - 에지 기울기를 줄마다 맞춰 4배 과표본 ESF → LSF → MTF를 구합니다.
-   - 그래프에 **MTF50 · MTF10** 점과 **Nyquist** 선이 나옵니다.
-4. **🤖 자동 (팬텀 가장자리)** 는 선을 긋지 않고 팬텀 오른쪽 경계를 씁니다.
-
-### SNR
-
-![SNR](images/a11_iq_snr.jpg)
-
-1. 균일한 팬텀 영상을 엽니다.
-2. **SNR** 도구에서 방법을 고릅니다.
-   - **단일 영상**: 신호 ROI(물체 75 %) 평균 ÷ 배경 SD. MR 크기 영상은 Rayleigh 보정(÷0.655)을 합니다.
-   - **두 영상**: 같은 조건 두 장의 차영상 SD/√2 (NEMA 방식)
-3. **📶 SNR 계산**을 누르면 신호와 배경 ROI가 자동으로 놓입니다 (예시 SNR 101, 이론값 100).
-4. **CNR**은 ROI 두 개를 그린 뒤 실행합니다: |m1 − m2| / √((σ1² + σ2²)/2), 배경 잡음 기준 CNR도 함께 나옵니다.
-
-### 기하학적 왜곡
-
-![격자 왜곡](images/a12_iq_distortion.jpg)
-
-1. 격자 팬텀 영상을 엽니다.
-2. **Geometric Distortion**에서 공칭 격자 간격(모르면 0)을 넣고 **▦ 격자점 찾기 · 왜곡 계산**을 누릅니다.
-3. 결과:
-   - 격자점마다 이상 위치 대비 변위 화살표 (과장 배율 조절, 초록 < 1 mm, 노랑 < 2 mm, 빨강 ≥ 2 mm)
-   - 벡터장 그래프, 평균·RMS·최대 변위
-4. 격자가 보이지 않는 영상에서는 가짜 결과를 내지 않고 안내를 띄웁니다.
-
-### 그 밖의 IQ 도구
-
-| 도구 | 사용법 |
+| 17분절 native T1 | 벽 두께 · LGE % |
 |---|---|
-| Uniformity | NEMA 5-ROI · ACR PIU · 균일도 지도(편차 %, 컬러맵) |
-| Ghosting | 팬텀 밖 4방향 ROI 자동 배치 → PSG, 고스팅 비율 지도 |
-| NPS | 균일 영역(마지막 ROI 또는 자동) → 2D NPS · 방사 NPS, 백색/상관/구조 잡음 판별 |
-| NEQ | MTF와 NPS를 먼저 계산 → NEQ = S²·MTF²/NPS, q를 넣으면 DQE |
-| Resolution | 점 광원 FWHM(가로·세로), 선 광원 FWHM, 바 패턴 분해 한계 (lp/mm) |
-| Artifact | 링(극좌표) · 지퍼(열·행) · 밴딩(주기 성분) 검출 |
+| ![T1 Bull's Eye](images/g04_bullseye_t1.jpg) | ![벽 두께](images/g04b_bullseye_wall.png) |
 
-### Auto IQ Assessment
+1. 분절을 만들 윤곽이 필요합니다.
+   - T1 Bull's Eye: T1 맵 시리즈의 각 위치(기저부·중간·첨부)에 LV Endo·Epi를 저장합니다.
+   - 벽 두께: cine의 ED 윤곽을 그대로 씁니다.
+2. **Analysis → Cardiac → Bull's Eye Plot**을 엽니다.
+3. **값**을 고르고 **🎯 Bull's Eye 그리기**를 누릅니다.
+   - `벽 두께 (mm)`: cine ED 윤곽에서 계산
+   - `맵 시리즈 평균값`: **맵 시리즈**로 T1 map을 고름
+   - `LGE %`: LGE 분석 뒤 선택
+4. 결과:
+   - 17분절 표와 Bull's Eye 그림이 나옵니다.
+   - 중격 방향은 RV Endo 윤곽이 있으면 자동으로 정하고, 없으면 화면 왼쪽을 중격으로 봅니다.
+   - 증례 B native T1: 기저부 1147–1259 ms, 중간부 1138–1269 ms, 첨부 1042–1367 ms
 
-![Auto IQ](images/a13_iq_auto.jpg)
+![LGE Bull's Eye](images/g05b_bullseye_lge.png)
 
-1. 팬텀 영상을 띄우고 **Auto IQ Assessment → ▶ Auto IQ Assessment**를 누릅니다.
-2. SNR · CNR · NEMA 균일도 · PIU · 고스팅 · MTF50/10 · 잡음을 한 번에 재고, ROI를 모두 영상에 표시합니다.
-3. 결과 표에는 **이전 기록과의 변화**가 나옵니다.
-4. **💾 추세 기록에 저장**, **📄 PDF 보고서**, **📈 추세**로 날짜별 비교를 합니다.
+## 5. Perfusion — First-pass 시간-신호 곡선
 
-## 9. ACR Phantom QC — 실제 데이터 자동 분석
+![Perfusion TIC](images/g06_perfusion.jpg)
 
-예시 데이터는 **실제 ACR 대형 팬텀 촬영 영상**입니다.
-- 장비: GE SIGNA Architect 3.0T, Head 코일
-- 폴더 하나에 콘솔 화면 캡처 JPEG 145장
-- 구성: localizer, T1 (TR 500 / TE 20) 11장, T2 이중 에코 22장과 병원 측정 화면
+**증례 A** (SAX 휴식기 관류 4 위치 × 40 동적 영상)
 
-DICOM이 아니므로 픽셀 크기는 FOV 250 mm로 가정합니다. 캡처 영상의 W/L이 L = W/2라서 비율 검사(PIU·고스팅)는 그대로 유효합니다.
+1. `SAX Perfution Rest` 시리즈를 열고 LV 혈액풀이 가장 밝은 프레임으로 갑니다.
+2. **Analysis → Cardiac → 관류 시간-신호 곡선**을 엽니다.
+3. LV 혈액풀에 ROI를 그리고 **기준 ROI로 저장 (LV 혈액풀)** 을 누릅니다.
+4. 평가할 심근(예: 앞벽 중간벽)에 ROI를 그리고 **📈 곡선 그리기**를 누릅니다.
+5. 결과:
+   - Baseline, Peak, TTP, Upslope, **Relative upslope (심근/LV) = 0.13**
+   - 그래프: LV 혈액풀(빨강)과 심근(노랑) 곡선
+6. 시간축은 GE 동적 영상의 TriggerTime(시작부터 ms)을 씁니다.
+   - GE는 AcquisitionTime이 시리즈 전체에 하나뿐이라, 이 가이드를 만들며 이렇게 처리하도록 고쳤습니다.
+   - 수동으로 정하려면 **프레임 간격**을 입력합니다.
 
-![ACR 메뉴](images/a14_acr_menu.png)
+## 6. Flow — Phase Contrast 대동맥 유량
 
-1. 팬텀 폴더(DICOM 또는 이미지 폴더)를 엽니다.
+![Flow](images/g07_flow.jpg)
+
+> 이 예시의 위상대조 영상은 **합성 데이터**입니다 (상행 대동맥, VENC 150 cm/s, 정답 순 유량 30.4 mL/beat).
+> 실제 증례의 `2D Fast PC` 시리즈 일부가 OneDrive에서 내려받아지지 않아(클라우드 전용 파일) 정답을 아는 합성 영상으로 절차를 보였습니다.
+> 실제 영상은 OneDrive 폴더를 **"항상 이 기기에 유지"** 로 받은 뒤 같은 방법으로 분석하면 됩니다.
+
+1. 위상(phase/velocity) 시리즈를 열고 대동맥 단면에 원형 ROI(**E**, Shift를 누른 채 그리면 원)를 그립니다.
+2. **Analysis → Cardiac → Phase Contrast 유량**을 엽니다.
+3. VENC는 DICOM(0018,9197)에서 자동으로 읽습니다. 위상 값 형식(부호 있는 12비트 등)과 혈관(`Aorta (Qs)`)을 고릅니다.
+4. **💧 유량 계산**을 누르면 같은 위치의 모든 위상에 ROI를 적용해 다음을 계산합니다.
+   - Forward 33.1 mL, Backward 2.7 mL
+   - **Net 30.4 mL** (정답 30.4)
+   - 역류율 8.2 %, 최대 속도 116 cm/s, 심박출량
+5. 폐동맥을 `Pulmonary artery (Qp)`로 한 번 더 계산하면 **Qp/Qs**가 나옵니다.
+
+## 7. ACR 팬텀 원클릭 분석
+
+**실제 ACR 대형 팬텀 영상** (GE SIGNA Architect 3.0T, Head 코일, 콘솔 화면 캡처 145장). 반기마다 장비 3대를 점검하는 흐름입니다.
+
+| slice 1 (두께·위치·분해능·기하) | slice 11 (저대조도 스포크) |
+|---|---|
+| ![slice 1](images/g08_acr_slice1.jpg) | ![slice 11](images/g08_acr_slice11.jpg) |
+
+1. 팬텀 폴더를 엽니다 (DICOM 또는 이미지 폴더).
 2. **Analysis → ACR Phantom QC → ▶ Auto Analyze (7개 검사)** 를 누릅니다.
-3. **영상 자동 찾기**
-   - localizer와 T1 slice 1–11(격자 영상이 5번째)을 찾습니다.
-   - T2는 이중 에코 중 둘째 에코를 씁니다. DICOM이면 EchoTime으로 구분합니다.
-4. 검사마다 해당 슬라이스로 이동해 ROI·측정선을 그리며 진행합니다. 진행 목록에 ✓/✗가 표시됩니다.
+   - localizer, T1 slice 1–11, T2 둘째 에코를 자동으로 찾습니다.
+   - 검사마다 슬라이스를 옮겨 가며 ROI·측정선을 그립니다.
+3. 결과표 (3.0T ACR 기준, Settings → ACR QC에서 변경):
 
-| slice 1: 두께·위치·분해능·기하 | slice 7: 균일도·고스팅 | slice 11: 저대조도 |
-|---|---|---|
-| ![slice 1](images/a15_acr_slice1.jpg) | ![slice 7](images/a16_acr_slice7.jpg) | ![slice 11](images/a17_acr_slice11.jpg) |
+| 검사 | T1 | T2 | 기준 | 판정 |
+|---|---|---|---|---|
+| 기하학적 정확도 | LOC 147.0, S5 189.3–191.2 mm | – | 148 ± 2 / 190 ± 2 mm | 적합 |
+| 고대조도 분해능 | UL 1.0 / LR 0.9 mm | 1.0 / 1.0 mm | ≤ 1.0 mm | 적합 |
+| 절편 두께 | 5.32 mm | 5.14 mm | 5.0 ± 0.7 mm | 적합 |
+| 절편 위치 (S1, S11) | −0.3, −3.3 mm | −0.3, −3.2 mm | ≤ 5 mm | 적합 |
+| PIU | 86.9 % | 87.7 % | ≥ 82 % | 적합 |
+| 고스팅 PSG | 0.02 % | 0.29 % | ≤ 2.5 % | 적합 |
+| 저대조도 스포크 | 38 | 37 | ≥ 37 | 적합 |
 
-5. 결과 표는 항목마다 **적합(초록) / 부적합(빨강)** 으로 나오고 맨 아래에 종합 판정이 있습니다.
+![ACR 패널](images/g08_acr_panel.png)
 
-![ACR 결과 패널](images/a18_acr_panel.png)
+4. ROI를 옮기거나 스포크 수를 고치면 자동으로 다시 계산됩니다.
+5. **📄 Export Report**를 누르고 병원·호기·장비·검사자를 넣으면 기록지(PDF · Word · Excel)가 만들어집니다.
+   - 호기(1·2·3호기)를 구분해 저장하면 장비별 추세를 비교할 수 있습니다.
 
-   실제 데이터 결과 (기준은 3.0T ACR, Settings → ACR QC에서 변경):
-
-| 검사 | T1 | T2 | 기준 | 판정 | 병원 수동 측정 |
-|---|---|---|---|---|---|
-| 기하학적 정확도 | LOC 147.0, S5 189.3–191.2 mm | – | 148 ± 2 / 190 ± 2 mm | 적합 | 148 / 190–191 |
-| 고대조도 분해능 | UL 1.0 / LR 0.9 mm | 1.0 / 1.0 mm | ≤ 1.0 mm | 적합 | – |
-| 절편 두께 | 5.32 mm | 5.14 mm | 5.0 ± 0.7 mm | 적합 | 약 5.05 |
-| 절편 위치 (S1, S11) | −0.3, −3.3 mm | −0.3, −3.2 mm | ≤ 5 mm | 적합 | 1, 3 mm |
-| 균일도 PIU | 86.9 % | 87.7 % | ≥ 82 % | 적합 | 89.5 / 89.7 |
-| 고스팅 PSG | 0.02 % | 0.29 % | ≤ 2.5 % | 적합 | 거의 0 |
-| 저대조도 스포크 | 38 | 37 | ≥ 37 | 적합 | – |
-
-6. **수동 수정**
-   - ROI·측정선을 끌어 옮기면 자동으로 다시 계산됩니다 (또는 **↻ 수동 수정 후 다시 계산**).
-   - 저대조도 스포크 수와 분해능은 패널 표에서 직접 고칩니다.
-   - 원판·구멍 배열은 초록(보임) / 빨강(안 보임)으로 표시되니 보고 확인하세요.
-7. **📄 Export Report…** 에서 병원·호기·검사자 등을 넣고 PDF / Word / Excel을 고릅니다.
-   - 기록지 형식: 7개 항목 T1/T2, 종합 판정, ROI 그린 영상
-   - "추세 기록에도 저장"을 체크하면 날짜별 기록에 남습니다.
-
-| 내보내기 | 보고서 (PDF) |
+| 내보내기 | 기록지 (PDF) |
 |---|---|
-| ![Export](images/a19_acr_export.png) | ![Report](images/a20_acr_report.png) |
+| ![Export](images/g08_acr_export.png) | ![Report](images/g08_acr_report.png) |
 
-8. **📈 추세**에서 항목별 날짜 그래프와 기준선을 봅니다.
+6. **📈 추세**에서 반기별 값을 기준선과 함께 봅니다.
 
-![ACR 추세](images/a21_acr_trend.png)
+![추세](images/g08_acr_trend.png)
 
-## 10. AI 도구 — TotalSegmentator · MedSAM · ONNX
+## 8. MTF (에지 방법)
 
-| 🧩 Models 탭 | 🤖 모델 탭 (ONNX · MONAI) |
+![MTF](images/g09_mtf_acr.jpg)
+
+ACR 팬텀 slice 7의 팬텀 가장자리를 에지로 썼습니다.
+
+1. 팬텀 영상을 열고 **Analysis → Image Quality Assessment → MTF (Edge method)** 를 엽니다.
+2. 다음 둘 중 하나로 계산합니다.
+   - 에지를 가로지르는 직선(**4**)을 그리고 **📈 MTF 계산**
+   - **🤖 자동 (팬텀 가장자리)**
+3. 계산 과정:
+   1. 에지를 줄마다 찾아 기울기를 맞춥니다 (**기울어진 에지 · Fujita 방식**과 같은 과표본 원리, 4배 과표본).
+   2. ESF를 미분해 LSF를 얻습니다.
+   3. LSF에 Hann 창을 적용하고 FFT를 해 MTF를 구합니다. 차분에 대한 sinc 보정도 합니다.
+4. 결과: **MTF50 0.51 lp/mm, MTF10 0.75 lp/mm**, Nyquist 1.02 lp/mm (화면 캡처 0.49 mm 픽셀 기준)
+5. 정확한 시스템 MTF를 재려면 DICOM 원본에서, 에지를 행렬에 대해 2–5° 기울여 촬영한 **tilted-edge 팬텀**을 쓰세요.
+6. **NPS** 도구로 같은 팬텀의 잡음 스펙트럼을 구하면 **NEQ = S²·MTF²/NPS** 도 계산됩니다.
+
+## 9. Auto IQ Assessment
+
+![Auto IQ](images/g10_autoiq_acr.jpg)
+
+1. 균일한 팬텀 영상(ACR slice 7)을 띄우고 **Analysis → Image Quality Assessment → Auto IQ Assessment → ▶** 를 누릅니다.
+2. 한 번에 측정되는 항목:
+
+   | SNR | CNR | NEMA 균일도 | PIU | PSG | MTF50 / MTF10 |
+   |---|---|---|---|---|---|
+   | 234 | 234 | 94.9 % | 86.5 % | 0.02 % | 0.50 / 0.70 lp/mm |
+
+3. **💾 추세 기록에 저장** → 다음 점검 때 "이전" 열과 변화량이 함께 나옵니다. **📄 PDF 보고서**도 만들 수 있습니다.
+
+> ⚠ 8비트 화면 캡처는 배경 SD가 1 미만(양자화)이라 SNR이 과대 추정되고, 결과에 경고가 표시됩니다. SNR은 DICOM 원본으로, 가능하면 **두 영상 차분법(NEMA)** 으로 재세요 (SNR 도구 → 방법 `두 영상`).
+
+## 10. DWI → ADC Map (L-spine 적용 방법 포함)
+
+![ADC](images/g11_dwi_adc.jpg)
+
+> 이번에 쓸 수 있는 L-spine DWI 원본이 없어 **뇌 DWI (b0 / b1000, 24 슬라이스, 익명화)** 로 보였습니다. L-spine DWI도 같은 순서입니다.
+
+1. DWI 시리즈를 열고 **Analysis → Diffusion → ADC 맵**을 엽니다.
+2. 시리즈를 체크하고 **b-value 감지**를 누릅니다 → `0, 1000`
+   - GE 가공 DWI는 b0 영상에 b-value 태그가 없는 경우가 있습니다. DabbaView는 이를 b = 0으로 인식합니다 (이번에 고침).
+3. **계산**을 누르면 단일 지수 피팅으로 `ADC map` 새 시리즈가 만들어집니다 (중앙값 1254 ×10⁻⁶ mm²/s).
+4. 검증: 장비가 만든 ADC 시리즈와 슬라이스별 중앙값 비가 **1.003** (IQR 1.002–1.004)으로 일치했습니다.
+5. **L-spine에 적용할 때**
+   - 척추체·추간판에 ROI를 그리고 **ROI 평균**으로 ADC를 잽니다. 골수 병변이나 추간판 변성을 비교할 수 있습니다.
+   - AI 연구(MedGemma · SPIDER): SPIDER 데이터셋(요추 T1/T2/T2-SPACE 시상면, 추체·추간판·척추관 마스크)을 NIfTI로 열어 라벨을 확인하고, **📦 내보내기**로 train/val/test를 나눕니다.
+
+## 11. TotalSegmentator 자동 세그멘테이션
+
+| Models 탭 | 복부 CT 결과 (구조 77개) |
 |---|---|
-| ![Models](images/a24_models.png) | ![ONNX](images/a25_model_onnx.png) |
+| ![Models](images/g13_models_tab.png) | ![TotalSegmentator](images/g13_totalseg.jpg) |
 
-1. **AI Research 패널**을 엽니다 (도구 막대 🧠 AI, **Ctrl+Shift+A**).
-2. **🧩 Models** 탭에서 모델마다 **설치 / 실행**을 누릅니다.
-   - 모델: TotalSegmentator, nnU-Net v2, MONAI Label, MedSAM, 사용자 ONNX, REST API
-   - TotalSegmentator·nnU-Net은 PyTorch가 필요합니다. **설치** 버튼이 DabbaView 전용 Python 환경을 만들어 `pip install` 합니다 (시스템 Python 3.9 이상 필요).
-3. **TotalSegmentator**: 작업(total, lung_vessels 등)과 fast 옵션을 고르고 **실행**을 누릅니다. 결과 라벨이 영상 위에 겹쳐 나옵니다.
-4. **MedSAM**
-   - Settings → AI에 encoder/decoder ONNX를 지정합니다.
-   - 영상에서 **M** 키를 누르고 병변을 클릭(또는 박스)하면 한 번에 분할합니다.
-5. **ONNX**: 🤖 모델 탭에서 `.onnx` 파일을 고르고 입력 창(W/L)과 크기를 맞춰 실행합니다.
-   - (N,C,H,W) 모델은 슬라이스별로, (N,C,D,H,W) 모델은 3D로 돌립니다.
-6. **MONAI Label**: 서버 주소를 넣고 자동 분할 → 수정 → 제출 → 학습 순서로 active learning을 합니다.
+**실제 복부 CT 문맥기 (100 슬라이스, 익명화)**
 
-## 11. 세그멘테이션
+1. AI 패널(**Ctrl+Shift+A**) → **🧩 Models** 탭에서 TotalSegmentator **설치**를 누릅니다.
+   - DabbaView 전용 Python 환경에 설치됩니다 (PyTorch 포함, 수 GB).
+   - 처음 실행할 때 모델 가중치를 내려받습니다.
+2. CT 시리즈를 띄우고 작업 `total`, **빠르게 (--fast, 3 mm)** 를 고른 뒤 **실행**을 누릅니다.
+3. 약 1.5분(CPU) 뒤 **구조 77개**가 라벨로 겹쳐 나옵니다. 세그멘트 탭 통계의 부피 예:
 
-![세그멘테이션](images/a22_segmentation.jpg)
+   | 간 | 비장 | 우신 | 좌신 | 담낭 | 위 | 췌장 |
+   |---|---|---|---|---|---|---|
+   | 1278 mL | 92 mL | 124 mL | 143 mL | 32 mL | 234 mL | 61 mL |
 
-1. AI 패널의 **✏️ 세그멘트** 탭을 엽니다.
-2. 라벨을 추가하고 이름·색을 정합니다 (예: `Tumor`, `Bone`).
-3. 도구를 고릅니다.
-   - **D Brush / X Eraser**: 크기 슬라이더로 조절
-   - **W Magic Wand**: 클릭한 값 ± 허용범위의 연결 영역, 3D 옵션
-   - **G Threshold**: 값 범위를 미리 보고 현재 슬라이스 또는 전체에 적용
-4. 몇 장만 칠하고 **슬라이스 보간**을 누르면 사이를 자동으로 채웁니다.
-5. 통계(부피 mL · 복셀 · 슬라이스 범위)를 확인합니다. 마스크는 시리즈별로 자동 저장됩니다.
+4. 심장 CT(CCTA)에서는 작업을 `heartchambers_highres`(라이선스 필요) 또는 `total`로 두면 심방·심실·대동맥 구조를 얻을 수 있습니다.
+   - CCTA vs CMR 비교 연구에서 CT 심실 부피를 CMR cine 결과(1번)와 비교할 때 쓸 수 있습니다.
+5. 결과는 **📦 내보내기**에서 NIfTI / DICOM SEG로 저장합니다.
 
-## 12. 데이터 내보내기
+> TotalSegmentator는 기본으로 익명 사용 통계를 보냅니다 (영상은 보내지 않음). 끄려면 `~/.totalsegmentator/config.json`에 `"send_usage_stats": false`를 넣습니다.
+
+## 12. Python 콘솔 — 심근 T1 히스토그램
+
+![콘솔](images/g12_console_t1_hist.jpg)
+
+1. T1 맵(2번)을 띄우고 같은 슬라이스에 LV Endo와 Epi를 자유곡선 ROI(**8**)로 차례로 그립니다.
+2. **F3**으로 Python 콘솔을 열고 아래 코드를 실행합니다 (**Ctrl/⌘+Enter**).
+
+```python
+from dabbaview.roi_tools import mask_of
+img = app.current_image                      # T1 맵 (ms)
+rois = [a for a in app.viewport.annotations_here() if a['type'] == 'roi']
+endo, epi = rois[-2], rois[-1]                # 마지막으로 그린 자유곡선 ROI 두 개 = Endo, Epi
+myo = mask_of(epi, img.shape) & ~mask_of(endo, img.shape)
+t1 = img[myo & (img > 0)]
+print(f'심근 native T1 = {t1.mean():.0f} ± {t1.std():.0f} ms (n={t1.size}, 중앙값 {np.median(t1):.0f})')
+plt.hist(t1, bins=40, range=(800, 2000), color='tab:orange')
+plt.axvline(t1.mean(), color='k', ls='--'); plt.xlabel('T1 (ms)'); plt.title('Myocardial native T1 (3T MOLLI)')
+```
+
+3. 출력: `심근 native T1 = 1261 ± 214 ms (n=2810, 중앙값 1215)`
+   - 그래프는 콘솔 오른쪽에 나옵니다.
+   - 심근 링 전체는 경계의 혈액풀 부분 용적 때문에 SD가 큽니다. 논문용 값은 중간벽 ROI나 경계를 안쪽으로 줄인 마스크를 쓰세요. 예: `ndi.binary_erosion(myo, iterations=1)`
+4. 자주 쓰는 코드는 **매크로로 저장**해 메뉴에서 바로 실행합니다.
+5. `app.add_series(배열, "이름")`으로 계산 결과를 새 시리즈로 추가할 수 있습니다 (예: ECV 맵 = (1 − Hct) × ΔR1_myo / ΔR1_blood).
+
+## 13. 부록
+
+### 분석 메뉴
+
+| Analysis 메뉴 | Cardiac 하위 메뉴 |
+|---|---|
+| ![Analysis](images/a01_analysis_menu.png) | ![Cardiac](images/a02_cardiac_menu.png) |
+
+- 카테고리: Cardiac · Neuro · Oncology · Lung · MSK · Vascular · Diffusion · Perfusion · Spectroscopy · Image Quality Assessment · ACR Phantom QC
+- 결과는 오른쪽 **Analysis 패널**의 표·그래프로 나오고, **복사 / CSV**로 저장합니다. 맵은 새 시리즈로 만들어져 원본은 바뀌지 않습니다.
+
+### 데이터 내보내기
 
 ![내보내기](images/a23_export.png)
 
-1. **📦 내보내기** 탭에서 대상(현재 시리즈 / 워크리스트)과 형식을 고릅니다.
-   - 형식: NIfTI, NumPy, PNG 시퀀스, COCO, Pascal VOC, DICOM SEG
-2. train / val / test 비율과 seed를 정하면 자동으로 분할합니다.
-3. 전처리를 선택할 수 있습니다: 라벨 영역 크롭, 리샘플링, 필터, 정규화.
-4. **내보내기…** 를 누르면 폴더에 저장됩니다. DICOM SEG는 원본 검사와 연결됩니다.
-5. 형식만 바꿀 때는 **File → Convert / Export As** 를 씁니다 (DICOM ↔ NIfTI ↔ NRRD ↔ NumPy).
+- 형식: NIfTI · NumPy · PNG · COCO · Pascal VOC · DICOM SEG
+- train / val / test 자동 분할과 전처리(크롭 · 리샘플 · 정규화)를 지원합니다.
+- DICOM ↔ NIfTI 변환은 **File → Convert / Export As** 를 씁니다.
 
-## 13. Python 콘솔
-
-![Python 콘솔](images/a26_console.jpg)
-
-1. **F3** 또는 Tools → 🐍 Python Console을 엽니다.
-2. 다음 변수가 준비되어 있습니다.
-   - `app.current_image`: 현재 슬라이스 배열
-   - `app.current_series`, `app.current_volume`
-   - `np`, `plt`
-3. 코드를 입력하고 실행하면 출력과 matplotlib 그래프가 콘솔 옆에 나옵니다.
-   - 예: 위 화면은 현재 CT 슬라이스의 HU 히스토그램입니다.
-4. 자주 쓰는 코드는 **매크로**로 저장해 메뉴에서 바로 실행합니다 (예: Otsu 임계값).
-
-```python
-img = app.current_image
-body = img[img > -500]
-print(img.shape, body.mean())
-plt.hist(body.ravel(), bins=120, range=(-200, 300))
-```
-
-## 14. 오픈 데이터셋
+### 오픈 데이터셋
 
 ![Open Datasets](images/a27_open_datasets.png)
 
-1. **Help → 📚 Open Datasets** 를 엽니다.
-2. 공개 의료영상 데이터셋 목록이 나옵니다. 항목을 누르면 브라우저로 열립니다.
-   - 예: TCIA, MedPix, MIMIC-CXR, NLST, UK Biobank, OpenNeuro, Grand Challenge, Medical Segmentation Decathlon, ACDC, BraTS, AMOS
-3. 받은 데이터는 DICOM 폴더 또는 NIfTI로 열어 이 가이드의 도구를 그대로 쓸 수 있습니다.
+**Help → 📚 Open Datasets**에서 공개 데이터셋 목록을 엽니다.
+- 예: TCIA, MIMIC-CXR, NLST, OpenNeuro, Medical Segmentation Decathlon, **ACDC (심장 cine)**, BraTS, AMOS
+- 요추 연구용 **SPIDER** 데이터셋은 Grand Challenge / Zenodo에서 받습니다.
