@@ -22,6 +22,10 @@ def main():
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
+    # 슬롯에서 처리되지 않은 예외가 나도 앱 전체가 죽지 않게 (로그 + 상태바 알림)
+    from . import crash_guard
+    crash_guard.install()
+
     app = QApplication(sys.argv)
     app.setApplicationName("DabbaView")
     app.setApplicationVersion(__version__)
@@ -37,6 +41,7 @@ def main():
         pass
 
     window = MainWindow()
+    crash_guard.set_window(window)
     window.setAcceptDrops(True)  # 드래그 앤 드롭 활성화
     window.show()
 
