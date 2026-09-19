@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QAction, QActionGroup, QFileDialog, QStatusBar,
     QSlider, QLabel, QProgressDialog, QMessageBox,
     QSpinBox, QApplication, QMenuBar, QTabWidget, QMenu, QStackedWidget,
-    QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy, QShortcut
+    QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy, QShortcut, QDialog
 )
 from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings, QObject, QEvent,
                           QVariantAnimation, QEasingCurve, QTimer, QUrl)
@@ -149,29 +149,6 @@ class DirectoryLoadWorker(QThread):
         self.finished_loading.emit(loader, loaded)
 
 
-def _cine_icon(playing):
-    """시네 버튼 아이콘: 재생 = 초록 ▶, 재생 중 = 빨강 ■ (어두운·밝은 테마 모두 보이게 직접 그림)"""
-    from PyQt5.QtGui import QColor, QPainter, QPixmap, QPolygonF
-    from PyQt5.QtCore import QPointF, QRectF
-    icon = QIcon()
-    for size in (16, 32, 64):
-        pm = QPixmap(size, size)
-        pm.fill(Qt.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        m = size * 0.2
-        if playing:
-            p.setBrush(QColor("#ff5c5c"))
-            p.drawRoundedRect(QRectF(m, m, size - 2 * m, size - 2 * m), size * 0.08, size * 0.08)
-        else:
-            p.setBrush(QColor("#3ddc84"))
-            p.drawPolygon(QPolygonF([QPointF(m * 1.2, m), QPointF(size - m, size / 2), QPointF(m * 1.2, size - m)]))
-        p.end()
-        icon.addPixmap(pm)
-    return icon
-
-
 _ORPHAN_THREADS = []   # 종료할 때 끝나지 않은 로더 (지우면 Qt가 비정상 종료)
 
 
@@ -253,6 +230,8 @@ class MainWindow(QMainWindow):
         self._restore_series_panel()
         self._install_panel_close()
         self._install_overlay_items()
+        self._restored_studies = set()
+        self._setup_worksave()
         self._report_library.set_folder(self._app_settings.report_folder())
 
         # 다크 테마
@@ -277,10 +256,16 @@ class MainWindow(QMainWindow):
         self._left_tabs = QTabWidget()
         self._left_tabs.setDocumentMode(True)
         self._left_tabs.setStyleSheet(
+            # 탭 오른쪽 빈 자리까지 어두운 배경 (macOS 기본 스타일이 밝은 네모로 그리던 곳)
+            "QTabWidget::pane { background: #1e1e1e; border: none; }"
+            "QTabWidget > QWidget { background: #1e1e1e; }"
+            "QTabBar { background: #1e1e1e; qproperty-drawBase: 0; }"
             "QTabBar::tab { background: #232323; color: #aaa; padding: 5px 16px; border: none; }"
             "QTabBar::tab:selected { background: #333; color: #fff;"
             " border-bottom: 2px solid #3d8bfd; }"
             "QTabBar::tab:hover { color: #ddd; }")
+        self._left_tabs.tabBar().setAutoFillBackground(True)
+        self._left_tabs.tabBar().setDrawBase(False)
         outer_layout.addWidget(self._left_tabs)
         series_page = QWidget()
         self._series_page = series_page
@@ -839,7 +824,7 @@ class MainWindow(QMainWindow):
         action = self._act_cine
         action.setText("■ Stop" if playing else "▶ Play")
         action.setIconText("■ Stop" if playing else "▶ Play")
-        action.setIcon(_cine_icon(playing))
+        # 아이콘을 붙이면 툴바 버튼이 다른 버튼보다 커짐 → 기호는 글자로만 (메뉴에서도 같은 모양)
         action.setToolTip("시네 정지 (P)" if playing else "시네 재생 (P)")
 
     def _create_image_actions(self):
@@ -1335,6 +1320,7 @@ class MainWindow(QMainWindow):
         if notes:
             message += "  ·  " + "  ·  ".join(notes)
         self._statusbar.showMessage(message, 12000 if notes else 8000)
+        QTimer.singleShot(0, self._offer_restore)
 
     # ─── DICOM 외 포맷: 마스크 / 라벨맵 / DICOM SEG / STL ───
 
@@ -2242,6 +2228,124 @@ class MainWindow(QMainWindow):
 
     # ─── 주석 저장 / 불러오기 ───
 
+    # ─── 작업(ROI · 측정 · 주석) 저장 · 복원 ───
+    def _setup_worksave(self):
+        self._work_saved_at = 0
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.timeout.connect(self._autosave_work)
+        self._apply_autosave_settings()
+
+    def _apply_autosave_settings(self):
+        minutes = self._app_settings.autosave_minutes()
+        if self._app_settings.autosave_enabled():
+            self._autosave_timer.start(minutes * 60 * 1000)
+        else:
+            self._autosave_timer.stop()
+
+    def _autosave_work(self):
+        from . import worksave
+        if not worksave.has_work(self._annotation_store):
+            return
+        try:
+            made = worksave.save_sidecar(self._annotation_store, self._loader.get_series_list())
+        except OSError as e:
+            self._statusbar.showMessage(f"자동 저장 실패: {e}", 6000)
+            return
+        if made:
+            self._work_saved_at = time.monotonic()
+            self._statusbar.showMessage(f"작업 자동 저장 ({len(made)}개 검사) — {worksave.base_dir()}", 4000)
+
+    def _offer_restore(self):
+        """같은 검사를 다시 열었을 때 저장해 둔 주석 복원"""
+        from . import worksave
+        from .worksave_dialogs import RestoreDialog
+        mode = self._app_settings.restore_work()
+        if mode == "never" or not self._loader.get_series_list():
+            return
+        studies = sorted({s.study_uid for s in self._loader.get_series_list() if s.study_uid})
+        found = [f for f in worksave.sidecar_for_studies(studies) if f[0] not in self._restored_studies]
+        # 원본 DICOM 개인 태그에 저장해 둔 것도 함께
+        in_dicom = worksave.collect_from_dicom(self._loader.get_series_list(), self._annotation_store)
+        if not found and not in_dicom:
+            return
+        shown = found + ([("DICOM 태그", "", sum(len(v) for v in in_dicom.values()))] if in_dicom else [])
+        if mode == "ask" and RestoreDialog(shown, self).exec_() != QDialog.Accepted:
+            self._restored_studies.update(study for study, _p, _n in found)
+            return
+        total = 0
+        from .annotations import ensure_fields
+        for key, items in in_dicom.items():
+            for ann in items:
+                self._annotation_store.add(key, ensure_fields(dict(ann)))
+                total += 1
+        for study, path, _n in found:
+            try:
+                total += self._annotation_store.load_json(path, merge=True)
+            except (OSError, ValueError) as e:
+                self._statusbar.showMessage(f"복원 실패: {e}", 6000)
+            self._restored_studies.add(study)
+        if total:
+            self._statusbar.showMessage(f"이전 작업 {total}개 복원 (자동 저장 폴더)", 8000)
+            for vp in self._all_viewports():
+                vp.update()
+
+    def _save_work_interactive(self):
+        """저장 방법을 고르고 저장. 저장했으면 True"""
+        from . import worksave
+        from .worksave_dialogs import SAVE_COPY, SAVE_OVERWRITE, SaveChoiceDialog
+        dialog = SaveChoiceDialog(self._last_dir(), self)
+        if dialog.exec_() != QDialog.Accepted:
+            return False
+        series_list = self._loader.get_series_list()
+        method = dialog.method()
+        try:
+            if method == SAVE_COPY:
+                folder = dialog.folder()
+                if not folder:
+                    return False
+                copied, out = worksave.save_copy(self._annotation_store, series_list, folder)
+                self._statusbar.showMessage(f"사본 저장: DICOM {copied}개 · {out}", 8000)
+            elif method == SAVE_OVERWRITE:
+                if QMessageBox.question(
+                        self, "원본에 덮어쓰기",
+                        "원본 DICOM 파일이 수정됩니다 (개인 태그에 주석을 넣고 .bak 백업을 만듭니다).\n계속할까요?",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                    return False
+                done, errors = worksave.write_into_dicom(self._annotation_store, series_list,
+                                                         backup=self._app_settings.dicom_edit_backup())
+                message = f"원본에 저장: {done}개 파일"
+                if errors:
+                    message += f" ({len(errors)}개 실패: {errors[0]})"
+                self._statusbar.showMessage(message, 8000)
+            else:
+                made = worksave.save_sidecar(self._annotation_store, series_list)
+                self._statusbar.showMessage(f"주석 저장 ({len(made)}개 검사) — {worksave.base_dir()}", 8000)
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "저장", f"저장하지 못했습니다:\n{e}")
+            return False
+        self._work_saved_at = time.monotonic()
+        return True
+
+    def _ask_save_work_on_exit(self):
+        """종료 전 작업 저장 확인. 종료해도 되면 True, 취소면 False"""
+        from . import worksave
+        from .worksave_dialogs import ExitSaveDialog
+        if not worksave.has_work(self._annotation_store):
+            return True
+        mode = self._app_settings.exit_save()
+        if mode == "never":
+            return True
+        if mode == "auto":
+            self._autosave_work()
+            return True
+        dialog = ExitSaveDialog(self._annotation_store, self)
+        dialog.exec_()
+        if dialog.choice == ExitSaveDialog.CANCEL:
+            return False
+        if dialog.choice == ExitSaveDialog.SAVE:
+            return self._save_work_interactive()
+        return True
+
     def _save_annotations(self):
         if self._annotation_store.count() == 0 and not self._annotation_store.key_images():
             QMessageBox.information(self, "Save Annotations", "저장할 주석이 없습니다.")
@@ -2274,6 +2378,7 @@ class MainWindow(QMainWindow):
             if self._app_settings.report_folder() != self._report_library.folder:
                 self._report_library.set_folder(self._app_settings.report_folder())
             self._apply_overlay_items()
+            self._apply_autosave_settings()
             self._statusbar.showMessage("설정을 저장했습니다.", 4000)
 
     def _rebuild_preset_menu(self):
@@ -2441,6 +2546,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Capture", f"저장하지 못했습니다:\n{filepath}")
 
     def closeEvent(self, event):
+        if not self._ask_save_work_on_exit():   # 저장하지 않은 ROI · 측정 · 주석
+            event.ignore()
+            return
         # 불러오는 중에 종료(⌘Q 포함): 로더를 취소하고 끝날 때까지 잠시 기다림 - 클라우드 경고창에
         # 답을 기다리던 로더도 풀어 줌. 돌고 있는 QThread를 지우면 앱이 비정상 종료됨
         box = getattr(self, "_cloud_box", None)
