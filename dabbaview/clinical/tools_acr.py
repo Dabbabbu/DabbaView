@@ -25,6 +25,9 @@ from .panel import SeriesPicker, Tool
 
 STEPS = [("find", "0. 영상 찾기 (localizer · T1 · T2)")] + list(acr.TESTS)
 GREEN, RED, GREY = "#2e9e4f", "#d64545", "#888888"
+PASS_COLOR, FAIL_COLOR = "#3ddc84", "#ff4d4d"     # 영상 위 ROI (적합 / 부적합)
+TEST_COLORS = {"geometry": "#4aa3ff", "resolution": "#b18cff", "thickness": "#ff5ad2", "position": "#ff9f40",
+               "uniformity": "#50d890", "ghosting": "#f2c200", "low_contrast": "#00c8e0"}
 RES_CHOICES = [("-", None), ("1.1 mm", 1.1), ("1.0 mm", 1.0), ("0.9 mm", 0.9)]
 
 
@@ -409,10 +412,31 @@ class ACRTool(Tool):
                 grid.addWidget(cb, r, 1 + 2 * c, 1, 2)
             self.res_combos[seq] = combos
         self.buttons.addWidget(manual)
+        self.buttons.addWidget(QLabel("ACR 7개 검사 요약 (클릭하면 해당 영상으로):"))
+        self.dashboard = QTableWidget(len(acr.TESTS), 4)
+        self.dashboard.setHorizontalHeaderLabels(["검사", "T1", "T2", "기준"])
+        self.dashboard.verticalHeader().setVisible(False)
+        self.dashboard.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.dashboard.setSelectionMode(QTableWidget.NoSelection)
+        self.dashboard.setWordWrap(False)
+        for r, (_key, name) in enumerate(acr.TESTS):
+            item = QTableWidgetItem(name)
+            item.setForeground(QBrush(QColor(TEST_COLORS[_key])))
+            self.dashboard.setItem(r, 0, item)
+        self.dashboard.setMinimumHeight(self.dashboard.verticalHeader().defaultSectionSize() * 8 + 6)
+        self.dashboard.cellClicked.connect(self._dashboard_clicked)
+        self.dashboard.resizeColumnsToContents()
+        self.buttons.addWidget(self.dashboard)
+        self.show_overlay = QCheckBox("영상 위에 ACR 검사 항목 · 판정 표시")
+        self.show_overlay.setChecked(True)
+        self.show_overlay.toggled.connect(lambda _on: self._repaint())
+        self.buttons.addWidget(self.show_overlay)
         self.summary = QLabel("")
         self.summary.setWordWrap(True)
         self.summary.setStyleSheet("font-weight: bold; padding: 4px;")
         self.buttons.addWidget(self.summary)
+        self.button("🖼 증빙 영상 44장 보기…", self.show_evidence,
+                    "콘솔 수동 캡처와 같은 44장(+ 분해능 2장)을 만들어 휠 · 화살표로 넘겨 봄")
         self.button("📄 Export Report… (PDF · Word · Excel)", self.export_report)
         self.button("💾 추세 기록에 저장", self.save_history)
         self.button("📈 추세 (날짜별 그래프)…", self.show_trend)
@@ -732,6 +756,99 @@ class ACRTool(Tool):
             elif error:
                 self._set_step(key, "fail", error)
         self._show_results()
+        self._color_rois()
+        self._fill_dashboard()
+        self._repaint()
+
+    def verdict(self, test, seq):
+        """(test, seq) 판정 True/False/None"""
+        for t, s_, _m, _c, ok in self.rows:
+            if t == test and s_ == seq:
+                return ok
+        return None
+
+    def _color_rois(self):
+        """ROI · 측정선 색 = 판정 (적합 초록 / 부적합 빨강). 원래 색은 acr_color에 (보고서 그림용)"""
+        store = self.ctx.main._annotation_store
+        with store.group():   # 되돌리기 한 번으로
+            for role, (_uid, _k, ann_id) in list(self.roles.items()):
+                _key, ann = store.find(ann_id)
+                if ann is None:
+                    continue
+                ok = self.verdict(ann.get("acr"), role.split("|")[0])
+                original = ann.get("acr_color") or ann.get("color")
+                color = original if ok is None else PASS_COLOR if ok else FAIL_COLOR
+                if ann.get("color") != color or ann.get("acr_color") != original:
+                    store.update(ann_id, color=color, acr_color=original)
+
+    def _fill_dashboard(self):
+        crit = {r[0]: r[3] for r in self.rows}
+        for r, (key, _name) in enumerate(acr.TESTS):
+            for col, seq in ((1, "T1"), (2, "T2")):
+                row = next((x for x in self.rows if x[0] == key and x[1] == seq), None)
+                if row is None:
+                    item = QTableWidgetItem("-")
+                else:
+                    mark = {True: "✓ ", False: "✗ ", None: "· "}[row[4]]
+                    item = QTableWidgetItem(mark + _short(key, row[2]))
+                    item.setToolTip(f"{acr.TEST_NAMES[key]} {seq}: {row[2]} (기준 {row[3]})")
+                    if row[4] is not None:
+                        item.setForeground(QBrush(QColor(PASS_COLOR if row[4] else FAIL_COLOR)))
+                self.dashboard.setItem(r, col, item)
+            self.dashboard.setItem(r, 3, QTableWidgetItem(crit.get(key, "")))
+        self.dashboard.resizeColumnsToContents()
+
+    def _dashboard_clicked(self, row, col):
+        key = acr.TESTS[row][0]
+        seq = "T2" if col == 2 else "T1"
+        ref = self.test_ref(key, seq) or self.test_ref(key, "T1")
+        if ref:
+            self._show(ref)
+
+    def test_ref(self, key, seq):
+        """검사를 대표하는 영상 (series, k)"""
+        if not self.sets or not self.sets.get(seq):
+            return None
+        if key == "geometry":
+            return self.sets["T1"][4]
+        n = {"resolution": 0, "thickness": 0, "position": 0, "uniformity": 6, "ghosting": 6,
+             "low_contrast": 7}[key]
+        return self.sets[seq][n]
+
+    def slice_tests(self, series, k):
+        """이 영상이 쓰이는 ACR 검사 → (시퀀스 이름, slice 번호, [(test, 설명)])"""
+        if not self.sets:
+            return None
+        uid = series.series_uid
+        loc = self.sets.get("LOC")
+        if loc and loc[0].series_uid == uid and loc[1] == k:
+            return "Localizer", None, [("geometry", "Localizer 길이")]
+        groups = [(seq, self.sets.get(seq)) for seq in ("T1", "T2")]
+        groups += [(f"사이트 {i + 1}", refs) for i, refs in enumerate(getattr(self, "site_sets", []) or [])]
+        for seq, refs in groups:
+            for n, (s, kk) in enumerate(refs or []):
+                if s.series_uid != uid or kk != k:
+                    continue
+                site = seq.startswith("사이트")
+                tests = []
+                if n == 0:
+                    if seq == "T1":
+                        tests.append(("geometry", "slice 1 직경"))
+                    tests += [("thickness", "경사판 길이"), ("position", "쐐기 S1")]
+                    if not site:
+                        tests.append(("resolution", "구멍 배열"))
+                elif n == 4 and seq == "T1":
+                    tests.append(("geometry", "slice 5 직경 · 대각선"))
+                elif n == 6 and not site:
+                    tests += [("uniformity", "PIU"), ("ghosting", "배경 ROI")]
+                if n >= 7:
+                    tests.append(("low_contrast", f"slice {n + 1}"))
+                if n == 10 and not site:
+                    tests.append(("position", "쐐기 S11"))
+                if site:
+                    tests = [(t, d + " (참고)") for t, d in tests if t in ("thickness", "low_contrast")]
+                return seq, n + 1, tests
+        return None
 
     def _show_results(self):
         header = ["검사", "시퀀스", "측정값", "기준", "판정"]
@@ -867,6 +984,15 @@ class ACRTool(Tool):
         finally:
             QApplication.restoreOverrideCursor()
 
+    def show_evidence(self):
+        if not self.rows:
+            QMessageBox.information(self, self.title, "먼저 Auto Analyze를 실행하세요.")
+            return
+        import tempfile
+        folder = tempfile.mkdtemp(prefix="dabbaview-acr-evidence-")
+        items = self._evidence(folder, self.report_info())
+        EvidenceViewer(items, self).exec_()
+
     def export_report(self):
         if not self.rows:
             raise ValueError("먼저 Auto Analyze를 실행하세요.")
@@ -924,6 +1050,68 @@ class ACRTool(Tool):
             self.recompute()
 
 
+def _short(key, text):
+    """대시보드 칸에 들어갈 짧은 값"""
+    if key == "geometry":
+        return text.split(",")[0] + " …" if "," in text else text
+    return text if len(text) <= 26 else text[:25] + "…"
+
+
+class EvidenceViewer(QDialog):
+    """증빙 영상 44장 (+ 2장): 왼쪽 목록, 오른쪽 영상. 휠 · 화살표 · PageUp/Down으로 넘김"""
+
+    def __init__(self, items, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtGui import QPixmap
+        from PyQt5.QtWidgets import QSplitter
+        self._pixmap = QPixmap
+        self.items = items
+        self.setWindowTitle(f"ACR 증빙 영상 ({len(items)}장)")
+        self.resize(1100, 820)
+        layout = QVBoxLayout(self)
+        split = QSplitter(Qt.Horizontal)
+        self.list = QListWidget()
+        for number, test, desc, _note, _p in items:
+            label = f"{number:02d}" if isinstance(number, int) else number
+            self.list.addItem(f"{label}  {test} — {desc}")
+        self.image = QLabel()
+        self.image.setAlignment(Qt.AlignCenter)
+        self.image.setMinimumSize(500, 500)
+        self.image.setStyleSheet("background: #1b1d22;")
+        split.addWidget(self.list)
+        split.addWidget(self.image)
+        split.setSizes([330, 770])
+        layout.addWidget(split, 1)
+        self.caption = QLabel("")
+        layout.addWidget(self.caption)
+        self.list.currentRowChanged.connect(self._show)
+        self.list.setCurrentRow(0)
+
+    def _show(self, row):
+        if not 0 <= row < len(self.items):
+            return
+        pm = self._pixmap(self.items[row][4])
+        self.image.setPixmap(pm.scaled(self.image.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.caption.setText(f"{row + 1}/{len(self.items)} · {self.items[row][3]} "
+                             "(휠 · ↑↓ · PageUp/Down으로 넘김)")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._show(self.list.currentRow())
+
+    def wheelEvent(self, event):
+        step = -1 if event.angleDelta().y() > 0 else 1
+        self.list.setCurrentRow(min(max(0, self.list.currentRow() + step), len(self.items) - 1))
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_PageDown, Qt.Key_Right, Qt.Key_Space):
+            self.list.setCurrentRow(min(self.list.currentRow() + 1, len(self.items) - 1))
+        elif event.key() in (Qt.Key_PageUp, Qt.Key_Left):
+            self.list.setCurrentRow(max(self.list.currentRow() - 1, 0))
+        else:
+            super().keyPressEvent(event)
+
+
 def date_from_path(path):
     """'0531_1_20260911' 처럼 앞의 MMDD가 촬영일, 뒤 YYYYMMDD가 저장일이면 촬영일로"""
     import re
@@ -946,7 +1134,7 @@ def render_snapshot(arr, anns, markers, path, size=360):
     im = Image.fromarray(g).convert("RGB")
     d = ImageDraw.Draw(im)
     for ann in anns:
-        color = ann.get("color") or "#ffff00"
+        color = ann.get("acr_color") or ann.get("color") or "#ffff00"
         pts = [(x - 0.5, y - 0.5) for x, y in ann["pts"]]
         if ann["type"] == "distance":
             d.line(pts[:2], fill=color, width=1)
@@ -991,7 +1179,7 @@ def render_step(arr, anns, path, window=None, crop=None, labels=(), width=420):
     def P(x, y):
         return ((x - x0) * scale, (y - y0) * scale)
     for ann in anns:
-        color = ann.get("color") or "#ffff00"
+        color = ann.get("acr_color") or ann.get("color") or "#ffff00"
         pts = [P(x - 0.5, y - 0.5) for x, y in ann["pts"]]
         if ann["type"] == "distance":
             d.line(pts[:2], fill=color, width=3)
@@ -1140,13 +1328,82 @@ def _ghosting_steps(seq, roles, values, c, folder):
 _TOOLS = []
 
 
+def paint_badges(tool, vp, painter):
+    """영상 위 가운데: 이 슬라이스가 쓰이는 ACR 검사 배지 (검사 색 · 판정 · 값)"""
+    from PyQt5.QtCore import QRectF
+    from PyQt5.QtGui import QFont, QFontMetrics
+    info = tool.slice_tests(vp.series, vp.current_slice)
+    if not info:
+        return
+    seq, n, tests = info
+    head = f"ACR {seq}" + (f" · slice {n}" if n else "")
+    chips = [(head, "#2b3445", None)]
+    for key, desc in tests:
+        ok = tool.verdict(key, seq) if seq in ("T1", "T2") else None
+        row = next((r for r in tool.rows if r[0] == key and r[1] == seq), None)
+        mark = {True: " ✓", False: " ✗", None: ""}[ok]
+        value = ""
+        v = tool.values.get((key, "T1" if key == "geometry" else seq)) or {}
+        if key == "geometry" and v:   # 이 영상에서 잰 직경만
+            names = ["LOC"] if n is None else [f"S{n} {d}" for d in ("V", "H", "D1", "D2")]
+            value = " " + ", ".join(f"{nm} {v[nm]:.1f}" for nm in names if nm in v) + " mm"
+        elif key == "position" and v and n:
+            which = "S1" if n == 1 else "S11"
+            value = f" {which} {v[which]:+.1f} mm" if which in v else ""
+        elif key == "low_contrast" and seq in tool.lc_detail and n and n >= 8:
+            value = f" spoke {tool.lc_detail[seq][n - 8]['spokes']}"
+        elif row is not None:
+            value = " " + _short(key, row[2])
+        chips.append((f"{acr.TEST_NAMES[key].split('. ', 1)[-1]} · {desc}{value}{mark}",
+                      TEST_COLORS[key], ok))
+    font = QFont(painter.font())
+    font.setPointSizeF(max(9.0, font.pointSizeF()))
+    font.setBold(True)
+    painter.save()
+    painter.setFont(font)
+    fm = QFontMetrics(font)
+    pad, gap, h = 7, 5, fm.height() + 6
+    widths = [fm.horizontalAdvance(t) + 2 * pad for t, _c, _ok in chips]
+    rows, cur, width = [[]], 0, vp.width() - 20
+    for i, w in enumerate(widths):   # 좁으면 줄 바꿈
+        if rows[-1] and cur + w > width:
+            rows.append([])
+            cur = 0
+        rows[-1].append(i)
+        cur += w + gap
+    y = 30.0
+    for line in rows:
+        total = sum(widths[i] for i in line) + gap * (len(line) - 1)
+        x = (vp.width() - total) / 2
+        for i in line:
+            text, color, ok = chips[i]
+            rect = QRectF(x, y, widths[i], h)
+            fill = QColor(color)
+            fill.setAlpha(215)
+            painter.setPen(QPen(QColor(PASS_COLOR if ok else FAIL_COLOR), 2) if ok is not None else Qt.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(rect, 6, 6)
+            painter.setPen(QColor("#ffffff") if i == 0 else QColor("#10141c"))
+            painter.drawText(rect, Qt.AlignCenter, text)
+            x += widths[i] + gap
+        y += h + 4
+    painter.restore()
+
+
 def paint_markers(vp, painter):
     from PyQt5.QtCore import QPointF
     from ..annotations import image_key
     if not _TOOLS:
         return
     tool = _TOOLS[-1]
-    if not tool.show_markers.isChecked() or vp.series is None:
+    if vp.series is None:
+        return
+    if tool.show_overlay.isChecked() and tool.rows:
+        try:
+            paint_badges(tool, vp, painter)
+        except Exception:  # noqa: BLE001 - 표시 실패로 뷰포트 그리기를 막지 않음
+            pass
+    if not tool.show_markers.isChecked():
         return
     marks = tool.markers.get(image_key(vp.series, vp.current_slice))
     if not marks:

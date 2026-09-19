@@ -98,7 +98,7 @@ def render(a, anns=(), markers=(), window=None, crop=None, labels=(), width=W_IM
         return ((x - x0) * s, (y - y0) * s)
     lw = max(2, int(round(s)))
     for ann in anns:
-        color = ann.get("color") or "#ffff00"
+        color = ann.get("acr_color") or ann.get("color") or "#ffff00"   # 판정 색이 아닌 원래 색
         pts = [P(x - 0.5, y - 0.5) for x, y in ann["pts"]]
         if ann["type"] == "distance":
             d.line(pts[:2], fill=color, width=lw)
