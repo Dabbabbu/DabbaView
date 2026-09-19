@@ -165,7 +165,7 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 
 ### 전문 분석 도구 (Analysis 메뉴)
 
-메뉴바 **Analysis ▸ Cardiac | Neuro | Oncology | Lung | MSK | Vascular | Diffusion | Perfusion | Spectroscopy** 에서 도구를 고르면 오른쪽 **Analysis** 패널에 입력 화면과 결과(표 + matplotlib 그래프, 복사·CSV·PNG)가 나옵니다. 맵은 **새 시리즈**로 만들어집니다 (원본 보존). 피팅은 `scipy.optimize`, 계산은 `numpy`.
+메뉴바 **Analysis ▸ Cardiac | Neuro | Oncology | Lung | MSK | Vascular | Diffusion | Perfusion | Spectroscopy | Image Quality Assessment** 에서 도구를 고르면 오른쪽 **Analysis** 패널에 입력 화면과 결과(표 + matplotlib 그래프, 복사·CSV·PNG)가 나옵니다. 맵은 **새 시리즈**로 만들어집니다 (원본 보존). 피팅은 `scipy.optimize`, 계산은 `numpy`.
 
 | 카테고리 | 도구 |
 |---|---|
@@ -180,6 +180,24 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 | Spectroscopy | DICOM MR Spectroscopy / Siemens `.rda` → 스펙트럼 (선폭 가중, 자동·수동 위상), NAA · Cho · Cr · mI · Lac 피크, Cho/Cr · NAA/Cr · Cho/NAA |
 
 > 연구·교육용입니다. 진단용으로 검증된 소프트웨어가 아니므로 결과는 원래 판독 워크스테이션·검증된 도구와 대조하세요.
+
+### 영상화질 평가 (Analysis ▸ Image Quality Assessment)
+
+현재 보고 있는 영상에서 화질 지표를 잽니다. 자동으로 놓은 ROI는 `IQ …` 주석이라 ROI Manager에서 보이고 옮길 수 있습니다 (옮긴 뒤 '다시 계산'). 계산은 `numpy` · `scipy`(FFT·ndimage), 그래프는 matplotlib.
+
+| 도구 | 내용 |
+|---|---|
+| MTF (Edge) | 에지를 가로지르는 직선 하나 → 줄마다 에지 위치를 찾아 기울기 맞춤 → 4배 과표본 ESF → LSF → MTF. MTF50·MTF10 표시, Nyquist 선. '자동'은 팬텀 가장자리 |
+| SNR | 단일 영상: 신호(물체 75%) 평균 / 배경 SD (MR 크기 영상 Rayleigh ÷0.655), 두 영상: 차영상 SD/√2 (NEMA). ROI 자동 배치 (글자·자 오버레이 피함) |
+| CNR | 마지막 ROI 두 개: \|m1−m2\| / √((σ1²+σ2²)/2), 배경 잡음 기준 CNR |
+| Uniformity | NEMA 5-ROI(중심+상하좌우), ACR PIU, 균일도 지도(1 cm² 이동 평균 편차 %, 컬러맵 새 시리즈) |
+| Ghosting | ACR PSG (팬텀 밖 4방향 10 cm² 타원 자동), 고스팅 비율 지도 |
+| Geometric Distortion | 격자 칸 중심 자동 검출 → 이상 격자(회전·이동, 공칭 간격 선택) 대비 변위, 벡터 화살표·quiver 그래프 |
+| NPS | 균일 영역 조각 2D FFT (2차 추세 제거) → 2D NPS · 방사 평균 1D NPS, 백색/상관/구조 잡음 판별(스파이크 주파수), 두 영상 차분 옵션 |
+| NEQ | S²·MTF²/NPS (마지막 MTF·NPS 결과), 입사 양자 q를 넣으면 DQE |
+| Resolution | 점 광원 FWHM/FWTM(가로·세로), 선 광원 FWHM, 바 패턴 묶음별 lp/mm·변조도 → 분해 한계 |
+| Artifact | 링(극좌표 변환 후 반지름 줄무늬), 지퍼(한 열/행 전체의 튀는 값 + 주기 성분), 밴딩(행·열 주기 성분 진폭 %) |
+| Auto IQ Assessment | SNR · CNR · NEMA 균일도 · PIU · PSG · MTF를 한 번에, 이전 결과와 변화 비교, PDF 보고서, 날짜별 추세 (`iq_history.json`) |
 
 ### ACR Phantom QC (Analysis ▸ ACR Phantom QC)
 
@@ -354,6 +372,7 @@ DabbaView/
     │   ├── cardiac.py / lesion.py / mrs.py   # 심장·병변/폐/혈관·분광 엔진
     │   ├── panel.py         # 오른쪽 Analysis 도크, 결과 표·그래프
     │   ├── acr.py / acr_report.py / tools_acr.py   # ACR 팬텀 QC 엔진 · 기록지·추세 · 도구
+    │   ├── iq.py / tools_iq.py                      # 영상화질 평가 (MTF·SNR·NPS·왜곡·아티팩트 …)
     │   └── tools_*.py, menu.py              # 도구 페이지, 메뉴 등록
     ├── analysis/            # 3D Slicer · ImageJ 스타일 분석
     │   ├── processing.py    # 필터 (Gaussian, Median, Unsharp, Sobel, Canny, Morphology)
