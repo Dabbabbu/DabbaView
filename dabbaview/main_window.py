@@ -248,6 +248,22 @@ class MainWindow(QMainWindow):
         header.addWidget(self._view_toggle)
         left_layout.addLayout(header)
 
+        # 요약 ("10 patients · 23 studies · 194 series · 7,862 images") + 모두 접기/펼치기
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(2)
+        self._series_summary = QLabel("")
+        self._series_summary.setStyleSheet("color: #9ab; font-size: 11px;")
+        summary_row.addWidget(self._series_summary, 1)
+        for text, tip, slot in (("⊟", "모두 접기", self._collapse_all_series),
+                                ("⊞", "모두 펼치기", self._expand_all_series)):
+            button = QToolButton()
+            button.setText(text)
+            button.setToolTip(tip)
+            button.setAutoRaise(True)
+            button.clicked.connect(slot)
+            summary_row.addWidget(button)
+        left_layout.addLayout(summary_row)
+
         self._series_stack = QStackedWidget()
         self._series_panel = SeriesPanel()
         # 클릭(뗄 때)/Enter = 활성 칸에 로드, 끌기 = 드래그 앤 드롭 (누르는 순간엔 로드 안 함)
@@ -258,6 +274,7 @@ class MainWindow(QMainWindow):
         self._series_tree.series_selected.connect(self._on_series_highlighted)
         self._series_tree.series_activated.connect(self._on_series_selected)
         self._series_panel.thumbnail_ready.connect(self._series_tree.set_thumbnail)
+        self._series_panel.summary_changed.connect(self._show_series_summary)
         self._series_stack.addWidget(self._series_panel)
         self._series_stack.addWidget(self._series_tree)
         left_layout.addWidget(self._series_stack)
@@ -1362,6 +1379,26 @@ class MainWindow(QMainWindow):
             self._select_series(series)
         self._ai_panel._rebuild_worklist()  # 불러온 케이스 표시 갱신
         self._analysis_tab.refresh_series()
+
+    def _show_series_summary(self, summary):
+        """시리즈 패널 상단 요약: 환자 · 검사 · 시리즈 · 영상 수"""
+        if not summary.get("series"):
+            self._series_summary.setText("")
+            return
+        p, st = summary["patients"], summary["studies"]
+        self._series_summary.setText(
+            f"{p} patient{'s' if p != 1 else ''} · {summary['series']} series · "
+            f"{summary['images']:,} images")
+        self._series_summary.setToolTip(
+            f"환자 {p}명 · 검사 {st}개 · 시리즈 {summary['series']}개 · 영상 {summary['images']:,}장")
+
+    def _collapse_all_series(self):
+        self._series_panel.collapse_all()
+        self._series_tree.collapse_all()
+
+    def _expand_all_series(self):
+        self._series_panel.expand_all()
+        self._series_tree.expand_all()
 
     def _on_series_highlighted(self, uid):
         """패널/트리에서 누름·방향키: 선택 표시만 (로드는 클릭을 뗄 때)"""

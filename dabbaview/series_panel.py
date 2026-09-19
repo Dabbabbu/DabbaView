@@ -10,12 +10,15 @@ INFINITT 스타일 시리즈 패널
   - 썸네일 (중간 슬라이스, 80x80) + 좌상단 '시리즈번호/총 슬라이스' (예: 4/31)
   - 시퀀스 설명 (SeriesDescription) + 방향·시퀀스 요약
   - 선택된 시리즈는 노란 테두리
-검사(Study)마다 머리글 행으로 묶음. 카드를 Multi View 칸으로 드래그 가능.
+환자 머리글(▼ 이름 · 검사 수 · 영상 수) 아래 검사 머리글(▼ 날짜 설명), 그 아래 카드.
+▶/▼를 누르면 접기/펼치기, 환자 머리글의 나머지 부분을 누르면 그 환자만 펼치고
+첫 시리즈를 로드 (환자 간 빠른 전환). 기본은 선택된 시리즈의 환자만 펼침.
+카드를 Multi View 칸으로 드래그 가능.
 """
 from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QStyledItemDelegate,
                              QStyle, QAbstractItemView)
 from PyQt5.QtCore import Qt, QSize, QRectF, QPointF, QMimeData, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPainter, QPen, QImage, QFontMetrics
+from PyQt5.QtGui import QColor, QCursor, QFont, QPainter, QPen, QImage, QFontMetrics
 
 from . import dicom_info
 from .series_tree import (SERIES_MIME_TYPE, MODALITY_COLORS, DEFAULT_MODALITY_COLOR,
@@ -25,6 +28,8 @@ from .series_tree import (SERIES_MIME_TYPE, MODALITY_COLORS, DEFAULT_MODALITY_CO
 CARD_THUMB = 80
 CARD_HEIGHT = CARD_THUMB + 12
 HEADER_HEIGHT = 24
+PATIENT_HEADER_HEIGHT = 30
+TOGGLE_WIDTH = 22   # 머리글 왼쪽 ▶/▼ 영역 (여기를 누르면 접기/펼치기만)
 THUMB_PIXELS = CARD_THUMB * 2  # HiDPI 선명도용 2배 해상도로 생성
 
 ROLE_KIND = Qt.UserRole
@@ -33,6 +38,9 @@ ROLE_NUMBER = Qt.UserRole + 2
 ROLE_DESC = Qt.UserRole + 3
 ROLE_DETAIL = Qt.UserRole + 4
 ROLE_MODALITY = Qt.UserRole + 5
+ROLE_GROUP = Qt.UserRole + 6      # 환자 키 / 검사 키 (머리글·카드 모두)
+ROLE_STUDY = Qt.UserRole + 7
+ROLE_EXPANDED = Qt.UserRole + 8   # 머리글이 펼쳐져 있는지
 
 SELECT_COLOR = QColor("#ffd400")
 
@@ -50,9 +58,47 @@ class SeriesCardDelegate(QStyledItemDelegate):
         self._panel = panel
 
     def sizeHint(self, option, index):
-        if index.data(ROLE_KIND) == "header":
+        kind = index.data(ROLE_KIND)
+        if kind == "patient":
+            return QSize(option.rect.width(), PATIENT_HEADER_HEIGHT)
+        if kind == "header":
             return QSize(option.rect.width(), HEADER_HEIGHT)
         return QSize(option.rect.width(), CARD_HEIGHT)
+
+    @staticmethod
+    def _paint_header(painter, rect, index, patient):
+        arrow = "▼" if index.data(ROLE_EXPANDED) else "▶"
+        font = QFont()
+        font.setPointSize(11 if patient else 10)
+        font.setBold(True)
+        painter.setFont(font)
+        if patient:
+            painter.fillRect(rect.adjusted(0, 1, 0, -1), QColor("#1f2a33"))
+        indent = 4 if patient else 14
+        painter.setPen(QColor("#e8e8e8") if patient else QColor("#4fc1ff"))
+        painter.drawText(QRectF(rect.left() + indent, rect.top(), TOGGLE_WIDTH, rect.height()),
+                         Qt.AlignVCenter | Qt.AlignLeft, arrow)
+        text_rect = rect.adjusted(indent + TOGGLE_WIDTH - 4, 0, -6, 0)
+        text = index.data(Qt.DisplayRole) or ""
+        extra = index.data(ROLE_DETAIL) or ""
+        metrics = QFontMetrics(font)
+        if extra:
+            small = QFont(font)
+            small.setBold(False)
+            small.setPointSize(9)
+            extra_w = QFontMetrics(small).horizontalAdvance(extra) + 8
+            name = metrics.elidedText(text, Qt.ElideRight,
+                                      int(max(40, text_rect.width() - extra_w)))
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, name)
+            painter.setFont(small)
+            painter.setPen(QColor("#9ab"))
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignRight, extra)
+        else:
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft,
+                             metrics.elidedText(text, Qt.ElideRight, int(text_rect.width())))
+        painter.setPen(QColor("#333"))
+        painter.drawLine(QPointF(rect.left() + 4, rect.bottom()),
+                         QPointF(rect.right() - 4, rect.bottom()))
 
     def paint(self, painter, option, index):
         painter.save()
@@ -60,18 +106,9 @@ class SeriesCardDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         rect = QRectF(option.rect)
 
-        if index.data(ROLE_KIND) == "header":
-            font = QFont()
-            font.setPointSize(10)
-            font.setBold(True)
-            painter.setFont(font)
-            painter.setPen(QColor("#4fc1ff"))
-            text = QFontMetrics(font).elidedText(index.data(Qt.DisplayRole), Qt.ElideRight,
-                                                 int(rect.width() - 12))
-            painter.drawText(rect.adjusted(6, 0, -6, 0), Qt.AlignVCenter | Qt.AlignLeft, text)
-            painter.setPen(QColor("#333"))
-            painter.drawLine(QPointF(rect.left() + 4, rect.bottom()),
-                             QPointF(rect.right() - 4, rect.bottom()))
+        kind = index.data(ROLE_KIND)
+        if kind in ("patient", "header"):
+            self._paint_header(painter, rect, index, kind == "patient")
             painter.restore()
             return
 
@@ -151,6 +188,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
     series_selected = pyqtSignal(str)   # 누름 / 방향키 (선택 표시)
     series_activated = pyqtSignal(str)  # 클릭(뗄 때) / Enter → 뷰포트에 로드
     thumbnail_ready = pyqtSignal(str, QImage)
+    summary_changed = pyqtSignal(dict)  # {"patients", "studies", "series", "images"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -169,28 +207,58 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         self._thumbnails = {}
         self._thumb_worker = None
         self.currentItemChanged.connect(self._on_current_changed)
+        self.itemClicked.connect(self._on_item_clicked)
         self._click_init()
+        self._headers = []            # [(머리글 item, 종류, 키)]
+        self._collapsed = set()       # 접힌 머리글 키 ("P:..." 환자, "S:..." 검사)
+        self._first_uid = {}          # 환자 키 → 첫 시리즈 UID
+        self.summary = {"patients": 0, "studies": 0, "series": 0, "images": 0}
 
     # 목록 구성
     def populate(self, series_list, select_uid=None):
         self.blockSignals(True)
         self.clear()
         self._items_by_uid = {}
+        self._headers = []
+        self._first_uid = {}
         first = target = None
-        for pname, pid, studies in group_series(series_list):
+        groups = group_series(series_list)
+        n_studies = n_images = 0
+        for pname, pid, studies in groups:
+            pkey = f"P:{pid}|{pname}"
+            p_images = sum(s.num_slices for *_rest, g in studies for s in g)
+            patient = QListWidgetItem(
+                format_patient_name(pname) + (f"  ({pid})" if pid else ""))
+            patient.setData(ROLE_KIND, "patient")
+            patient.setData(ROLE_GROUP, pkey)
+            n = len(studies)
+            patient.setData(ROLE_DETAIL, f"{n} stud{'ies' if n != 1 else 'y'} · {p_images:,} images")
+            patient.setFlags(Qt.ItemIsEnabled)
+            patient.setToolTip(f"Patient: {pname}  ID: {pid or '-'}\n"
+                               "▶/▼: 접기·펼치기  |  이름 클릭: 이 환자의 첫 시리즈 열기")
+            self.addItem(patient)
+            self._headers.append((patient, "patient", pkey))
             for study_date, _time, study_desc, series_group in studies:
+                first_series = series_group[0]
+                skey = "S:" + (first_series.study_uid or f"{pkey}|{study_date}|{study_desc}")
                 header = QListWidgetItem(
-                    f"{format_patient_name(pname)}  ·  "
                     f"{format_dicom_date(study_date) or '날짜 없음'}  {study_desc}".strip())
                 header.setData(ROLE_KIND, "header")
+                header.setData(ROLE_GROUP, pkey)
+                header.setData(ROLE_STUDY, skey)
+                header.setData(ROLE_DETAIL, f"{len(series_group)} series")
                 header.setFlags(Qt.ItemIsEnabled)
                 header.setToolTip(f"Patient: {pname}  ID: {pid or '-'}")
                 self.addItem(header)
+                self._headers.append((header, "study", skey))
+                n_studies += 1
                 for s in series_group:
                     ds = s.slices[0] if s.slices else None
                     item = QListWidgetItem()
                     item.setData(ROLE_KIND, "series")
                     item.setData(ROLE_UID, s.series_uid)
+                    item.setData(ROLE_GROUP, pkey)
+                    item.setData(ROLE_STUDY, skey)
                     item.setData(ROLE_NUMBER, series_number_label(s))
                     item.setData(ROLE_DESC, s.description or "(no description)")
                     detail = [dicom_info.orientation_name(ds) if ds is not None else ""]
@@ -206,19 +274,121 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
                             s.num_slices))
                     self.addItem(item)
                     self._items_by_uid[s.series_uid] = item
+                    self._first_uid.setdefault(pkey, s.series_uid)
+                    n_images += s.num_slices
                     first = first or item
                     if s.series_uid == select_uid:
                         target = item
-        self.blockSignals(False)
-        self._start_thumbnails(series_list)
         selected = target or first
+        # 기본: 선택된 시리즈의 환자만 펼치고 나머지 환자는 접음
+        current_patient = selected.data(ROLE_GROUP) if selected is not None else None
+        self._collapsed = {key for _item, kind, key in self._headers
+                           if kind == "patient" and key != current_patient}
+        self._apply_visibility()
+        self.blockSignals(False)
+        self.summary = {"patients": len(groups), "studies": n_studies,
+                        "series": len(self._items_by_uid), "images": n_images}
+        self.summary_changed.emit(dict(self.summary))
+        self._start_thumbnails(series_list)
         if selected is not None:
             self.setCurrentItem(selected)  # → series_selected
+
+    # 접기 / 펼치기
+    def _apply_visibility(self):
+        for row in range(self.count()):
+            item = self.item(row)
+            kind = item.data(ROLE_KIND)
+            pkey, skey = item.data(ROLE_GROUP), item.data(ROLE_STUDY)
+            if kind == "patient":
+                item.setData(ROLE_EXPANDED, pkey not in self._collapsed)
+                continue
+            patient_open = pkey not in self._collapsed
+            if kind == "header":
+                item.setData(ROLE_EXPANDED, skey not in self._collapsed)
+                item.setHidden(not patient_open)
+            else:
+                item.setHidden(not patient_open or skey in self._collapsed)
+        self.viewport().update()
+
+    def is_expanded(self, key):
+        return key not in self._collapsed
+
+    def set_expanded(self, key, expanded):
+        (self._collapsed.discard if expanded else self._collapsed.add)(key)
+        self._apply_visibility()
+
+    def toggle(self, key):
+        self.set_expanded(key, key in self._collapsed)
+
+    def collapse_all(self):
+        """모든 환자·검사 접기 (선택 표시는 유지)"""
+        self._collapsed = {key for _item, _kind, key in self._headers}
+        self._apply_visibility()
+
+    def expand_all(self):
+        self._collapsed = set()
+        self._apply_visibility()
+        item = self.currentItem()
+        if item is not None:
+            self.scrollToItem(item)
+
+    def patient_keys(self):
+        return [key for _item, kind, key in self._headers if kind == "patient"]
+
+    def reveal(self, uid):
+        """시리즈가 보이도록 그 환자·검사를 펼침"""
+        item = self._items_by_uid.get(uid)
+        if item is None:
+            return
+        pkey, skey = item.data(ROLE_GROUP), item.data(ROLE_STUDY)
+        if pkey in self._collapsed or skey in self._collapsed:
+            self._collapsed.discard(pkey)
+            self._collapsed.discard(skey)
+            self._apply_visibility()
+
+    def open_patient(self, pkey):
+        """환자 간 빠른 전환: 이 환자만 펼치고 첫 시리즈 로드"""
+        self._collapsed = {key for _item, kind, key in self._headers
+                           if kind == "patient" and key != pkey}
+        self._apply_visibility()
+        uid = self._first_uid.get(pkey)
+        if uid:
+            self.select_uid(uid)
+            header = next((item for item, kind, key in self._headers
+                           if kind == "patient" and key == pkey), None)
+            if header is not None:
+                self.scrollToItem(header, QAbstractItemView.PositionAtTop)
+            self.series_activated.emit(uid)
+
+    def _on_item_clicked(self, item):
+        kind = item.data(ROLE_KIND)
+        if kind not in ("patient", "header"):
+            return
+        # 더블클릭의 두 번째 클릭으로 다시 토글되지 않게
+        import time
+        from PyQt5.QtWidgets import QApplication
+        now = time.monotonic()
+        last_item, last_time = getattr(self, "_last_header_click", (None, 0.0))
+        self._last_header_click = (item, now)
+        if item is last_item and (now - last_time) * 1000 < QApplication.doubleClickInterval():
+            return
+        # 누른 위치 (ClickToLoadMixin이 기록) — 없으면 현재 커서 위치
+        pos = self._press_pos or self.viewport().mapFromGlobal(QCursor.pos())
+        rect = self.visualItemRect(item)
+        indent = 4 if kind == "patient" else 14
+        on_arrow = pos.x() < rect.left() + indent + TOGGLE_WIDTH
+        if kind == "header":
+            self.toggle(item.data(ROLE_STUDY))
+        elif on_arrow:
+            self.toggle(item.data(ROLE_GROUP))
+        else:
+            self.open_patient(item.data(ROLE_GROUP))
 
     def select_uid(self, uid):
         """시그널 없이 선택 표시만 변경"""
         item = self._items_by_uid.get(uid)
         if item is not None:
+            self.reveal(uid)
             self.blockSignals(True)
             self.setCurrentItem(item)
             self.scrollToItem(item)
