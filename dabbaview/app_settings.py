@@ -240,6 +240,38 @@ class AppSettings:
     def set_dicom_edit_backup(self, on):
         self._qs.setValue("dicom_edit/backup", bool(on))
 
+    # ACR 팬텀 QC: 판정 기준값 · 보고서 머리글 · 이미지 파일 FOV
+    ACR_REPORT_DEFAULTS = {"hospital": "", "unit": "", "scanner": "GE SIGNA Architect",
+                           "field": "3.0T", "coil": "Head (1ch)", "tester": ""}
+
+    def acr_criteria(self):
+        from .clinical.acr import criteria_with
+        try:
+            saved = json.loads(self._qs.value("acr/criteria", "{}") or "{}")
+        except ValueError:
+            saved = {}
+        return criteria_with(saved)
+
+    def set_acr_criteria(self, values):
+        self._qs.setValue("acr/criteria", json.dumps(dict(values)))
+
+    def acr_report_info(self):
+        try:
+            saved = json.loads(self._qs.value("acr/report", "{}") or "{}")
+        except ValueError:
+            saved = {}
+        return {k: str(saved.get(k, v)) for k, v in self.ACR_REPORT_DEFAULTS.items()}
+
+    def set_acr_report_info(self, values):
+        self._qs.setValue("acr/report", json.dumps({k: str(values.get(k, ""))
+                                                    for k in self.ACR_REPORT_DEFAULTS}))
+
+    def acr_fov(self):
+        return self._qs.value("acr/fov_mm", 250.0, type=float)
+
+    def set_acr_fov(self, mm):
+        self._qs.setValue("acr/fov_mm", float(mm))
+
     # 오픈소스 모델 (TotalSegmentator, nnU-Net, MedSAM, ONNX, REST) - 키는 "models/..."
     MODEL_DEFAULTS = {"python": "", "device": "auto", "nnunet_folder": "", "nnunet_folds": "0",
                       "medsam_encoder": "", "medsam_decoder": "", "medsam_mode": "medsam",

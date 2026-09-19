@@ -62,7 +62,7 @@ def _append_row(table, values):
 
 class SettingsDialog(QDialog):
 
-    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache")
+    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache", "acr")
 
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
@@ -80,6 +80,9 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._ai_tab(), "AI")
         self._tabs.addTab(self._cloud_tab(), "Cloud")
         self._tabs.addTab(self._cache_tab(), "Cache")
+        from .clinical.tools_acr import ACRCriteriaWidget
+        self._acr = ACRCriteriaWidget(app_settings)
+        self._tabs.addTab(self._acr, "ACR QC")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -552,6 +555,7 @@ class SettingsDialog(QDialog):
         self._settings.set_report_folder(self._report_folder.text().strip())
         self._settings.set_report_creator(self._report_creator.text())
         self._settings.set_dicom_edit_backup(self._dicom_backup.isChecked())
+        self._acr.save()
         self._settings.set_monai_url(self._monai_url.text())
         self._settings.set_monai_token(self._monai_token.text())
         for key, widget in (("python", self._model_python), ("nnunet_folder", self._nnunet_folder),
