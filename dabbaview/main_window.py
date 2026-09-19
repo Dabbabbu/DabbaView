@@ -92,6 +92,7 @@ class DirectoryLoadWorker(QThread):
 
     progress = pyqtSignal(int, int)          # current, total
     finished_loading = pyqtSignal(object, int)  # DicomLoader, loaded count
+    placeholders_found = pyqtSignal(int, int)   # 클라우드에만 있는 파일 수, 전체 DICOM 수
 
     def __init__(self, paths, target_viewport=None, remember=True,
                  parent=None):
@@ -105,6 +106,22 @@ class DirectoryLoadWorker(QThread):
         self._last_percent = -1
         self.loader = DicomLoader()   # 진행 중 멈춘 파일 확인용 (메인 스레드에서 slow_files만 읽음)
         self.last_progress = time.monotonic()
+        self._policy_answer = None
+        self._policy_event = threading.Event()
+
+    def answer_placeholders(self, policy):
+        """메인 스레드가 클라우드 파일 처리 방법을 정하면 호출 (download / skip / cancel)"""
+        self._policy_answer = policy
+        self._policy_event.set()
+
+    def _ask_placeholders(self, count, total):
+        # 로더 스레드에서 호출됨: 메인 스레드에 물어보고 답을 기다림 (취소하면 바로 끝)
+        self.placeholders_found.emit(count, total)
+        while not self._policy_event.wait(0.2):
+            if self._cancel_event.is_set():
+                return "cancel"
+        self.last_progress = time.monotonic()
+        return self._policy_answer or "skip"
 
     def cancel(self):
         self._cancel_event.set()
@@ -128,7 +145,7 @@ class DirectoryLoadWorker(QThread):
         loader = self.loader
         loaded = loader.load_paths(
             self._paths, progress_callback=self._on_progress,
-            cancel_event=self._cancel_event)
+            cancel_event=self._cancel_event, placeholder_policy=self._ask_placeholders)
         self.finished_loading.emit(loader, loaded)
 
 
@@ -861,6 +878,7 @@ class MainWindow(QMainWindow):
         worker = DirectoryLoadWorker(paths, target_viewport, remember, self)
         worker.progress.connect(self._on_load_progress)
         worker.finished_loading.connect(self._on_load_finished)
+        worker.placeholders_found.connect(self._on_placeholders_found)
         worker.finished.connect(worker.deleteLater)
         progress.canceled.connect(worker.cancel)
 
@@ -875,12 +893,35 @@ class MainWindow(QMainWindow):
 
     LOAD_STALL_S = 5
 
+    def _on_placeholders_found(self, count, total):
+        """OneDrive 등에서 아직 받지 않은 파일: 받으면서 읽을지, 받은 것만 읽을지"""
+        worker = self._load_worker
+        if worker is None:
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("클라우드 파일")
+        box.setText(f"DICOM 파일 {total}개 중 {count}개가 클라우드(OneDrive 등)에만 있고 "
+                    "이 컴퓨터에는 아직 다운로드되지 않았습니다.")
+        box.setInformativeText(
+            "다운로드하며 불러오면 동기화 앱이 파일을 받는 동안 시간이 걸립니다. "
+            "받지 못하는 파일이 계속되면 나머지는 자동으로 건너뛰고 목록(⚠)에 표시합니다.\n\n"
+            "빠르게 보려면 Finder에서 폴더를 우클릭 → '다운로드'한 뒤 다시 여세요.")
+        download = box.addButton("다운로드하며 불러오기", QMessageBox.AcceptRole)
+        skip = box.addButton(f"다운로드된 {total - count}개만 불러오기", QMessageBox.ActionRole)
+        box.addButton("취소", QMessageBox.RejectRole)
+        box.setDefaultButton(download)
+        box.exec_()
+        clicked = box.clickedButton()
+        worker.answer_placeholders("download" if clicked is download
+                                   else "skip" if clicked is skip else "cancel")
+
     def _check_load_stall(self):
         worker, progress = self._load_worker, self._load_progress
         if worker is None or progress is None:
             return
         idle = time.monotonic() - worker.last_progress
-        if idle < self.LOAD_STALL_S:
+        if idle < self.LOAD_STALL_S or not worker.loader.slow_files(1):
             progress.setLabelText(self._load_label)
             return
         if not progress.isVisible():
@@ -907,7 +948,8 @@ class MainWindow(QMainWindow):
             return
         if progress.maximum() == 0:
             progress.setRange(0, 100)
-        self._load_label = f"Loading DICOM files... ({current}/{total})"
+        phase = self._load_worker.loader.phase if self._load_worker is not None else ""
+        self._load_label = f"{phase or 'Loading DICOM files'}... ({current}/{total})"
         progress.setLabelText(self._load_label)
         progress.setValue(current * 100 // total)
 

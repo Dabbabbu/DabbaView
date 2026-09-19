@@ -37,6 +37,25 @@ PIXEL_CACHE_SIZE = 100
 # 파일 하나를 읽거나 디코딩하는 데 이보다 오래 걸리면 건너뜀 (네트워크 드라이브 멈춤, 손상 파일)
 FILE_TIMEOUT_S = 10.0
 
+# 클라우드(OneDrive·iCloud·Google Drive 등) 동기화 폴더에서 아직 이 컴퓨터에 받지 않은 파일.
+# 읽는 순간 OS가 다운로드를 시작하는데, 동기화 앱이 멈춰 있으면 read()가 끝나지 않음.
+CLOUD_WORKERS = 4                 # 동시에 받을 파일 수 (동기화 앱에 요청이 몰리지 않게)
+CLOUD_TIMEOUT_S = 30.0            # 파일 하나 다운로드 대기 한도
+CLOUD_MAX_CONSECUTIVE_FAILS = 5   # 연속으로 이만큼 실패하면 나머지는 시도하지 않고 건너뜀
+_SF_DATALESS = 0x40000000         # macOS: 내용이 로컬에 없는 파일 (File Provider)
+_WIN_CLOUD_ATTRS = 0x00400000 | 0x00040000 | 0x00001000   # RECALL_ON_DATA_ACCESS/OPEN, OFFLINE
+
+
+def is_cloud_placeholder(path):
+    """다운로드되지 않은 클라우드 파일인지 (stat만 하므로 다운로드를 일으키지 않음)"""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if getattr(st, "st_flags", 0) & _SF_DATALESS:
+        return True
+    return bool(getattr(st, "st_file_attributes", 0) & _WIN_CLOUD_ATTRS)
+
 
 def default_worker_count():
     """CPU 코어 기반 워커 수 (파일 I/O 대기가 섞이므로 코어의 2배, 최대 32)"""
@@ -543,7 +562,7 @@ class DicomLoader:
                                cancel_event, max_workers)
 
     def load_paths(self, paths, recursive=True, progress_callback=None,
-                   cancel_event=None, max_workers=None):
+                   cancel_event=None, max_workers=None, placeholder_policy=None):
         """폴더/파일 경로 목록을 병렬로 로드 (드래그 앤 드롭 다중 선택 등)
 
         직접 지정한 파일은 확장자와 관계없이 시도하고,
@@ -594,9 +613,34 @@ class DicomLoader:
         if cancel_event is not None and cancel_event.is_set():
             return loaded
         parsed, failed = {}, {}   # 폴더 캐시 저장용
-        self.phase = "메타데이터 읽는 중"
+        # 클라우드에만 있는 파일은 따로: 받을지 물어보고, 받더라도 천천히·실패가 이어지면 중단
+        cloud = [f for f in files if is_cloud_placeholder(f)]
+        cloud_set = set(cloud)
+        local = [f for f in files if f not in cloud_set] if cloud else files
+        self.cloud_placeholders = len(cloud)
+        policy = "download"
+        if cloud and placeholder_policy is not None:
+            policy = placeholder_policy(len(cloud), len(files))
+            if policy == "cancel":
+                if cancel_event is not None:
+                    cancel_event.set()
+                return loaded
+        groups = [(local, dict(max_workers=max_workers))]
+        if cloud and policy == "download":
+            groups.append((cloud, dict(max_workers=CLOUD_WORKERS, timeout=CLOUD_TIMEOUT_S,
+                                       max_consecutive_failures=CLOUD_MAX_CONSECUTIVE_FAILS,
+                                       phase="클라우드에서 다운로드하며 읽는 중")))
+        elif cloud:
+            for path in cloud:
+                done += 1
+                failed[path] = "클라우드: 이 컴퓨터에 다운로드되지 않은 파일이라 건너뜀"
+                self.load_errors.append((path, failed[path]))
+            if progress_callback:
+                progress_callback(done, total)
         cancelled = False
-        for path, ds, error in self._read_all(files, max_workers, cancel_event):
+        results = (item for group, options in groups
+                   for item in self._read_group(group, cancel_event, options))
+        for path, ds, error in results:
             done += 1
             if error is None:
                 parsed[path] = ds
@@ -621,7 +665,7 @@ class DicomLoader:
                     continue
                 datasets = [parsed[f] for f in dicom_files if parsed.get(f) is not None]
                 errors = [(f, failed[f]) for f in dicom_files if f in failed]
-                if any(e.startswith("시간 초과") for _f, e in errors):
+                if any(e.startswith(("시간 초과", "클라우드")) for _f, e in errors):
                     continue   # 일시적인 멈춤일 수 있으니 다음에 다시 읽도록 캐시하지 않음
                 if datasets:
                     cache.save_metadata(folder, recursive, signature, datasets, errors,
@@ -633,6 +677,12 @@ class DicomLoader:
 
         return loaded
 
+    def _forget_running(self, path):
+        with self._running_lock:
+            for name, (running_path, _t0) in list(self._running.items()):
+                if running_path == path:
+                    del self._running[name]
+
     def slow_files(self, min_seconds=0.0):
         """지금 읽는 중인 파일 중 min_seconds 이상 걸리는 것 [(경로, 경과 초)]"""
         now = time.monotonic()
@@ -641,13 +691,20 @@ class DicomLoader:
         return sorted(((f, now - t0) for f, t0 in items if now - t0 >= min_seconds),
                       key=lambda x: -x[1])
 
+    def _read_group(self, files, cancel_event, options):
+        options = dict(options)
+        self.phase = options.pop("phase", "메타데이터 읽는 중")
+        return self._read_all(files, cancel_event=cancel_event, **options)
+
     def _read_all(self, files, max_workers=None, cancel_event=None, timeout=None,
-                  reader=None):
+                  reader=None, max_consecutive_failures=None):
         """파일 메타데이터를 데몬 스레드들로 읽으며 (경로, ds, 오류) 를 차례로 넘김
 
         - 한 파일이 timeout초를 넘기면 오류(시간 초과)로 넘기고 다음으로 진행
           (그 스레드는 버리고 새 워커를 띄움 — 네트워크 드라이브·손상 파일 멈춤 대비)
         - cancel_event가 set되면 0.2초 안에 반환 (멈춘 읽기를 기다리지 않음)
+        - max_consecutive_failures: 연속 실패(오류·시간 초과)가 이만큼이면 남은 파일은 읽지 않고
+          오류로 넘김 (클라우드 동기화 앱이 응답하지 않을 때 수천 개를 하나씩 기다리지 않도록)
         """
         timeout = FILE_TIMEOUT_S if timeout is None else timeout
         reader = reader or _read_metadata
@@ -684,6 +741,7 @@ class DicomLoader:
             spawn()
         remaining = set(files)
         skipped = set()
+        fails = 0
         try:
             while remaining:
                 if cancel_event is not None and cancel_event.is_set():
@@ -692,15 +750,28 @@ class DicomLoader:
                     path, ds, error = results.get(timeout=0.2)
                 except queue.Empty:
                     path = None
+                finished = []
                 if path is not None and path not in skipped:
                     remaining.discard(path)
-                    yield path, ds, error
-                for path, elapsed in self.slow_files(timeout):
-                    if path in remaining:
-                        skipped.add(path)
-                        remaining.discard(path)
+                    finished.append((path, ds, error))
+                for slow_path, elapsed in self.slow_files(timeout):
+                    if slow_path in remaining:
+                        skipped.add(slow_path)
+                        remaining.discard(slow_path)
+                        self._forget_running(slow_path)   # 멈춘 스레드는 버림 (데몬)
                         spawn()   # 멈춘 워커 대신
-                        yield path, None, f"시간 초과: {elapsed:.0f}초 넘게 응답이 없어 건너뜀"
+                        finished.append((slow_path, None,
+                                         f"시간 초과: {elapsed:.0f}초 넘게 응답이 없어 건너뜀"))
+                for item in finished:
+                    fails = fails + 1 if item[2] is not None else 0
+                    yield item
+                if max_consecutive_failures and fails >= max_consecutive_failures and remaining:
+                    stop.set()
+                    reason = (f"클라우드: 연속 {fails}개 파일을 받지 못해 나머지는 시도하지 않고 건너뜀 "
+                              "(동기화 앱 상태를 확인하거나 Finder에서 '다운로드' 후 다시 열기)")
+                    for path in sorted(remaining):
+                        yield path, None, reason
+                    remaining.clear()
         finally:
             stop.set()
 
