@@ -174,7 +174,7 @@ class MainWindow(QMainWindow):
         self._plot_dock.hide()
         self._console.hide()
         self._analysis_tab = AnalysisTab(self, self._ai_panel)
-        self._ai_panel.tabs.addTab(self._analysis_tab, "📊 Analysis")
+        self._ai_panel.tabs.addTab(self._analysis_tab, "🧰 Image Tools")
         self._labels.changed.connect(self._analysis_tab._fill_labels)
         self._create_image_actions()
         self._init_menubar()
@@ -462,6 +462,8 @@ class MainWindow(QMainWindow):
 
         # Window presets 메뉴 (설정에서 추가/편집/삭제, 열 때마다 새로 구성)
         self._init_process_menu(menubar)
+        from .clinical.menu import install as install_clinical
+        self._clinical_menu = install_clinical(self, menubar)
         self._preset_menu = menubar.addMenu("&Presets")
         self._help_menu = menubar.addMenu("&Help")
         about = QAction(f"About {APP_NAME}", self)

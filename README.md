@@ -92,7 +92,7 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 > NIfTI/NumPy/PNG/COCO/VOC에는 환자 정보가 들어가지 않습니다. DICOM SEG는 원본 검사를 참조하므로 환자 정보가 포함됩니다.
 
 ### 분석 (3D Slicer · ImageJ/Fiji 스타일)
-AI Research 패널의 **📊 Analysis** 탭, **Process** 메뉴, 하단 **Histogram / Profile** · **Python Console(F3)** 패널.
+AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **Histogram / Profile** · **Python Console(F3)** 패널.
 
 | 기능 | 내용 |
 |---|---|
@@ -107,6 +107,24 @@ AI Research 패널의 **📊 Analysis** 탭, **Process** 메뉴, 하단 **Histog
 | Color Map | Gray, Hot, Cool, Jet, Viridis, Magma, Inferno, Plasma, Bone, Rainbow, Fire + ImageJ `.lut`/텍스트 LUT, 컬러바 |
 | Python Console (F3) | `app.current_array`, `app.current_image`, `app.mask`, `app.add_series(배열, "이름")`, `np`, `ndi`, `plt`, `skimage` — plt 그래프는 콘솔 오른쪽에 표시, 구문 강조, 스크립트 열기/저장 |
 | Macros | 콘솔 스크립트를 매크로로 저장 → 원클릭 실행 (Process → Macros). 예제: Otsu → 입자 분석, Gaussian → 새 시리즈, 볼륨 통계, 라벨별 부피, MIP |
+
+### 전문 분석 도구 (Analysis 메뉴)
+
+메뉴바 **Analysis ▸ Cardiac | Neuro | Oncology | Lung | MSK | Vascular | Diffusion | Perfusion | Spectroscopy** 에서 도구를 고르면 오른쪽 **Analysis** 패널에 입력 화면과 결과(표 + matplotlib 그래프, 복사·CSV·PNG)가 나옵니다. 맵은 **새 시리즈**로 만들어집니다 (원본 보존). 피팅은 `scipy.optimize`, 계산은 `numpy`.
+
+| 카테고리 | 도구 |
+|---|---|
+| Cardiac | LV/RV Endo·Epi 윤곽 (ROI → 윤곽 저장, 영상 위 색 표시) → EDV·ESV·SV·EF·CO·심근 질량, AHA 17-segment Bull's Eye, T1(MOLLI)·T2 매핑, LGE (n-SD / FWHM), Phase-Contrast 유량 (순방향·역류·역류율·Qp/Qs), Strain (OpenCV optical flow, GCS·GRS), 관류 시간-신호 곡선 (upslope) |
+| Neuro | ADC/FA 컬러맵, DWI–ADC 미스매치 (확산 제한 vs T2 shine-through), FLAIR 병변 부피, DSC 관류 맵 |
+| Oncology | 종양 부피, RECIST 반자동 (장경·단경, 측정선 표시), Follow-up 변화율·반응 평가·배가 시간, ADC 히스토그램, SUVbw (SUVmax·peak·mean, MTV, TLG) |
+| Lung | 결절 반자동 분할 (장경·단경·부피), Doubling Time, 폐기종 LAA% (<−950 HU, Perc15), GGO |
+| MSK | 관절 각도 (두 선), 근육 단면적 (cm²), 지방 침윤 (CT HU 범위 / MR Otsu 자동), Cobb |
+| Vascular | 혈관 직경·면적, 협착률 (직경·면적), Curved MPR (랜드마크 경로), 동맥류 최대 직경·부피 |
+| Diffusion | ADC 맵 (다중 b 단일 지수 피팅), b-value 신호 감쇠 곡선, IVIM (D · D* · f 맵 + ROI 비선형 피팅) |
+| Perfusion | DCE Tofts (Ktrans · ve · kep), DSC (ΔR2* → sSVD CBV · CBF · MTT, rCBV/rCBF 정규화, 감마 바리에이트 피팅), AIF 자동 / 동맥 ROI / Parker 집단 AIF, 시간-신호 곡선 |
+| Spectroscopy | DICOM MR Spectroscopy / Siemens `.rda` → 스펙트럼 (선폭 가중, 자동·수동 위상), NAA · Cho · Cr · mI · Lac 피크, Cho/Cr · NAA/Cr · Cho/NAA |
+
+> 연구·교육용입니다. 진단용으로 검증된 소프트웨어가 아니므로 결과는 원래 판독 워크스테이션·검증된 도구와 대조하세요.
 
 ## 마우스 조작 (PACS 표준, Settings에서 변경 가능)
 
@@ -245,6 +263,11 @@ DabbaView/
     ├── net_ssl.py           # HTTPS 인증서 (certifi)
     ├── cloud/               # Google Drive / OneDrive (로그인, 탐색, 폴더 다운로드, 키체인 토큰)
     ├── cache.py             # 폴더 메타데이터·썸네일·클라우드 파일 캐시 (LRU 용량 관리)
+    ├── clinical/            # 전문 분석 (Analysis 메뉴 9개 카테고리)
+    │   ├── models.py        # ADC·IVIM·T1/T2·감마·DSC sSVD·Tofts·PC 유량
+    │   ├── cardiac.py / lesion.py / mrs.py   # 심장·병변/폐/혈관·분광 엔진
+    │   ├── panel.py         # 오른쪽 Analysis 도크, 결과 표·그래프
+    │   └── tools_*.py, menu.py              # 도구 페이지, 메뉴 등록
     ├── analysis/            # 3D Slicer · ImageJ 스타일 분석
     │   ├── processing.py    # 필터 (Gaussian, Median, Unsharp, Sobel, Canny, Morphology)
     │   ├── measure.py       # 히스토그램 통계, 라인 프로파일, 입자 분석
