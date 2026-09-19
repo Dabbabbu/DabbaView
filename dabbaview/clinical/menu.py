@@ -5,6 +5,7 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPen, QPolygonF
 
+from ..annotations import instance_key
 from . import tools_cardiac, tools_quant, tools_regional
 from .cardiac import CONTOUR_TYPES, ContourStore
 from .panel import AnalysisDock
@@ -52,7 +53,7 @@ def draw_contours(main):
         ds = vp.current_dataset()
         if store is None or ds is None:
             return
-        items = store.for_image(str(getattr(ds, "SOPInstanceUID", vp._current_slice)))
+        items = store.for_image(instance_key(ds, str(vp._current_slice)))
         for item in items:
             name, rgb = CONTOUR_TYPES[item["kind"]]
             poly = QPolygonF([vp._image_to_screen_f(p) for p in item["pts"]])

@@ -11,14 +11,19 @@ DICOM 파일 로딩 및 시리즈 분류 엔진
 - DICOM SEG는 시리즈가 아니라 세그멘테이션 오버레이, STL은 3D 메시로 따로 모음
 """
 import os
+import queue
 import threading
+import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pydicom
 
+from .dicom_codecs import ensure_decoders
 from .geometry import build_series_geometry
+
+ensure_decoders()
 
 _UNSET = object()
 
@@ -28,6 +33,9 @@ DICOM_EXTENSIONS = {'', '.dcm', '.dicom'}
 
 # 픽셀 캐시에 보관할 최대 슬라이스 수
 PIXEL_CACHE_SIZE = 100
+
+# 파일 하나를 읽거나 디코딩하는 데 이보다 오래 걸리면 건너뜀 (네트워크 드라이브 멈춤, 손상 파일)
+FILE_TIMEOUT_S = 10.0
 
 
 def default_worker_count():
@@ -57,6 +65,129 @@ def _read_metadata(filepath):
     return ds
 
 
+def frame_index(ds):
+    """멀티프레임 파일에서 펼친 프레임이면 프레임 번호, 아니면 None"""
+    return getattr(ds, "_dv_frame", None)
+
+
+def _functional_value(groups, sequence, keyword):
+    for group in groups:
+        seq = group.get(sequence) if group is not None else None
+        if seq and keyword in seq[0]:
+            return seq[0][keyword].value
+    return None
+
+
+def expand_frames(ds):
+    """멀티프레임(Enhanced CT/MR, 초음파·XA 시네 등) Dataset → 프레임마다 Dataset
+
+    Enhanced 객체는 프레임별 위치·방향·간격·Rescale·Window가 Functional Group에 있으므로
+    일반 슬라이스처럼 최상위 태그로 옮김. 픽셀은 프레임 번호로 한 장씩 디코딩.
+    """
+    try:
+        n = int(getattr(ds, "NumberOfFrames", 1) or 1)
+    except (TypeError, ValueError):
+        n = 1
+    if n <= 1:
+        return [ds]
+    shared = ds.get("SharedFunctionalGroupsSequence")
+    shared = shared[0] if shared else None
+    per_frame = ds.get("PerFrameFunctionalGroupsSequence")
+    frames = []
+    for i in range(n):
+        f = pydicom.Dataset(dict(ds._dict))   # 얕은 복사: 원본 요소는 공유, 태그 교체는 독립
+        f.file_meta = getattr(ds, "file_meta", pydicom.dataset.FileMetaDataset())
+        f.filename = getattr(ds, "filename", None)
+        groups = [per_frame[i] if per_frame is not None and i < len(per_frame) else None, shared]
+        values = {
+            "ImagePositionPatient": _functional_value(groups, "PlanePositionSequence",
+                                                      "ImagePositionPatient"),
+            "ImageOrientationPatient": _functional_value(groups, "PlaneOrientationSequence",
+                                                         "ImageOrientationPatient"),
+            "PixelSpacing": _functional_value(groups, "PixelMeasuresSequence", "PixelSpacing"),
+            "SliceThickness": _functional_value(groups, "PixelMeasuresSequence", "SliceThickness"),
+            "RescaleSlope": _functional_value(groups, "PixelValueTransformationSequence",
+                                              "RescaleSlope"),
+            "RescaleIntercept": _functional_value(groups, "PixelValueTransformationSequence",
+                                                  "RescaleIntercept"),
+            "WindowCenter": _functional_value(groups, "FrameVOILUTSequence", "WindowCenter"),
+            "WindowWidth": _functional_value(groups, "FrameVOILUTSequence", "WindowWidth"),
+            "InstanceNumber": i + 1,
+        }
+        for keyword in ("PerFrameFunctionalGroupsSequence", "NumberOfFrames"):
+            if keyword in f:
+                del f[keyword]
+        for keyword, value in values.items():
+            if value is None:
+                continue
+            if keyword in f:
+                del f[keyword]   # 원본과 공유하는 요소를 바꾸지 않도록 지우고 새로 만듦
+            setattr(f, keyword, value)
+        offsets = ds.get("GridFrameOffsetVector")   # RT Dose 등: 프레임 위치 = 기준 + 오프셋 × 법선
+        if (values["ImagePositionPatient"] is None and offsets is not None and i < len(offsets)
+                and "ImagePositionPatient" in ds and "ImageOrientationPatient" in ds):
+            iop = [float(v) for v in ds.ImageOrientationPatient]
+            normal = np.cross(iop[:3], iop[3:])
+            ipp = np.array([float(v) for v in ds.ImagePositionPatient]) + float(offsets[i]) * normal
+            del f["ImagePositionPatient"]
+            f.ImagePositionPatient = [round(float(v), 4) for v in ipp]
+        f._dv_frame = i
+        f._dv_frames = n
+        frames.append(f)
+    return frames
+
+
+def _decode_pixels(ds):
+    """메타데이터 Dataset이 가리키는 파일에서 해당 프레임 픽셀만 디코딩"""
+    from pydicom.pixels import pixel_array
+    frame = frame_index(ds)
+    path = ds.filename
+    try:
+        return pixel_array(path, index=frame)
+    except Exception:  # noqa: BLE001 - 파일 메타 없는 옛 파일 등은 전체를 읽어 재시도
+        full = pydicom.dcmread(path, force=True)
+        if "TransferSyntaxUID" not in getattr(full, "file_meta", {}):
+            full.file_meta = getattr(full, "file_meta", pydicom.dataset.FileMetaDataset())
+            full.file_meta.TransferSyntaxUID = (pydicom.uid.ImplicitVRLittleEndian
+                                                if full.original_encoding[0]
+                                                else pydicom.uid.ExplicitVRLittleEndian)
+        arr = full.pixel_array
+        if frame is not None and arr.ndim >= 3 and arr.shape[0] == getattr(ds, "_dv_frames", 0):
+            arr = arr[frame]
+        return arr
+
+
+def _short_error(exc):
+    text = str(exc).strip().splitlines()
+    text = text[0] if text else type(exc).__name__
+    if "all available plugins" in text or "missing dependenc" in text or "plugins are missing" in text:
+        return "압축 형식을 디코딩할 수 없음 (" + str(exc).strip().splitlines()[-1].strip()[:120] + ")"
+    return f"{type(exc).__name__}: {text[:160]}"
+
+
+def run_with_timeout(fn, arg, timeout):
+    """fn(arg)를 데몬 스레드에서 실행해 timeout초까지만 기다림 (멈춘 스레드는 버림)"""
+    box = {}
+
+    def target():
+        try:
+            box["value"] = fn(arg)
+        except BaseException as e:  # noqa: BLE001
+            box["error"] = e
+    thread = threading.Thread(target=target, daemon=True, name="dabbaview-decode")
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise TimeoutError(f"{timeout:.0f}초 안에 끝나지 않아 건너뜀")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+# 디코딩 실패 알림 (메인 창이 연결: fn(filename, frame, message), 아무 스레드에서나 호출됨)
+decode_error_listeners = []
+
+
 class DicomSeries:
     """하나의 DICOM 시리즈를 나타내는 클래스
 
@@ -73,6 +204,8 @@ class DicomSeries:
         self._pixel_array_cache = OrderedDict()  # index -> ndarray (LRU)
         self._cache_lock = threading.Lock()
         self._geometry = _UNSET
+        # 디코딩 실패는 (파일, 프레임) 단위로 기억 → 다시 그릴 때마다 디스크를 읽지 않음
+        self.decode_errors = {}
 
     def add_slice(self, ds):
         self.slices.append(ds)
@@ -174,25 +307,53 @@ class DicomSeries:
             return None
 
     def get_full_dataset(self, index):
-        """픽셀 데이터를 포함한 전체 Dataset을 파일에서 다시 읽어 반환"""
+        """픽셀 데이터를 포함한 전체 Dataset을 파일에서 다시 읽어 반환
+
+        멀티프레임 파일의 프레임이면 파일 전체(모든 프레임)가 들어 있음.
+        """
         self.sort_slices()
         if index < 0 or index >= len(self.slices):
             return None
         return pydicom.dcmread(self.slices[index].filename, force=True)
 
-    def _load_pixels(self, index):
-        """디스크에서 픽셀을 읽어 Rescale 적용 (캐시 미사용)"""
-        try:
-            ds = self.get_full_dataset(index)
-            if ds is None:
-                return None
-            arr = ds.pixel_array.astype(np.float64)
+    @staticmethod
+    def _error_key(ds):
+        return (str(getattr(ds, "filename", "")), frame_index(ds))
 
-            # Rescale Slope/Intercept 적용 (CT 등)
-            slope = float(getattr(ds, 'RescaleSlope', 1))
-            intercept = float(getattr(ds, 'RescaleIntercept', 0))
+    def decode_error(self, index):
+        """이 슬라이스를 표시할 수 없는 이유 (정상이면 None)"""
+        if 0 <= index < len(self.slices):
+            return self.decode_errors.get(self._error_key(self.slices[index]))
+        return None
+
+    def _load_pixels(self, index):
+        """디스크에서 픽셀을 읽어 Rescale 적용 (캐시 미사용). 실패하면 이유를 기억하고 None"""
+        self.sort_slices()
+        if index < 0 or index >= len(self.slices):
+            return None
+        ds = self.slices[index]
+        key = self._error_key(ds)
+        if key in self.decode_errors:
+            return None
+        try:
+            arr = run_with_timeout(_decode_pixels, ds, FILE_TIMEOUT_S)
+            arr = np.asarray(arr).astype(np.float64)
+            # Rescale Slope/Intercept 적용 (CT 등, 멀티프레임은 프레임별 값)
+            slope = float(getattr(ds, 'RescaleSlope', 1) or 1)
+            intercept = float(getattr(ds, 'RescaleIntercept', 0) or 0)
             return arr * slope + intercept
-        except Exception:
+        except Exception as e:  # noqa: BLE001 - 해당 영상만 건너뛰고 계속
+            message = _short_error(e)
+            if message.startswith("압축 형식"):
+                ts = getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None)
+                name = getattr(ts, "name", "") if ts is not None else ""
+                message = f"압축 형식({name or '알 수 없음'})을 디코딩할 수 없거나 데이터가 손상됨"
+            self.decode_errors[key] = message
+            for listener in list(decode_error_listeners):
+                try:
+                    listener(key[0], key[1], message)
+                except Exception:  # noqa: BLE001
+                    pass
             return None
 
     def get_pixel_array(self, index):
@@ -228,6 +389,17 @@ class DicomSeries:
         with ThreadPoolExecutor(
                 max_workers=max_workers or default_worker_count()) as ex:
             return list(ex.map(self._load_pixels, range(n)))
+
+    def get_volume_array(self):
+        """(Z, H, W) 볼륨. 디코딩에 실패한 슬라이스는 0으로 채움 (크기가 다르면 ValueError)"""
+        arrays = self.get_all_pixel_arrays()
+        good = [a for a in arrays if a is not None]
+        if not good:
+            raise ValueError("픽셀을 읽을 수 있는 슬라이스가 없습니다.")
+        shape = good[0].shape
+        if any(a.shape != shape for a in good):
+            raise ValueError("슬라이스 크기가 서로 다릅니다.")
+        return np.stack([a if a is not None else np.zeros(shape) for a in arrays])
 
     def get_default_window(self):
         """기본 윈도우 센터/너비 반환"""
@@ -298,6 +470,9 @@ class DicomLoader:
     def __init__(self):
         self.series_dict = {}  # series_uid -> DicomSeries
         self.load_errors = []
+        self._running = {}           # 워커 이름 → (파일, 시작 시각): 멈춘 파일 표시용
+        self._running_lock = threading.Lock()
+        self.phase = ""              # 진행 단계 설명 (파일 목록 확인 / 메타데이터 읽기)
         self.cached_count = 0  # 캐시에서 바로 읽은 파일 수 (상태 표시용)
         self._reset_extras()
 
@@ -319,7 +494,8 @@ class DicomLoader:
         series_uid = str(getattr(ds, 'SeriesInstanceUID', 'unknown'))
         if series_uid not in self.series_dict:
             self.series_dict[series_uid] = DicomSeries(series_uid)
-        self.series_dict[series_uid].add_slice(ds)
+        for frame in expand_frames(ds):
+            self.series_dict[series_uid].add_slice(frame)
 
     def load_file(self, filepath):
         """단일 DICOM 파일 로드 (메타데이터만)"""
@@ -375,6 +551,9 @@ class DicomLoader:
         self.series_dict.clear()
         self.load_errors.clear()
         self._reset_extras()
+        self.phase = "파일 목록 확인 중"
+        if progress_callback:
+            progress_callback(0, 0)   # 전체 개수를 모르는 단계 (폴더 탐색)
 
         from . import cache
         files = []
@@ -413,31 +592,25 @@ class DicomLoader:
         if cancel_event is not None and cancel_event.is_set():
             return loaded
         parsed, failed = {}, {}   # 폴더 캐시 저장용
+        self.phase = "메타데이터 읽는 중"
         cancelled = False
-        with ThreadPoolExecutor(
-                max_workers=max_workers or default_worker_count()) as ex:
-            futures = {ex.submit(_read_metadata, f): f for f in files}
-            # 결과 취합은 이 스레드에서만 하므로 series_dict에 락 불필요
-            for future in as_completed(futures):
-                done += 1
-                try:
-                    ds = future.result()
-                    parsed[futures[future]] = ds
-                    if ds is not None:
+        for path, ds, error in self._read_all(files, max_workers, cancel_event):
+            done += 1
+            if error is None:
+                parsed[path] = ds
+                if ds is not None:
+                    try:
                         self._add_dataset(ds)
                         loaded += 1
-                except Exception as e:
-                    failed[futures[future]] = str(e)
-                    self.load_errors.append((futures[future], str(e)))
-
-                if progress_callback:
-                    progress_callback(done, total)
-
-                if cancel_event is not None and cancel_event.is_set():
-                    cancelled = True
-                    for f in futures:
-                        f.cancel()
-                    break
+                    except Exception as e:  # noqa: BLE001 - 이상한 태그 값 등: 이 파일만 건너뜀
+                        error = _short_error(e)
+            if error is not None:
+                failed[path] = error
+                self.load_errors.append((path, error))
+            if progress_callback:
+                progress_callback(done, total)
+        if cancel_event is not None and cancel_event.is_set():
+            cancelled = True
 
         # 다 읽은 폴더는 메타데이터를 캐시에 저장 (다음에 열 때 파싱 생략)
         if not cancelled:
@@ -446,6 +619,8 @@ class DicomLoader:
                     continue
                 datasets = [parsed[f] for f in dicom_files if parsed.get(f) is not None]
                 errors = [(f, failed[f]) for f in dicom_files if f in failed]
+                if any(e.startswith("시간 초과") for _f, e in errors):
+                    continue   # 일시적인 멈춤일 수 있으니 다음에 다시 읽도록 캐시하지 않음
                 if datasets:
                     cache.save_metadata(folder, recursive, signature, datasets, errors,
                                         extra={"pydicom": pydicom.__version__})
@@ -455,6 +630,77 @@ class DicomLoader:
             series.sort_slices()
 
         return loaded
+
+    def slow_files(self, min_seconds=0.0):
+        """지금 읽는 중인 파일 중 min_seconds 이상 걸리는 것 [(경로, 경과 초)]"""
+        now = time.monotonic()
+        with self._running_lock:
+            items = list(self._running.values())
+        return sorted(((f, now - t0) for f, t0 in items if now - t0 >= min_seconds),
+                      key=lambda x: -x[1])
+
+    def _read_all(self, files, max_workers=None, cancel_event=None, timeout=None,
+                  reader=None):
+        """파일 메타데이터를 데몬 스레드들로 읽으며 (경로, ds, 오류) 를 차례로 넘김
+
+        - 한 파일이 timeout초를 넘기면 오류(시간 초과)로 넘기고 다음으로 진행
+          (그 스레드는 버리고 새 워커를 띄움 — 네트워크 드라이브·손상 파일 멈춤 대비)
+        - cancel_event가 set되면 0.2초 안에 반환 (멈춘 읽기를 기다리지 않음)
+        """
+        timeout = FILE_TIMEOUT_S if timeout is None else timeout
+        reader = reader or _read_metadata
+        tasks = queue.Queue()
+        for f in files:
+            tasks.put(f)
+        results = queue.Queue()
+        stop = threading.Event()
+        counter = [0]
+
+        def work():
+            name = threading.current_thread().name
+            while not stop.is_set():
+                try:
+                    path = tasks.get_nowait()
+                except queue.Empty:
+                    return
+                with self._running_lock:
+                    self._running[name] = (path, time.monotonic())
+                try:
+                    results.put((path, reader(path), None))
+                except Exception as e:  # noqa: BLE001 - 손상 파일: 이 파일만 건너뜀
+                    results.put((path, None, _short_error(e)))
+                finally:
+                    with self._running_lock:
+                        self._running.pop(name, None)
+
+        def spawn():
+            counter[0] += 1
+            threading.Thread(target=work, daemon=True,
+                             name=f"dabbaview-read-{counter[0]}").start()
+
+        for _ in range(min(len(files), max_workers or default_worker_count())):
+            spawn()
+        remaining = set(files)
+        skipped = set()
+        try:
+            while remaining:
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                try:
+                    path, ds, error = results.get(timeout=0.2)
+                except queue.Empty:
+                    path = None
+                if path is not None and path not in skipped:
+                    remaining.discard(path)
+                    yield path, ds, error
+                for path, elapsed in self.slow_files(timeout):
+                    if path in remaining:
+                        skipped.add(path)
+                        remaining.discard(path)
+                        spawn()   # 멈춘 워커 대신
+                        yield path, None, f"시간 초과: {elapsed:.0f}초 넘게 응답이 없어 건너뜀"
+        finally:
+            stop.set()
 
     def _load_other_formats(self, paths, progress_callback=None, total=0):
         """NIfTI/NRRD/MetaImage/NumPy/이미지/STL. 불러온 항목 수 반환"""

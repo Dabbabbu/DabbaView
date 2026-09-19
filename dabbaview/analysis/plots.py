@@ -137,7 +137,7 @@ class AnalysisPlotDock(QDockWidget):
             region = case.mask == label
             if not region.any():
                 return None, f"'{seg.labels.name(label)}' 라벨이 칠해진 곳이 없습니다"
-            volume = np.stack(series.get_all_pixel_arrays())
+            volume = series.get_volume_array()
             return volume[region], f"라벨 '{seg.labels.name(label)}' (3D)"
         return arr, f"{series.description} · slice {k + 1}"
 

@@ -22,8 +22,16 @@ def image_key(series, index):
     """영상을 식별하는 키 (SOPInstanceUID 우선)"""
     if series is None or not (0 <= index < series.num_slices):
         return None
-    uid = str(getattr(series.slices[index], "SOPInstanceUID", "") or "")
-    return uid or f"{series.series_uid}#{index}"
+    return instance_key(series.slices[index], f"{series.series_uid}#{index}")
+
+
+def instance_key(ds, fallback=""):
+    """영상 한 장의 키: SOPInstanceUID (멀티프레임 파일의 프레임이면 '#f프레임' 추가)"""
+    uid = str(getattr(ds, "SOPInstanceUID", "") or "")
+    if not uid:
+        return fallback
+    frame = getattr(ds, "_dv_frame", None)
+    return uid if frame is None else f"{uid}#f{frame}"
 
 
 def _to_jsonable(value):

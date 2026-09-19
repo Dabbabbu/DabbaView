@@ -6,6 +6,7 @@ DabbaView 메인 윈도우
 """
 import os
 import threading
+import time
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTreeWidget, QTreeWidgetItem, QSplitter, QToolBar,
@@ -102,6 +103,8 @@ class DirectoryLoadWorker(QThread):
         self.target_viewport = target_viewport
         self._cancel_event = threading.Event()
         self._last_percent = -1
+        self.loader = DicomLoader()   # 진행 중 멈춘 파일 확인용 (메인 스레드에서 slow_files만 읽음)
+        self.last_progress = time.monotonic()
 
     def cancel(self):
         self._cancel_event.set()
@@ -110,6 +113,10 @@ class DirectoryLoadWorker(QThread):
         return self._cancel_event.is_set()
 
     def _on_progress(self, current, total):
+        self.last_progress = time.monotonic()
+        if total <= 0:   # 폴더 탐색 단계: 개수 모름
+            self.progress.emit(0, 0)
+            return
         # 파일마다 시그널을 보내면 UI 이벤트 큐가 넘치므로 1% 단위로만 전달
         percent = current * 100 // total
         if percent != self._last_percent or current == total:
@@ -118,7 +125,7 @@ class DirectoryLoadWorker(QThread):
 
     def run(self):
         # 새 로더에 채운 뒤 완료 시 교체 → 로딩 중에도 기존 시리즈를 안전하게 볼 수 있음
-        loader = DicomLoader()
+        loader = self.loader
         loaded = loader.load_paths(
             self._paths, progress_callback=self._on_progress,
             cancel_event=self._cancel_event)
@@ -709,6 +716,12 @@ class MainWindow(QMainWindow):
         self._statusbar.addWidget(self._status_wl)
         self._statusbar.addWidget(self._status_zoom)
         self._statusbar.addPermanentWidget(self._status_pos)
+        # 불러오기·표시에 실패한 파일 목록 (디코딩 실패는 어느 스레드에서든 보고됨)
+        from . import dicom_loader
+        from .load_errors import LoadErrorButton, LoadErrorLog
+        self._load_errors = LoadErrorLog(self)
+        dicom_loader.decode_error_listeners.append(self._load_errors.add_decode_error)
+        self._statusbar.addPermanentWidget(LoadErrorButton(self._load_errors, self))
 
     def _connect_signals(self):
         """시그널 연결"""
@@ -843,6 +856,7 @@ class MainWindow(QMainWindow):
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(500)
         progress.setValue(0)
+        progress.setMinimumWidth(460)
 
         worker = DirectoryLoadWorker(paths, target_viewport, remember, self)
         worker.progress.connect(self._on_load_progress)
@@ -852,13 +866,50 @@ class MainWindow(QMainWindow):
 
         self._load_worker = worker
         self._load_progress = progress
+        self._load_label = "Loading DICOM files..."
+        # 진행이 한동안 멈추면 어떤 파일에서 막혔는지 보여 주고 취소를 안내
+        self._load_watchdog = QTimer(self)
+        self._load_watchdog.timeout.connect(self._check_load_stall)
+        self._load_watchdog.start(1000)
         worker.start()
 
+    LOAD_STALL_S = 5
+
+    def _check_load_stall(self):
+        worker, progress = self._load_worker, self._load_progress
+        if worker is None or progress is None:
+            return
+        idle = time.monotonic() - worker.last_progress
+        if idle < self.LOAD_STALL_S:
+            progress.setLabelText(self._load_label)
+            return
+        if not progress.isVisible():
+            progress.show()
+        slow = worker.loader.slow_files(self.LOAD_STALL_S)
+        lines = [self._load_label, "",
+                 f"⚠ {idle:.0f}초째 진행이 없습니다."]
+        for path, seconds in slow[:3]:
+            lines.append(f"   {os.path.basename(path)} — {seconds:.0f}초째 응답 없음")
+        from .dicom_loader import FILE_TIMEOUT_S
+        lines.append(f"{FILE_TIMEOUT_S:.0f}초가 지난 파일은 자동으로 건너뜁니다. "
+                     "기다리기 싫으면 '취소'를 누르세요 — 지금까지 읽은 영상은 열립니다.")
+        progress.setLabelText("\n".join(lines))
+
     def _on_load_progress(self, current, total):
-        if self._load_progress is not None:
-            self._load_progress.setLabelText(
-                f"Loading DICOM files... ({current}/{total})")
-            self._load_progress.setValue(current * 100 // total)
+        # 모달 진행창의 setValue가 이벤트를 처리하는 동안 완료 처리로 _load_progress가 None이 될 수 있음
+        progress = self._load_progress
+        if progress is None:
+            return
+        if total <= 0:
+            self._load_label = "파일 목록 확인 중..."
+            progress.setLabelText(self._load_label)
+            progress.setRange(0, 0)   # 개수를 모르는 단계: 움직이는 막대
+            return
+        if progress.maximum() == 0:
+            progress.setRange(0, 100)
+        self._load_label = f"Loading DICOM files... ({current}/{total})"
+        progress.setLabelText(self._load_label)
+        progress.setValue(current * 100 // total)
 
     def _on_load_finished(self, loader, loaded):
         cancelled = self._load_worker.was_cancelled()
@@ -866,18 +917,27 @@ class MainWindow(QMainWindow):
         loaded_paths = self._load_worker.paths
         remember = self._load_worker.remember
         self._load_worker = None
+        self._load_watchdog.stop()
         if self._load_progress is not None:
             self._load_progress.close()
             self._load_progress = None
 
-        if cancelled:
+        if cancelled and not loader.series_dict:
             self._statusbar.showMessage("Loading cancelled", 5000)
             return
 
         if loaded == 0:
-            QMessageBox.warning(
-                self, "Warning",
-                "No DICOM files found in the selected folder.")
+            if loader.load_errors:
+                self._load_errors.reset(loader.load_errors)
+                QMessageBox.warning(
+                    self, "Warning",
+                    f"영상을 하나도 불러오지 못했습니다. {len(loader.load_errors)}개 파일을 건너뛰었습니다.\n\n"
+                    f"예: {os.path.basename(loader.load_errors[0][0])} — {loader.load_errors[0][1]}\n\n"
+                    "상태바 오른쪽 아래 ⚠ 버튼으로 전체 목록을 볼 수 있습니다.")
+            else:
+                QMessageBox.warning(
+                    self, "Warning",
+                    "No DICOM files found in the selected folder.")
             return
 
         # 실제로 불러오기에 성공한 경로만 최근 목록에 기록
@@ -892,6 +952,7 @@ class MainWindow(QMainWindow):
             return
         if target_viewport is None:
             self._loader = loader
+            self._load_errors.reset(loader.load_errors)
             pending, self._pending_select_uid = self._pending_select_uid, None
             self._update_series_list(
                 select_uid=pending if pending and loader.get_series_by_uid(pending) else None)
@@ -900,14 +961,17 @@ class MainWindow(QMainWindow):
         else:
             # 기존 목록에 추가하고, 드롭한 뷰포트를 활성화한 뒤 첫 새 시리즈 선택
             new_uids = self._loader.merge(loader)
+            self._load_errors.extend(loader.load_errors)
             self._multi_viewport.set_active(target_viewport)
             self._update_series_list(select_uid=new_uids[0] if new_uids else None)
         self._report_library.set_studies(self._studies_for_matching())
         notes = self._apply_loaded_extras(loader)
         errors = loader.load_errors
         message = f"Loaded {loaded} files"
+        if cancelled:
+            message = f"불러오기 취소 — 지금까지 읽은 {loaded}개 파일만 표시"
         if errors:
-            message += f" ({len(errors)} errors)"
+            message += f" ({len(errors)}개 건너뜀 — 오른쪽 아래 ⚠ 버튼으로 목록 보기)"
         if protocol_name:
             message += f"  ·  Hanging Protocol: {protocol_name}"
         if notes:

@@ -322,4 +322,4 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 
 Copyright (c) 2026 Park Seongho ([Dabbabbu](https://github.com/Dabbabbu))
 
-이 프로젝트는 GPL-3.0 라이선스를 따릅니다. 사용하는 주요 라이브러리 중 PyQt5는 GPL-3.0이며, pydicom·pynetdicom(MIT), NumPy·SciPy(BSD), OpenCV(Apache-2.0), pypdfium2(Apache-2.0/BSD) 등은 GPL-3.0과 함께 배포할 수 있는 라이선스입니다.
+이 프로젝트는 GPL-3.0 라이선스를 따릅니다. 사용하는 주요 라이브러리 중 PyQt5는 GPL-3.0이며, pydicom·pynetdicom(MIT), NumPy·SciPy(BSD), OpenCV(Apache-2.0), pypdfium2(Apache-2.0/BSD), 압축 DICOM 디코더 pylibjpeg·pylibjpeg-openjpeg(MIT)·pylibjpeg-libjpeg(GPL-3.0)·GDCM(BSD) 등은 GPL-3.0과 함께 배포할 수 있는 라이선스입니다.

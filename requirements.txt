@@ -1,4 +1,8 @@
-pydicom>=2.4.0
+pydicom>=3.0  # pydicom.pixels: 멀티프레임 프레임 단위 디코딩
+pylibjpeg>=2.0  # 압축 DICOM: JPEG Baseline/Extended/Lossless, JPEG-LS (libjpeg), JPEG 2000 (openjpeg)
+pylibjpeg-libjpeg>=2.1
+pylibjpeg-openjpeg>=2.0
+python-gdcm>=3.0  # 압축 DICOM 보조 디코더 (pylibjpeg가 못 읽는 파일)
 numpy>=1.24.0
 Pillow>=10.0.0
 PyQt5>=5.15.0
