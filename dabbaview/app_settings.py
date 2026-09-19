@@ -220,6 +220,19 @@ class AppSettings:
     def set_report_creator(self, name):
         self._qs.setValue("report_creator", name.strip())
 
+    # AI Research (MONAI Label 서버)
+    def monai_url(self):
+        return self._qs.value("monai_label_url", "", type=str)
+
+    def set_monai_url(self, url):
+        self._qs.setValue("monai_label_url", (url or "").strip())
+
+    def monai_token(self):
+        return self._qs.value("monai_label_token", "", type=str)
+
+    def set_monai_token(self, token):
+        self._qs.setValue("monai_label_token", (token or "").strip())
+
     # DICOM 노드
     def dicom_nodes(self):
         return self._load_json("dicom_nodes", [])

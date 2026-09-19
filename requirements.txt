@@ -8,3 +8,4 @@ pynetdicom>=2.1.0
 pypdfium2>=4.0
 striprtf>=0.0.26
 vtk>=9.3  # 3D Volume Rendering
+onnxruntime>=1.17  # AI Research: ONNX 모델 로컬 추론

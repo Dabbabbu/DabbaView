@@ -59,6 +59,21 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 
 > DICOM Send는 원본 파일을 그대로 보내므로 **환자 정보가 포함됩니다.** 외부로 보낼 때는 먼저 익명화하세요.
 
+### AI Research — 툴바 🧠 AI (Ctrl+Shift+A)
+오른쪽 사이드 패널에서 AI 학습 데이터를 만들고 모델을 연동합니다 (3D Slicer Segment Editor · MONAI Label 방식).
+
+- **세그멘테이션**: Brush(D) / Eraser(X, 현재 라벨만 지움) / Magic Wand(W, 클릭한 값 ±허용범위의 연결 영역, 3D 옵션) / Threshold(G, 값 범위 미리보기 후 클릭한 슬라이스 또는 전체 적용, CT 프리셋)
+- **슬라이스 보간**: 몇 장만 칠하면 사이 슬라이스를 모양 기반(거리 맵)으로 자동 채움
+- **다중 라벨 / 라벨 매니저**: 추가·삭제·이름·색상·표시 여부, 반투명 오버레이(투명도 슬라이더), 되돌리기(Ctrl+Z)
+- **통계**: 라벨별 볼륨(mL)·복셀·슬라이스 범위. 마스크는 시리즈별로 자동 저장되어 다시 열면 이어서 작업
+- **내보내기**: NIfTI(.nii.gz) · NumPy(.npy) · PNG 시퀀스 · COCO(JSON) · Pascal VOC · DICOM SEG, train/val/test 자동 분할(케이스가 여러 개면 케이스 단위, 하나면 슬라이스 단위)
+- **전처리**: 라벨 영역 크롭(+여유 mm), 리샘플링(목표 간격 mm), 가우시안/미디안 필터, 히스토그램 매칭(기준 시리즈), 윈도잉 후 0–1 정규화, 전/후 미리보기
+- **MONAI Label**: 서버 연결(Settings → AI), 자동 세그멘테이션 결과를 오버레이로 받아 수정 → 최종 라벨 제출(active learning) → 학습 시작. 서버로는 픽셀 볼륨만 보냄 (환자 정보 제외)
+- **ONNX 로컬 추론** (onnxruntime): (N,C,H,W) 모델은 슬라이스별, (N,C,D,H,W)는 3D. 결과를 빈 곳만 채우거나 교체
+- **데이터셋 워크리스트**: 여러 환자/검사를 목록으로 관리, 상태(미완/진행중/완료), 라벨 통계, 폴더에서 다시 열기
+
+> NIfTI/NumPy/PNG/COCO/VOC에는 환자 정보가 들어가지 않습니다. DICOM SEG는 원본 검사를 참조하므로 환자 정보가 포함됩니다.
+
 ## 마우스 조작 (PACS 표준, Settings에서 변경 가능)
 
 | 조작 | 기능 |
@@ -96,11 +111,13 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 | Shift+T | Stack ↔ Tile | T / O | 환자 정보 + 측정/주석 표시/숨김 |
 | Space | Multi View: 선택한 칸만 크게 ↔ 복귀 | P | 시네 재생/정지 |
 | R | Reading(기록) 창 | Delete | 현재 영상의 마지막 주석 삭제 |
-| Esc | 그리던 측정 취소 / 3D Cursor 지우기 | Ctrl+T | DICOM 태그 |
+| Esc | 그리던 측정 취소 / 3D Cursor 지우기 / 세그멘테이션 도구 해제 | Ctrl+T | DICOM 태그 |
 | Ctrl+I | Image 정보 패널 | Ctrl+Shift+S | Capture |
 | Ctrl+O | 파일 열기 | Ctrl+Shift+O | 폴더 열기 |
 | Ctrl+S | 이미지 내보내기 | Ctrl+Shift+E | 동영상 내보내기 |
 | F2 | 시리즈 패널 접기/펼치기 | ⌘, (macOS) | Settings (Windows는 File → Settings) |
+| Ctrl+Shift+A | AI Research 패널 | D / X | 세그멘테이션 Brush / Eraser |
+| W / G | Magic Wand / Threshold | Ctrl+Z | 세그멘테이션 되돌리기 |
 
 ## 설정 (File → Settings, macOS ⌘,)
 - **Mouse**: 버튼·휠·더블클릭 동작 매핑
@@ -108,6 +125,7 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 - **Hanging Protocols**: 모달리티, 부위 키워드, 레이아웃, 칸별 시리즈 키워드
 - **DICOM Nodes**: 이 컴퓨터의 AE Title, 전송/인쇄 대상 (AE Title, Host, Port)
 - **Reading**: 기록 폴더(감시), 기본 Creator
+- **AI**: MONAI Label 서버 주소, Access Token
 
 설정은 QSettings로 저장됩니다 (macOS: `~/Library/Preferences/com.dabbaview.DabbaView.plist`).
 
@@ -175,7 +193,20 @@ DabbaView/
     ├── anonymizer.py        # 익명화
     ├── tag_viewer.py        # DICOM 태그 뷰어
     ├── text_dialog.py       # 텍스트 주석 입력
-    └── render.py            # 8비트 렌더링 (내보내기/인쇄)
+    ├── render.py            # 8비트 렌더링 (내보내기/인쇄)
+    ├── shortcut_fallback.py # 한글 입력 상태에서도 단축키 동작
+    └── ai/                  # AI Research
+        ├── panel.py         # 사이드 패널 UI
+        ├── segmentation.py  # 마스크 편집 (Brush/Eraser/Wand/Threshold/보간)
+        ├── labels.py        # 라벨 목록
+        ├── export.py        # NIfTI/NumPy/PNG/COCO/VOC/DICOM SEG + 분할
+        ├── nifti.py         # NIfTI-1 읽기/쓰기
+        ├── dicom_seg.py     # DICOM Segmentation 생성
+        ├── preprocess.py    # 크롭/리샘플링/필터/히스토그램 매칭/정규화
+        ├── monai_label.py   # MONAI Label REST 클라이언트
+        ├── onnx_infer.py    # ONNX 로컬 추론
+        ├── worklist.py      # 데이터셋 워크리스트
+        └── volume.py        # 시리즈 → 3D 볼륨 + 좌표
 ```
 
 ## 향후 추가 예정

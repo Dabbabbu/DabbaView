@@ -25,6 +25,10 @@ from .multi_viewport import MultiViewport
 from .mpr_viewer import MPRWidget
 from .volume_renderer import VolumeRenderWidget, vtk_usable
 from .anonymizer import AnonymizeDialog
+from .ai.labels import LabelSet
+from .ai.panel import AIResearchPanel
+from .ai.segmentation import SegmentationController
+from .ai.worklist import Worklist
 from .video_exporter import VideoExportDialog
 from .series_tree import SeriesTreeWidget
 from .cursor_sync import CursorSyncController
@@ -139,6 +143,14 @@ class MainWindow(QMainWindow):
         self._info_panel = ImageInfoPanel(self)
         self.addDockWidget(Qt.RightDockWidgetArea, self._info_panel)
         self._info_panel.hide()
+        # AI Research: 라벨 목록·마스크 편집·워크리스트를 모든 뷰포트가 공유
+        self._pending_select_uid = None
+        self._labels = LabelSet(parent=self)
+        self._seg = SegmentationController(self._labels, self)
+        self._worklist = Worklist(parent=self)
+        self._ai_panel = AIResearchPanel(self, self._seg, self._worklist)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._ai_panel)
+        self._ai_panel.hide()
         self._create_image_actions()
         self._init_menubar()
         self._init_toolbar()
@@ -364,6 +376,7 @@ class MainWindow(QMainWindow):
         tools_menu.addSeparator()
 
         tools_menu.addAction(self._act_anonymize)
+        tools_menu.addAction(self._act_ai)
 
         tools_menu.addSeparator()
 
@@ -483,7 +496,7 @@ class MainWindow(QMainWindow):
         output_bar.setMovable(False)
         self.addToolBar(output_bar)
         for action in (self._act_reading, self._act_capture, self._act_image_panel,
-                       self._act_anonymize, self._act_send, self._act_print,
+                       self._act_anonymize, self._act_ai, self._act_send, self._act_print,
                        self._act_settings):
             output_bar.addAction(action)
         output_bar.addSeparator()
@@ -583,6 +596,11 @@ class MainWindow(QMainWindow):
         self._act_maximize = make("Maximize Viewport", "Space",
                                   "Multi View: 선택한 칸만 크게 ↔ 원래 배치",
                                   self._toggle_maximize)
+        self._act_ai = self._ai_panel.toggleViewAction()
+        self._act_ai.setText("🧠 AI")
+        self._act_ai.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        self._act_ai.setToolTip("AI Research 패널 (Ctrl+Shift+A): 세그멘테이션 라벨링, 학습 데이터 "
+                                "내보내기, MONAI Label·ONNX 모델, 데이터셋 관리")
         self._act_image_panel = self._info_panel.toggleViewAction()
         self._act_image_panel.setText("ⓘ Image")
         self._act_image_panel.setShortcut(QKeySequence("Ctrl+I"))
@@ -631,7 +649,8 @@ class MainWindow(QMainWindow):
                 lambda text: self._statusbar.showMessage(text, 8000))
             vp.slice_changed.connect(lambda *_: self._refresh_image_info())
         self._multi_viewport.active_viewport_changed.connect(
-            lambda *_: self._refresh_image_info())
+            lambda *_: (self._refresh_image_info(), self._ai_panel.on_series_changed()))
+        self._seg.status.connect(lambda text: self._statusbar.showMessage(text, 6000))
 
     # ─── 파일 열기 ───
 
@@ -658,6 +677,11 @@ class MainWindow(QMainWindow):
         remember=True면 열기 대화상자의 다음 시작 위치로 기억 (자동 로드는 하지 않음)
         """
         self.load_paths([path], remember=remember)
+
+    def open_series_from_folder(self, folder, series_uid):
+        """폴더를 불러온 뒤 그 안의 series_uid 시리즈를 표시 (AI 워크리스트)"""
+        self._pending_select_uid = series_uid
+        self.load_paths([folder], remember=False)
 
     def load_paths(self, paths, remember=True, target_viewport=None):
         """파일/폴더 경로들을 백그라운드에서 로드
@@ -773,7 +797,9 @@ class MainWindow(QMainWindow):
         protocol_name = None
         if target_viewport is None:
             self._loader = loader
-            self._update_series_list()
+            pending, self._pending_select_uid = self._pending_select_uid, None
+            self._update_series_list(
+                select_uid=pending if pending and loader.get_series_by_uid(pending) else None)
             if self._app_settings.auto_hanging():
                 protocol_name = self._apply_hanging(auto=True)
         else:
@@ -816,6 +842,7 @@ class MainWindow(QMainWindow):
         series = self._loader.get_series_by_uid(uid) if uid else None
         if series is not None:
             self._select_series(series)
+        self._ai_panel._rebuild_worklist()  # 불러온 케이스 표시 갱신
 
     def _on_series_highlighted(self, uid):
         """패널/트리에서 누름·방향키: 선택 표시만 (로드는 클릭을 뗄 때)"""
@@ -932,10 +959,12 @@ class MainWindow(QMainWindow):
         self._slice_slider.setValue(0)
         self._sync_volume_tabs()
         self._refresh_image_info()
+        self._ai_panel.on_series_changed()
 
     def _on_tab_changed(self, index):
         self._sync_volume_tabs()
         self._refresh_image_info()
+        self._ai_panel.on_series_changed()
         # 레이아웃 드롭다운 표시를 현재 화면에 맞춤
         current = self._tab_widget.currentWidget()
         if current is self._stack2d:
@@ -952,6 +981,7 @@ class MainWindow(QMainWindow):
         for vp in self._all_viewports():
             vp.set_mouse_bindings(self._app_settings.mouse)
             vp.set_annotation_store(self._annotation_store)
+            vp.set_segmentation(self._seg)
         self._tile_view.set_annotation_store(self._annotation_store)
 
     # ─── 레이아웃 / Hanging Protocol ───
@@ -1234,6 +1264,7 @@ class MainWindow(QMainWindow):
         return self._viewport
 
     def _set_tool_all(self, tool):
+        self._seg.set_tool(None)  # 툴바 도구를 고르면 세그멘테이션 도구 해제
         for vp in self._all_viewports():
             vp.set_tool(tool)
 
@@ -1279,6 +1310,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Capture", f"저장하지 못했습니다:\n{filepath}")
 
     def closeEvent(self, event):
+        self._ai_panel.shutdown()  # 편집한 마스크 저장
         self._series_tree.shutdown()
         self._series_panel.shutdown()
         super().closeEvent(event)
