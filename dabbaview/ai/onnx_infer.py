@@ -16,6 +16,10 @@ from scipy import ndimage
 try:
     import onnxruntime as ort
     ONNX_AVAILABLE = True
+    try:   # 내장 원격 수집(telemetry) 스레드가 앱 종료 중에 충돌(abort)하는 일이 있어 끔
+        ort.disable_telemetry_events()
+    except Exception:  # noqa: BLE001 - 버전에 따라 없음
+        pass
 except ImportError:  # pragma: no cover - 설치 안 된 환경
     ort = None
     ONNX_AVAILABLE = False
