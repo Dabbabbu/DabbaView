@@ -13,6 +13,9 @@ DICOM 파일 로딩 및 시리즈 분류 엔진
 import gc
 import os
 import queue
+import re
+import shutil
+import subprocess
 import threading
 import time
 from collections import OrderedDict
@@ -45,6 +48,125 @@ CLOUD_TIMEOUT_S = 30.0            # 파일 하나 다운로드 대기 한도
 CLOUD_MAX_CONSECUTIVE_FAILS = 5   # 연속으로 이만큼 실패하면 나머지는 시도하지 않고 건너뜀
 _SF_DATALESS = 0x40000000         # macOS: 내용이 로컬에 없는 파일 (File Provider)
 _WIN_CLOUD_ATTRS = 0x00400000 | 0x00040000 | 0x00001000   # RECALL_ON_DATA_ACCESS/OPEN, OFFLINE
+
+
+_CLOUD_STORAGE_RE = re.compile(r"^/Users/[^/]+/Library/CloudStorage/([^/]+)")
+_CLOUD_NAMES = (("onedrive", "OneDrive"), ("googledrive", "Google Drive"), ("dropbox", "Dropbox"),
+                ("box", "Box"), ("icloud", "iCloud Drive"))
+
+
+def cloud_provider(path):
+    """클라우드 동기화 폴더면 서비스 이름 (OneDrive, iCloud Drive, Dropbox, Google Drive, Box...)
+
+    - macOS File Provider: /Users/*/Library/CloudStorage/<서비스-계정>/...
+    - iCloud Drive: ~/Library/Mobile Documents/...
+    - 예전 방식·Windows: 경로 구성요소가 OneDrive·Dropbox 등으로 시작
+    """
+    try:
+        full = os.path.realpath(os.path.abspath(path))
+    except (OSError, ValueError):
+        return None
+    m = _CLOUD_STORAGE_RE.match(full)
+    if m:
+        name = m.group(1).lower().replace(" ", "")
+        for key, label in _CLOUD_NAMES:
+            if name.startswith(key):
+                return label
+        return m.group(1).split("-")[0] or "클라우드"
+    if "/Library/Mobile Documents/" in full:
+        return "iCloud Drive"
+    parts = [p.lower().replace(" ", "") for p in re.split(r"[\\/]", full) if p]
+    for part in parts:
+        for key, label in _CLOUD_NAMES[:3]:
+            if part.startswith(key):
+                return label
+    return None
+
+
+_CAT = shutil.which("cat")
+_children = set()                 # 실행 중인 읽기 프로세스 (취소·중단·종료 시 kill)
+_children_lock = threading.Lock()
+
+
+def kill_fetch_processes():
+    """진행 중인 클라우드 읽기 프로세스를 모두 종료 (취소, 연속 실패 중단, 앱 종료)"""
+    with _children_lock:
+        procs = list(_children)
+    for proc in procs:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+import atexit  # noqa: E402 - 위 함수를 등록하기 위해 여기서
+atexit.register(kill_fetch_processes)
+
+
+class CloudFetchError(OSError):
+    """클라우드 동기화 앱이 파일을 내주지 못함 (실패 목록 단계: 클라우드 미다운로드)"""
+
+
+def fetch_in_process(src, dest=None, timeout=None):
+    """src 내용을 별도 프로세스(cat)로 끝까지 읽음 → 클라우드 파일이 이 컴퓨터로 다운로드됨
+
+    dest가 있으면 그 파일로 복사. 시간 초과면 자식 프로세스를 kill하고 TimeoutError:
+    파이썬 스레드는 OS의 read()에서 멈추면 끊을 수 없지만 프로세스는 강제로 끝낼 수 있음.
+    """
+    timeout = CLOUD_TIMEOUT_S if timeout is None else timeout
+    if dest:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+    if _CAT is None:   # cat이 없는 환경(Windows): 스레드에서 직접 (멈추면 스레드를 버림)
+        if dest:
+            shutil.copyfile(src, dest)
+        else:
+            with open(src, "rb") as f:
+                while f.read(1 << 20):
+                    pass
+        return
+    out = open(dest + ".part", "wb") if dest else subprocess.DEVNULL
+    try:
+        proc = subprocess.Popen([_CAT, src], stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.PIPE)
+        with _children_lock:
+            _children.add(proc)
+        try:
+            _out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(2)
+            except subprocess.TimeoutExpired:
+                pass   # 커널에서 못 빠져나온 프로세스는 두고 감 (우리 스레드는 계속 진행)
+            raise TimeoutError(f"{timeout:.0f}초 안에 받지 못해 읽기 프로세스를 종료하고 건너뜀")
+        finally:
+            with _children_lock:
+                _children.discard(proc)
+    except BaseException:
+        if dest:
+            out.close()
+            _silent_remove(dest + ".part")
+        raise
+    else:
+        if dest:
+            out.close()
+    if proc.returncode != 0:
+        if dest:
+            _silent_remove(dest + ".part")
+        message = err.decode("utf-8", "replace").strip().rsplit(": ", 1)[-1]
+        message = message or f"읽기 실패 (종료 코드 {proc.returncode})"
+        if is_cloud_placeholder(src):
+            raise CloudFetchError(f"동기화 앱이 파일을 내주지 않음 — {message}")
+        raise OSError(message)
+    if dest:
+        os.replace(dest + ".part", dest)
+
+
+def _silent_remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def is_cloud_placeholder(path):
@@ -184,6 +306,8 @@ def _decode_pixels(ds):
 
 
 def _short_error(exc):
+    if isinstance(exc, CloudFetchError):
+        return f"클라우드: {exc}"
     if isinstance(exc, TimeoutError):
         return f"시간 초과: {exc}"
     text = str(exc).strip().splitlines()
@@ -571,6 +695,14 @@ class DicomLoader:
 
     def load_paths(self, paths, recursive=True, progress_callback=None,
                    cancel_event=None, max_workers=None, placeholder_policy=None):
+        """placeholder_policy(info) → "download" | "skip" | "cancel" | ("copy", 대상 폴더)
+
+        info = {"provider": 클라우드 이름 또는 None, "placeholders": 받지 않은 파일 수,
+                "total": 읽을 DICOM 수, "bytes": 전체 크기, "roots": 연 폴더들}
+        클라우드 동기화 폴더이거나 받지 않은 파일이 있을 때만 호출됨.
+        """
+        self.opened_paths = list(paths)   # 로컬 복사본으로 열면 복사본 경로로 바뀜 (최근 목록용)
+        self.copied_to = None
         """폴더/파일 경로 목록을 병렬로 로드 (드래그 앤 드롭 다중 선택 등)
 
         직접 지정한 파일은 확장자와 관계없이 시도하고,
@@ -626,17 +758,54 @@ class DicomLoader:
         cloud_set = set(cloud)
         local = [f for f in files if f not in cloud_set] if cloud else files
         self.cloud_placeholders = len(cloud)
+        provider = next((cloud_provider(p) for p in paths if cloud_provider(p)), None)
+        self.cloud_provider = provider
         policy = "download"
-        if cloud and placeholder_policy is not None:
-            policy = placeholder_policy(len(cloud), len(files))
+        if (cloud or provider) and files and placeholder_policy is not None:
+            size = 0
+            for f in files:
+                try:
+                    size += os.lstat(f).st_size   # lstat은 다운로드를 일으키지 않음
+                except OSError:
+                    pass
+            policy = placeholder_policy({"provider": provider, "placeholders": len(cloud),
+                                         "total": len(files), "bytes": size,
+                                         "roots": list(paths)})
             if policy == "cancel":
                 if cancel_event is not None:
                     cancel_event.set()
                 return loaded
-        groups = [(local, dict(max_workers=max_workers))]
+        cloud_options = dict(max_workers=CLOUD_WORKERS, timeout=CLOUD_TIMEOUT_S + 10,
+                             max_consecutive_failures=CLOUD_MAX_CONSECUTIVE_FAILS)
+        if isinstance(policy, tuple) and policy[0] == "copy":
+            # 로컬로 복사한 뒤 복사본을 읽음 (받지 않은 파일은 프로세스로 받아 복사)
+            mapping = self._copy_targets(files, paths, policy[1])
+            self.copied_to = policy[1]
+            self.opened_paths = sorted({mapping[f][1] for f in files})
+            pending.clear()   # 원래 폴더 캐시에 복사본 경로를 저장하지 않음
+
+            def copy_reader(path):
+                dest = mapping[path][0]
+                try:
+                    same = os.path.getsize(dest) == os.lstat(path).st_size
+                except OSError:
+                    same = False
+                if not same:   # 이전에 복사해 둔 같은 크기 파일은 다시 받지 않음
+                    fetch_in_process(path, dest)
+                return _read_metadata(dest)
+            groups = [(local, dict(max_workers=max_workers, reader=copy_reader,
+                                   phase="로컬로 복사하며 읽는 중"))]
+            if cloud:
+                groups.append((cloud, dict(cloud_options, reader=copy_reader,
+                                           phase="클라우드에서 받아 로컬로 복사하는 중")))
+            cloud = []
+        else:
+            groups = [(local, dict(max_workers=max_workers))]
         if cloud and policy == "download":
-            groups.append((cloud, dict(max_workers=CLOUD_WORKERS, timeout=CLOUD_TIMEOUT_S,
-                                       max_consecutive_failures=CLOUD_MAX_CONSECUTIVE_FAILS,
+            def download_reader(path):
+                fetch_in_process(path)   # 별도 프로세스가 받는 동안 멈추면 kill
+                return _read_metadata(path)
+            groups.append((cloud, dict(cloud_options, reader=download_reader,
                                        phase="클라우드에서 다운로드하며 읽는 중")))
         elif cloud:
             for path in cloud:
@@ -702,6 +871,21 @@ class DicomLoader:
             series.sort_slices()
 
         return loaded
+
+    @staticmethod
+    def _copy_targets(files, roots, dest_dir):
+        """원본 파일 → (복사할 경로, 복사본 최상위 폴더). 연 폴더 이름 아래 같은 구조로"""
+        mapping = {}
+        abs_roots = [os.path.abspath(r) for r in roots]
+        for f in files:
+            full = os.path.abspath(f)
+            root = next((r for r in abs_roots if os.path.isdir(r)
+                         and (full + os.sep).startswith(r.rstrip(os.sep) + os.sep)), None)
+            if root is None:   # 파일을 직접 연 경우
+                root = os.path.dirname(full)
+            top = os.path.join(dest_dir, os.path.basename(root.rstrip(os.sep)) or "DICOM")
+            mapping[f] = (os.path.join(top, os.path.relpath(full, root)), top)
+        return mapping
 
     def _forget_running(self, path):
         with self._running_lock:
@@ -771,6 +955,7 @@ class DicomLoader:
         try:
             while remaining:
                 if cancel_event is not None and cancel_event.is_set():
+                    kill_fetch_processes()
                     return
                 # 도착한 결과를 한 번에 최대 100개씩 모아 처리 (파일마다 깨어나지 않도록)
                 batch = []
@@ -798,6 +983,7 @@ class DicomLoader:
                     yield item
                 if max_consecutive_failures and fails >= max_consecutive_failures and remaining:
                     stop.set()
+                    kill_fetch_processes()   # 이미 받는 중인 것도 끝냄
                     reason = (f"클라우드: 연속 {fails}개 파일을 받지 못해 나머지는 시도하지 않고 건너뜀 "
                               "(동기화 앱 상태를 확인하거나 Finder에서 '다운로드' 후 다시 열기)")
                     for path in sorted(remaining):
