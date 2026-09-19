@@ -45,7 +45,7 @@ CATEGORIES = [
           ("MedicalRecordLocator", DELETE), ("PatientInsurancePlanCodeSequence", DELETE),
           ("MilitaryRank", DELETE), ("PatientComments", DELETE),
           ("IssuerOfPatientID", DELETE), ("AdmissionID", DELETE),
-          ("IssuerOfAdmissionID", DELETE), ("PatientAccountNumber", DELETE)]),
+          ("IssuerOfAdmissionID", DELETE)]),
     ]),
     ("institution", "기관정보", [
         ("institution", "병원명 (InstitutionName/Address)",
