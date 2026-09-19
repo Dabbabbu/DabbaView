@@ -30,11 +30,12 @@ from PyQt5.QtGui import (QImage, QPixmap, QPainter, QPen, QColor, QFont,
                          QBrush)
 
 from . import __version__, dicom_info
-from .annotations import AnnotationStore, image_key
+from .annotations import ROI_TYPES, AnnotationStore, image_key
+from .annotation_edit import AnnotationEditMixin, fmt_area, fmt_length
+from . import roi_tools
 from .app_settings import MouseBindings
 from .geometry import reference_line
-from .roi import (roi_statistics, polygon_area_mm2, polygon_perimeter_mm,
-                  ellipse_statistics, cobb_angle)
+from .roi import polygon_area_mm2, polygon_perimeter_mm, cobb_angle
 from .text_dialog import TextAnnotationDialog
 
 
@@ -63,7 +64,7 @@ COLOR_REFLINE = QColor(255, 230, 0)
 COLOR_KEY = QColor(255, 215, 0)
 
 
-class DicomViewport(QWidget):
+class DicomViewport(AnnotationEditMixin, QWidget):
     """DICOM 영상을 표시하고 조작하는 뷰포트 위젯"""
 
     _logo = None  # 시작 화면 로고 (모든 뷰포트가 공유)
@@ -79,6 +80,7 @@ class DicomViewport(QWidget):
     scrolled = pyqtSignal(int)  # 사용자가 슬라이스를 넘김 (동기화 스크롤용)
     window_adjusted = pyqtSignal(float, float)  # 사용자가 W/L 변경 (동기화 윈도잉용)
     profile_measured = pyqtSignal(object)  # 라인 프로파일 결과 dict (하단 패널 그래프)
+    selection_changed = pyqtSignal(list)   # 선택한 주석 id 목록 (ROI Manager 동기화)
 
     # 도구 모드
     TOOL_WINDOW = 0
@@ -97,10 +99,13 @@ class DicomViewport(QWidget):
     TOOL_COBB = 13
     TOOL_LANDMARK = 14   # 랜드마크/Fiducial 점 찍기
     TOOL_PROFILE = 15    # 라인 프로파일
+    TOOL_RECT = 16       # 사각형 ROI
+    TOOL_PATH = 17       # 다중 점 경로 길이
 
     # 좌클릭 드래그가 '그리기'인 도구 (더블클릭을 Fit으로 해석하지 않음)
     DRAWING_TOOLS = (TOOL_MEASURE, TOOL_ANGLE, TOOL_ROI, TOOL_AREA, TOOL_ARROW,
-                     TOOL_ELLIPSE, TOOL_TEXT, TOOL_COBB, TOOL_LANDMARK, TOOL_PROFILE)
+                     TOOL_ELLIPSE, TOOL_TEXT, TOOL_COBB, TOOL_LANDMARK, TOOL_PROFILE,
+                     TOOL_RECT, TOOL_PATH)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -127,6 +132,7 @@ class DicomViewport(QWidget):
         self._mouse_button = Qt.NoButton
         self._last_mouse_pos = QPoint()
         self._hover_pos = None
+        self._edit_init()
 
         # 도구 / 마우스 매핑
         self._current_tool = self.TOOL_SELECT
@@ -325,6 +331,7 @@ class DicomViewport(QWidget):
         """현재 도구 설정"""
         self._current_tool = tool
         self._draft = None
+        self._edit = None
         self._magnifying = False
         self.set_tool_cursor()
         self.update()
@@ -471,6 +478,8 @@ class DicomViewport(QWidget):
                 return polygon_mask(ann["pts"], arr.shape[:2])
             if ann["type"] == "ellipse":
                 return ellipse_mask(ann["pts"][0], ann["pts"][1], arr.shape[:2])
+            if ann["type"] == "rect":
+                return roi_tools.mask_of(ann, arr.shape[:2])
         return None
 
     _overlay_painters = []   # fn(viewport, painter) - 전문 분석 윤곽 등 (모든 뷰포트 공유)
@@ -639,6 +648,22 @@ class DicomViewport(QWidget):
         img_pos = self._screen_to_image(event.pos())
         shift = bool(event.modifiers() & Qt.ShiftModifier)
 
+        if (self._draft is not None and self._draft.get("quick") and img_pos
+                and self._draft["type"] == "distance"):
+            # Select 도구 더블클릭으로 시작한 빠른 거리 측정: 다음 클릭이 끝점
+            end = self.snap_point(self._draft["pts"][0], img_pos) if shift else img_pos
+            self._draft["pts"][1] = end
+            self._finish_distance()
+            return
+
+        if (not self._cursor_mode_active() and img_pos
+                and (tool == self.TOOL_SELECT or tool in self.DRAWING_TOOLS)
+                and self.edit_press(event, img_pos, tool == self.TOOL_SELECT)):
+            return   # 기존 주석 핸들/몸통을 잡음 → 새로 그리지 않고 수정
+
+        if tool in (self.TOOL_MEASURE, self.TOOL_PATH, self.TOOL_ANGLE) and img_pos:
+            self._anchor = (self._image_key(), img_pos)   # 실시간 거리 기준점
+
         if self._cursor_mode_active():
             # Crosslink: 좌클릭/드래그로 기준점 지정
             self._placing_cursor = True
@@ -646,13 +671,26 @@ class DicomViewport(QWidget):
 
         elif tool == self.TOOL_MEASURE and img_pos:
             if self._draft is None:
-                self._draft = {"type": "distance", "pts": [img_pos, img_pos]}
-            elif shift:
-                # Shift+클릭: 시작점 고정한 채 끝점만 다시 지정 (계속 측정)
-                self._draft["pts"][1] = img_pos
+                # 클릭→클릭 또는 누른 채 끌어서 놓기
+                self._draft = {"type": "distance", "pts": [img_pos, img_pos],
+                               "press": (event.pos().x(), event.pos().y())}
             else:
-                self._draft["pts"][1] = img_pos
+                # Shift: 0/45/90° 스냅
+                end = self.snap_point(self._draft["pts"][0], img_pos) if shift else img_pos
+                self._draft["pts"][1] = end
                 self._finish_distance()
+
+        elif tool == self.TOOL_PATH and img_pos:
+            # 다중 점 경로: 클릭마다 점 추가, 더블클릭/Enter로 끝, Esc 취소
+            if self._draft is None:
+                self._draft = {"type": "path", "pts": [img_pos, img_pos]}
+            else:
+                end = self.snap_point(self._draft["pts"][-2], img_pos) if shift else img_pos
+                self._draft["pts"][-1] = end
+                self._draft["pts"].append(end)
+
+        elif tool == self.TOOL_RECT and img_pos:
+            self._draft = {"type": "rect", "pts": [img_pos, img_pos], "square": shift}
 
         elif tool == self.TOOL_ANGLE and img_pos:
             if self._draft is None:
@@ -706,9 +744,12 @@ class DicomViewport(QWidget):
         self._emit_cursor_info(pos)
         img_pos = self._screen_to_image(pos)
 
-        # 클릭→클릭 방식 도구는 버튼을 누르지 않아도 미리보기 갱신
-        if self._draft and self._draft["type"] in ("distance", "angle") and img_pos:
-            self._draft["pts"][-1] = img_pos
+        # 클릭→클릭 방식 도구는 버튼을 누르지 않아도 미리보기 갱신 (Shift: 각도 스냅)
+        if self._draft and self._draft["type"] in ("distance", "angle", "path") and img_pos:
+            target = img_pos
+            if event.modifiers() & Qt.ShiftModifier and self._draft["type"] in ("distance", "path"):
+                target = self.snap_point(self._draft["pts"][-2], img_pos)
+            self._draft["pts"][-1] = target
 
         if not self._mouse_pressed:
             self.update()
@@ -735,6 +776,8 @@ class DicomViewport(QWidget):
             if steps:
                 self._scroll_accum -= steps
                 self._go_to_slice(self._current_slice + steps, user=True)
+        elif action == "tool" and self._edit is not None:
+            self.edit_move(img_pos, bool(event.modifiers() & Qt.ShiftModifier))
         elif action == "tool":
             self._tool_move(pos, img_pos, dx, dy)
         elif action == "seg":
@@ -752,6 +795,14 @@ class DicomViewport(QWidget):
             last = self._image_to_screen_f(draft["pts"][-1])
             if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 2:
                 draft["pts"].append(img_pos)
+        elif draft and draft["type"] == "rect" and img_pos:
+            if draft.get("square"):
+                sp = self._spacing() or (1.0, 1.0)
+                x0, y0 = draft["pts"][0]
+                side = max(abs(img_pos[0] - x0) * sp[1], abs(img_pos[1] - y0) * sp[0])
+                img_pos = (x0 + math.copysign(side / sp[1], img_pos[0] - x0),
+                           y0 + math.copysign(side / sp[0], img_pos[1] - y0))
+            draft["pts"][1] = img_pos
         elif draft and draft["type"] == "ellipse" and img_pos:
             if draft.get("circle"):
                 # Shift: 원 (mm 기준 같은 반지름)
@@ -786,12 +837,28 @@ class DicomViewport(QWidget):
             self._apply_roi_window()
         if action == "seg":
             self._seg.release()
-        if action == "tool" and self._draft:
+        if action == "tool" and self._edit is not None:
+            self.edit_release()
+        elif action == "tool" and self._draft:
             kind = self._draft["type"]
             if kind in ("roi", "area"):
                 self._finish_freehand()
             elif kind == "ellipse":
                 self._finish_ellipse()
+            elif kind == "rect":
+                self._finish_rect()
+            elif kind == "distance" and self._draft.get("press"):
+                # 누른 채 끌어서 놓았으면 바로 측정 (그냥 클릭이면 클릭→클릭 방식)
+                px, py = self._draft["press"]
+                if math.hypot(event.pos().x() - px, event.pos().y() - py) > 6:
+                    img_pos = self._screen_to_image(event.pos())
+                    if img_pos is not None:
+                        shift = bool(event.modifiers() & Qt.ShiftModifier)
+                        self._draft["pts"][1] = (self.snap_point(self._draft["pts"][0], img_pos)
+                                                 if shift else img_pos)
+                        self._finish_distance()
+                else:
+                    self._draft.pop("press", None)
             elif kind == "arrow":
                 self._finish_arrow()
             elif kind == "profile":
@@ -818,6 +885,22 @@ class DicomViewport(QWidget):
         그리기 도구 사용 중 좌 더블클릭은 빠른 두 번째 클릭으로 처리.
         """
         button = event.button()
+        if (button == Qt.LeftButton and self._current_tool == self.TOOL_PATH
+                and self._draft is not None and self._draft["type"] == "path"):
+            self._finish_path()   # 더블클릭 = 경로 끝
+            return
+        if (button == Qt.LeftButton and self._current_tool == self.TOOL_SELECT
+                and not self._cursor_mode_active() and not self._seg_active()):
+            img_pos = self._screen_to_image(event.pos())
+            ann, _handle = self.hit_annotation(event.pos())
+            if img_pos is not None and ann is None and self._inside_image(img_pos):
+                # 빠른 거리 측정: 더블클릭 = 시작점, 다음 클릭 = 끝점 (도구 바꾸지 않음)
+                self._draft = {"type": "distance", "pts": [img_pos, img_pos], "quick": True}
+                self._anchor = (self._image_key(), img_pos)
+                self.status_message.emit("빠른 거리 측정: 끝점을 클릭하세요 "
+                                         "(Shift: 각도 스냅, Esc: 취소)")
+                self.update()
+                return
         if button == Qt.LeftButton and (self._current_tool in self.DRAWING_TOOLS
                                         or self._cursor_mode_active()
                                         or self._seg_active()):
@@ -925,7 +1008,11 @@ class DicomViewport(QWidget):
         # R/I/Space 등은 메인 윈도우 단축키(QAction)가 처리
         key = event.key()
         if key in (Qt.Key_Delete, Qt.Key_Backspace):
-            self.delete_last_annotation()
+            if not self.delete_selected():
+                self.delete_last_annotation()
+        elif (key in (Qt.Key_Return, Qt.Key_Enter) and self._draft
+              and self._draft["type"] == "path"):
+            self._finish_path()
         elif key == Qt.Key_Escape and self._seg_active():
             self._seg.set_tool(None)  # 세그멘테이션 도구 해제
         elif key == Qt.Key_Escape:
@@ -1132,13 +1219,61 @@ class DicomViewport(QWidget):
         sp = self._spacing() or (1.0, 1.0)
         return ((p2[0] - p1[0]) * sp[1], (p2[1] - p1[1]) * sp[0])
 
+    def _inside_image(self, img_pos):
+        arr = self._current_array()
+        if arr is None:
+            return False
+        return 0 <= img_pos[0] <= arr.shape[1] and 0 <= img_pos[1] <= arr.shape[0]
+
     def _finish_distance(self):
-        p1, p2 = self._draft["pts"]
+        p1, p2 = self._draft["pts"][:2]
         dx, dy = self._mm_vector(p1, p2)
         distance = math.hypot(dx, dy)
-        self._add_annotation({"type": "distance", "pts": [p1, p2], "mm": distance})
         self._draft = None
+        a, b = self._image_to_screen_f(p1), self._image_to_screen_f(p2)
+        if math.hypot(a.x() - b.x(), a.y() - b.y()) < 2:
+            self.update()
+            return   # 같은 점 (의도치 않은 클릭)
+        self._add_annotation({"type": "distance", "pts": [p1, p2], "mm": distance})
+        self._anchor = (self._image_key(), p2)
         self.measurement_completed.emit(distance)
+        self.status_message.emit(f"Distance {fmt_length(distance, math.hypot(p2[0] - p1[0], p2[1] - p1[1]))}")
+
+    def _finish_path(self):
+        """다중 점 경로: 마지막 미리보기 점(마우스 따라다니던 점) 정리 후 총 길이"""
+        draft, self._draft = self._draft, None
+        pts = list(draft["pts"])
+        while len(pts) >= 2 and pts[-1] == pts[-2]:
+            pts.pop()
+        if len(pts) < 2:
+            self.update()
+            return
+        sp = self._spacing() or (1.0, 1.0)
+        total = roi_tools.path_length_mm(pts, sp)
+        self._add_annotation({"type": "path", "pts": pts, "mm": total,
+                              "calibrated": self._spacing() is not None})
+        self._anchor = (self._image_key(), pts[-1])
+        self.status_message.emit(f"Path {len(pts)} points: {fmt_length(total)}")
+
+    def _finish_rect(self):
+        draft, self._draft = self._draft, None
+        p1, p2 = draft["pts"]
+        a, b = self._image_to_screen_f(p1), self._image_to_screen_f(p2)
+        if abs(a.x() - b.x()) < 4 or abs(a.y() - b.y()) < 4:
+            return
+        self.add_roi("rect", [p1, p2])
+
+    def add_roi(self, kind, pts, **fields):
+        """ROI 주석 추가 (통계 계산 포함) → 주석 dict 반환 (ROI Manager의 정량 ROI 생성에서도 사용)"""
+        label, factor = dicom_info.value_label(self.current_dataset())
+        ann = {"type": kind, "pts": [tuple(p) for p in pts], "label": label,
+               "calibrated": self._spacing() is not None}
+        ann.update(fields)
+        ann["stats"] = roi_tools.roi_statistics(ann, self._current_array(),
+                                                self._spacing() or (1.0, 1.0), factor)
+        self._add_annotation(ann)
+        self.status_message.emit(" | ".join(self._annotation_text(ann)))
+        return ann
 
     def _finish_angle(self):
         p1, p2, p3 = self._draft["pts"]  # p2가 꼭짓점
@@ -1163,7 +1298,7 @@ class DicomViewport(QWidget):
         if draft["type"] == "roi":
             ds = self.current_dataset()
             label, factor = dicom_info.value_label(ds)
-            ann["stats"] = roi_statistics(self._current_array(), pts, sp, factor)
+            ann["stats"] = roi_tools.roi_statistics(ann, self._current_array(), sp, factor)
             ann["label"] = label
         else:
             ann["area"] = polygon_area_mm2(pts, sp)
@@ -1180,8 +1315,10 @@ class DicomViewport(QWidget):
         sp = self._spacing() or (1.0, 1.0)
         label, factor = dicom_info.value_label(self.current_dataset())
         ann = {"type": "ellipse", "pts": [p1, p2], "label": label,
-               "calibrated": self._spacing() is not None,
-               "stats": ellipse_statistics(self._current_array(), p1, p2, sp, factor)}
+               "calibrated": self._spacing() is not None}
+        if draft.get("circle"):
+            ann["circle"] = True
+        ann["stats"] = roi_tools.roi_statistics(ann, self._current_array(), sp, factor)
         self._add_annotation(ann)
         self.status_message.emit(" | ".join(self._annotation_text(ann)))
 
@@ -1381,6 +1518,7 @@ class DicomViewport(QWidget):
         if self._show_annotations:
             self._draw_annotations(painter)
             self._draw_draft(painter)
+            self.draw_live_readout(painter)
             self._draw_key_marker(painter)
             self._draw_analysis(painter)
             for fn in self._overlay_painters:
@@ -1405,25 +1543,36 @@ class DicomViewport(QWidget):
     # ─── 주석 그리기 ───
 
     def _annotation_text(self, ann):
-        """주석 라벨 문구 목록"""
+        """주석 라벨 문구 목록 (이름이 있으면 첫 줄, 단위는 측정 설정)"""
         kind = ann["type"]
-        unit2 = "mm²" if ann.get("calibrated", True) else "px²"
+        calibrated = ann.get("calibrated", True)
+        name = [ann["name"]] if ann.get("name") else []
+        pts = ann.get("pts") or []
         if kind == "distance":
-            return [f"{ann['mm']:.1f} mm"]
+            px = math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) if len(pts) >= 2 else None
+            return name + [fmt_length(ann["mm"], px)]
+        if kind == "path":
+            return name + [f"Σ {fmt_length(ann['mm'], roi_tools.path_length_mm(pts, (1.0, 1.0)))}"
+                           f"  ({len(pts)} pts)"]
         if kind == "angle":
-            return [f"{ann['deg']:.1f}°"]
+            return name + [f"{ann['deg']:.1f}°"]
         if kind == "area":
-            return [f"Area {ann['area']:.1f} {unit2}",
-                    f"Perim {ann['perimeter']:.1f} mm"]
+            from .roi import polygon_area_mm2 as _area_px
+            px2 = _area_px(pts, (1.0, 1.0))
+            area = fmt_area(ann["area"], px2) if calibrated else f"{px2:.0f} px²"
+            return name + [f"Area {area}", f"Perim {fmt_length(ann['perimeter'])}"]
         if kind == "cobb":
-            return [f"Cobb {ann['deg']:.1f}°"]
-        if kind in ("roi", "ellipse"):
+            return name + [f"Cobb {ann['deg']:.1f}°"]
+        if kind in ROI_TYPES:
             s, label = ann["stats"], ann.get("label", "")
-            lines = [f"Area {s['area_mm2']:.1f} {unit2}"]
+            area = fmt_area(s["area_mm2"], s.get("pixels")) if calibrated else f"{s.get('pixels', 0)} px²"
+            lines = name + [f"Area {area}"
+                            + (f"  Perim {fmt_length(s['perimeter_mm'])}" if "perimeter_mm" in s else "")]
             if "mean" in s:
                 digits = 2 if label == "SUVbw" else 1
                 lines += [f"Mean {s['mean']:.{digits}f}  SD {s['std']:.{digits}f}",
-                          f"Min {s['min']:.{digits}f}  Max {s['max']:.{digits}f}",
+                          f"Min {s['min']:.{digits}f}  Max {s['max']:.{digits}f}"
+                          + (f"  Med {s['median']:.{digits}f}" if "median" in s else ""),
                           f"{label}  n={s['pixels']}"]
             return lines
         if kind == "cursor3d":
@@ -1446,10 +1595,7 @@ class DicomViewport(QWidget):
         """
         if not lines:
             return
-        font = QFont()
-        font.setPointSize(10)
-        font.setBold(True)
-        painter.setFont(font)
+        painter.setFont(self.label_font())
         fm = painter.fontMetrics()
         w = max(fm.horizontalAdvance(l) for l in lines) + 8
         h = fm.height() * len(lines) + 4
@@ -1498,20 +1644,44 @@ class DicomViewport(QWidget):
         if cursor3d is not None:
             items.append(cursor3d)
         for ann in items:
+            if not ann.get("visible", True):
+                continue
             kind = ann["type"]
             pts = [self._image_to_screen_f(p) for p in ann["pts"]]
             lines = self._annotation_text(ann)
+            custom = QColor(ann["color"]) if ann.get("color") else None
+            width = 3 if ann.get("id") in self._selected_ids else 2
 
             if kind == "distance":
-                painter.setPen(QPen(COLOR_DISTANCE, 2))
+                color = custom or COLOR_DISTANCE
+                painter.setPen(QPen(color, width))
                 painter.drawLine(pts[0], pts[1])
                 painter.drawEllipse(pts[0], 3, 3)
                 painter.drawEllipse(pts[1], 3, 3)
                 mid = (pts[0] + pts[1]) / 2
                 self._draw_label(painter, QPoint(int(mid.x()) + 6, int(mid.y()) - 22),
-                                 lines, COLOR_DISTANCE, occupied)
+                                 lines, color, occupied)
+            elif kind == "path":
+                color = custom or QColor(255, 210, 74)
+                painter.setPen(QPen(color, width))
+                painter.drawPolyline(QPolygonF(pts))
+                for p in pts:
+                    painter.drawEllipse(p, 2.5, 2.5)
+                self._draw_label(painter, QPoint(int(pts[-1].x()) + 8, int(pts[-1].y()) - 22),
+                                 lines, color, occupied)
+            elif kind == "rect":
+                color = custom or QColor(255, 90, 210)
+                rect = QRectF(pts[0], pts[1]).normalized()
+                fill = QColor(color)
+                fill.setAlpha(40)
+                painter.setPen(QPen(color, width))
+                painter.setBrush(fill)
+                painter.drawRect(rect)
+                painter.setBrush(Qt.NoBrush)
+                self._draw_label(painter, QPoint(int(rect.right()) + 6, int(rect.top())),
+                                 lines, color, occupied)
             elif kind == "angle":
-                painter.setPen(QPen(COLOR_ANGLE, 2))
+                painter.setPen(QPen(custom or COLOR_ANGLE, width))
                 painter.drawLine(pts[0], pts[1])
                 painter.drawLine(pts[1], pts[2])
                 painter.drawEllipse(pts[1], 3, 3)
@@ -1519,11 +1689,11 @@ class DicomViewport(QWidget):
                                                  int(pts[1].y()) - 24),
                                  lines, COLOR_ANGLE, occupied)
             elif kind in ("roi", "area"):
-                color = COLOR_ROI if kind == "roi" else COLOR_AREA
+                color = custom or (COLOR_ROI if kind == "roi" else COLOR_AREA)
                 poly = self._screen_polygon(ann["pts"])
                 fill = QColor(color)
                 fill.setAlpha(40)
-                painter.setPen(QPen(color, 2))
+                painter.setPen(QPen(color, width))
                 painter.setBrush(fill)
                 painter.drawPolygon(poly)
                 painter.setBrush(Qt.NoBrush)
@@ -1536,15 +1706,16 @@ class DicomViewport(QWidget):
                                                  int(pts[1].y()) + 4),
                                  lines, COLOR_ARROW, occupied)
             elif kind == "ellipse":
+                color = custom or COLOR_ELLIPSE
                 rect = QRectF(pts[0], pts[1]).normalized()
-                fill = QColor(COLOR_ELLIPSE)
+                fill = QColor(color)
                 fill.setAlpha(40)
-                painter.setPen(QPen(COLOR_ELLIPSE, 2))
+                painter.setPen(QPen(color, width))
                 painter.setBrush(fill)
                 painter.drawEllipse(rect)
                 painter.setBrush(Qt.NoBrush)
                 self._draw_label(painter, QPoint(int(rect.right()) + 6, int(rect.top())),
-                                 lines, COLOR_ELLIPSE, occupied)
+                                 lines, color, occupied)
             elif kind == "cobb":
                 painter.setPen(QPen(COLOR_COBB, 2))
                 painter.drawLine(pts[0], pts[1])
@@ -1576,6 +1747,8 @@ class DicomViewport(QWidget):
                 painter.drawLine(QPointF(p.x(), p.y() + 3), QPointF(p.x(), p.y() + 10))
                 self._draw_label(painter, QPoint(int(p.x()) + 12, int(p.y()) + 6),
                                  lines, COLOR_CURSOR3D, occupied)
+            if kind != "cursor3d":
+                self.draw_selection(painter, ann, custom or QColor(roi_tools.color_of(ann)))
 
     def _draw_draft(self, painter):
         draft = self._draft
@@ -1599,6 +1772,14 @@ class DicomViewport(QWidget):
         elif kind == "ellipse":
             painter.setPen(QPen(COLOR_ELLIPSE, 2, Qt.DashLine))
             painter.drawEllipse(QRectF(pts[0], pts[1]).normalized())
+        elif kind == "rect":
+            painter.setPen(QPen(QColor(255, 90, 210), 2, Qt.DashLine))
+            painter.drawRect(QRectF(pts[0], pts[1]).normalized())
+        elif kind == "path":
+            painter.setPen(QPen(QColor(255, 210, 74), 2, Qt.DashLine))
+            painter.drawPolyline(QPolygonF(pts))
+            for p in pts[:-1]:
+                painter.drawEllipse(p, 2.5, 2.5)
         elif kind == "cobb":
             painter.setPen(QPen(COLOR_COBB, 2, Qt.DashLine))
             for i in range(0, len(pts) - 1, 2):
