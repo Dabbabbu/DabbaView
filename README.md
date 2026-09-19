@@ -112,6 +112,23 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 | Python Console (F3) | `app.current_array`, `app.current_image`, `app.mask`, `app.add_series(배열, "이름")`, `np`, `ndi`, `plt`, `skimage` — plt 그래프는 콘솔 오른쪽에 표시, 구문 강조, 스크립트 열기/저장 |
 | Macros | 콘솔 스크립트를 매크로로 저장 → 원클릭 실행 (Process → Macros). 예제: Otsu → 입자 분석, Gaussian → 새 시리즈, 볼륨 통계, 라벨별 부피, MIP |
 
+### 오픈소스 AI 모델 (AI 메뉴 → Open Source Models, AI 패널 → 🧩 Models 탭)
+
+| 모델 | 방식 | 내용 |
+|---|---|---|
+| TotalSegmentator | 로컬 (pip) | CT(total) / MR(total_mr) 전신 해부학 구조 자동 세그멘테이션 → 구조 이름·색이 라벨로 자동 등록 |
+| nnU-Net v2 | 로컬 (pip) | Settings → AI에 사전학습 모델 폴더(…/nnUNetTrainer__nnUNetPlans__3d_fullres)와 fold 지정 → 실행, 라벨 이름은 dataset.json |
+| MONAI Label | 서버 | 기존 🤖 모델 탭 (자동 세그멘테이션, 피드백 제출, 학습) |
+| MedSAM | 로컬 (ONNX) | 세그멘트 탭 🎯 MedSAM 도구(**M**): 클릭 한 번 → 클릭 중심 박스(또는 점) 프롬프트로 그 슬라이스의 구조를 현재 라벨로. SAM 형식 인코더/디코더 .onnx, 같은 슬라이스 두 번째 클릭부터는 즉시 |
+| 사용자 ONNX | 로컬 | Settings → AI에 .onnx 경로 지정 → Models 탭에서 실행 |
+| REST API | 원격 | 볼륨 NIfTI를 POST → 라벨 NIfTI(또는 JSON base64) 수신. 형식은 Models 탭 'REST 형식' |
+
+- **원클릭 설치**: TotalSegmentator·nnU-Net은 PyTorch(수 GB)가 필요해서 앱에 넣지 않고, Models 탭의 **설치** 버튼이 DabbaView 전용 Python 환경(앱 데이터 폴더/ai/model-env)을 만들어 `pip install` 합니다. 시스템에 Python 3.9 이상이 필요하며, Settings → AI에서 다른 Python(conda 등)을 지정할 수도 있습니다.
+- 실행 로그·진행률·취소(프로세스 종료), 결과는 세그멘테이션 오버레이 + 라벨 목록에 등록(번호가 겹치면 새 번호로), **📦 결과 내보내기**로 NIfTI / DICOM SEG.
+- 모델·서버로 보내는 것은 픽셀 볼륨(NIfTI)뿐이며 환자 이름·ID 등 DICOM 정보는 보내지 않습니다.
+
+**Help → 📚 Open Datasets**: TCIA, MedPix, MIMIC-CXR, NLST, UK Biobank, OpenNeuro, Grand Challenge, Medical Segmentation Decathlon, ACDC, BraTS, AMOS, Awesome DICOM, Awesome Medical Imaging Datasets (브라우저로 열림)
+
 ### ROI · 측정 (연구용)
 
 | 기능 | 내용 |
@@ -189,7 +206,7 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 | Ctrl+S | 이미지 내보내기 | Ctrl+Shift+E | 동영상 내보내기 |
 | F2 | 시리즈 패널 접기/펼치기 | ⌘, (macOS) | Settings (Windows는 File → Settings) |
 | Ctrl+Shift+A | AI Research 패널 | D / X | 세그멘테이션 Brush / Eraser |
-| W / G | Magic Wand / Threshold | Ctrl+Z / Ctrl+Y | 되돌리기 / 다시 하기 (ROI·측정·세그멘테이션, 가장 최근 편집부터) |
+| W / G / M | Magic Wand / Threshold / MedSAM (클릭 한 번) | Ctrl+Z / Ctrl+Y | 되돌리기 / 다시 하기 (ROI·측정·세그멘테이션, 가장 최근 편집부터) |
 | Shift+E | 사각형 ROI (Shift: 정사각형) | Shift+D | 다중 점 경로 길이 (더블클릭/Enter로 끝) |
 | Ctrl+C / Ctrl+V | ROI 복사 / 현재 슬라이스에 붙이기 | Ctrl+Shift+M | ROI Manager |
 | Ctrl+M | Measure (선택 ROI 통계 표) | Delete | 선택한 ROI/측정 삭제 (선택 없으면 마지막 것) |
@@ -313,6 +330,7 @@ DabbaView/
     │   ├── seg_reader.py    # DICOM SEG → 오버레이
     │   ├── writers.py       # 변환 (NIfTI/NRRD/MHA/NumPy/PNG/DICOM)
     │   └── convert_dialog.py
+    ├── open_datasets.py     # Help → Open Datasets 링크
     └── ai/                  # AI Research
         ├── panel.py         # 사이드 패널 UI
         ├── segmentation.py  # 마스크 편집 (Brush/Eraser/Wand/Threshold/보간)
@@ -323,11 +341,15 @@ DabbaView/
         ├── preprocess.py    # 크롭/리샘플링/필터/히스토그램 매칭/정규화
         ├── monai_label.py   # MONAI Label REST 클라이언트
         ├── onnx_infer.py    # ONNX 로컬 추론
+        ├── model_hub.py     # TotalSegmentator·nnU-Net(전용 Python 환경)·REST 실행
+        ├── models_tab.py    # Models 탭 (상태·원클릭 설치·실행·로그)
+        ├── medsam.py        # MedSAM / SAM ONNX (클릭 세그멘테이션)
         ├── worklist.py      # 데이터셋 워크리스트
         └── volume.py        # 시리즈 → 3D 볼륨 + 좌표
 ```
 
 ## Help 메뉴
+- **📚 Open Datasets**: 공개 의료영상 데이터셋·대회 링크 13개 (브라우저로 열림)
 - **About DabbaView**: 버전, 빌드 날짜·커밋, 저작권, 라이선스, GitHub 링크, 포함된 라이브러리 버전 (macOS는 앱 메뉴 → About)
 - **Deploy Web**: [DabbaView-Web](https://github.com/Dabbabbu/DabbaView-Web)(GitHub Pages)을 GitHub Actions `deploy.yml`로 다시 배포하고, 진행 상태(Deploying... → Deploy complete!)와 사이트 주소를 표시
   - 선택: 배포 전에 웹 `package.json`·`package-lock.json` 버전을 앱 버전으로 맞춤 (`[skip ci]` 커밋 하나)

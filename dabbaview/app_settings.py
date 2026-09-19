@@ -233,6 +233,21 @@ class AppSettings:
     def set_monai_token(self, token):
         self._qs.setValue("monai_label_token", (token or "").strip())
 
+    # 오픈소스 모델 (TotalSegmentator, nnU-Net, MedSAM, ONNX, REST) - 키는 "models/..."
+    MODEL_DEFAULTS = {"python": "", "device": "auto", "nnunet_folder": "", "nnunet_folds": "0",
+                      "medsam_encoder": "", "medsam_decoder": "", "medsam_mode": "medsam",
+                      "medsam_prompt": "box", "medsam_box_mm": "40", "onnx_paths": "",
+                      "rest_url": ""}
+
+    def model_value(self, key):
+        return self._qs.value(f"models/{key}", self.MODEL_DEFAULTS.get(key, ""), type=str)
+
+    def set_model_value(self, key, value):
+        self._qs.setValue(f"models/{key}", "" if value is None else str(value).strip())
+
+    def onnx_model_paths(self):
+        return [p for p in self.model_value("onnx_paths").split(";") if p.strip()]
+
     # Deploy Web (DabbaView-Web GitHub Actions)
     def deploy_repo(self):
         return self._qs.value("deploy_repo", "Dabbabbu/DabbaView-Web", type=str) \

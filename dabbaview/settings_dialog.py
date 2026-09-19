@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTabWidget,
                              QWidget, QFormLayout, QComboBox, QSpinBox,
                              QPushButton, QTableWidget, QTableWidgetItem,
                              QHeaderView, QCheckBox, QLineEdit, QLabel,
-                             QDialogButtonBox, QMessageBox, QAbstractItemView)
+                             QDialogButtonBox, QMessageBox, QAbstractItemView,
+                             QFileDialog, QGroupBox)
 from PyQt5.QtCore import Qt
 
 from .app_settings import (MOUSE_BINDING_LABELS, DEFAULT_MOUSE_BINDINGS,
@@ -299,8 +300,95 @@ class SettingsDialog(QDialog):
             "수정한 라벨을 피드백으로 제출할 수 있습니다 (active learning).\n"
             "서버로는 픽셀 볼륨(NIfTI)만 전송되며 환자 이름·ID 등 DICOM 정보는 보내지 않습니다.\n"
             "예: monailabel start_server --app apps/radiology --studies datasets/ --conf models segmentation"))
+        layout.addWidget(self._models_group())
         layout.addStretch()
         return page
+
+    def _path_row(self, value, placeholder, folder=False, filt=""):
+        row = QHBoxLayout()
+        edit = QLineEdit(value)
+        edit.setPlaceholderText(placeholder)
+        browse = QPushButton("…")
+        browse.setFixedWidth(32)
+
+        def pick():
+            if folder:
+                path = QFileDialog.getExistingDirectory(self, placeholder, edit.text())
+            else:
+                path, _ = QFileDialog.getOpenFileName(self, placeholder, edit.text(), filt)
+            if path:
+                edit.setText(path)
+        browse.clicked.connect(pick)
+        row.addWidget(edit, 1)
+        row.addWidget(browse)
+        return row, edit
+
+    def _models_group(self):
+        """오픈소스 모델 (AI 메뉴 → Open Source Models, AI 패널 → Models 탭)"""
+        from .cloud.secure_store import SecureStore
+        from .ai.model_hub import DEVICES
+        self._model_secure = SecureStore(self._settings._qs)
+        get = self._settings.model_value
+        box = QGroupBox("오픈소스 모델 (TotalSegmentator · nnU-Net · MedSAM · ONNX · REST)")
+        form = QFormLayout(box)
+        row, self._model_python = self._path_row(
+            get("python"), "비우면 DabbaView 전용 환경 (Models 탭에서 설치 시 자동 생성)")
+        form.addRow("모델 실행 Python:", row)
+        self._model_device = QComboBox()
+        for key, text in DEVICES:
+            self._model_device.addItem(text, key)
+        self._model_device.setCurrentIndex(max(0, self._model_device.findData(get("device"))))
+        form.addRow("실행 장치:", self._model_device)
+        row, self._nnunet_folder = self._path_row(
+            get("nnunet_folder"), "nnU-Net 학습 모델 폴더 (…/nnUNetTrainer__nnUNetPlans__3d_fullres)",
+            folder=True)
+        form.addRow("nnU-Net 모델 폴더:", row)
+        self._nnunet_folds = QLineEdit(get("nnunet_folds"))
+        self._nnunet_folds.setPlaceholderText("0  또는  0,1,2,3,4  또는  all")
+        form.addRow("nnU-Net folds:", self._nnunet_folds)
+        row, self._medsam_encoder = self._path_row(get("medsam_encoder"), "MedSAM 인코더 .onnx",
+                                                   filt="ONNX (*.onnx)")
+        form.addRow("MedSAM 인코더:", row)
+        row, self._medsam_decoder = self._path_row(get("medsam_decoder"), "MedSAM 디코더 .onnx",
+                                                   filt="ONNX (*.onnx)")
+        form.addRow("MedSAM 디코더:", row)
+        self._medsam_mode = QComboBox()
+        self._medsam_mode.addItem("MedSAM (1024 직접 리사이즈, 0–1)", "medsam")
+        self._medsam_mode.addItem("SAM 원본 (긴 변 1024, ImageNet 정규화)", "sam")
+        self._medsam_mode.setCurrentIndex(max(0, self._medsam_mode.findData(get("medsam_mode"))))
+        form.addRow("전처리:", self._medsam_mode)
+        prompt_row = QHBoxLayout()
+        self._medsam_prompt = QComboBox()
+        self._medsam_prompt.addItem("클릭 중심 박스", "box")
+        self._medsam_prompt.addItem("클릭 점", "point")
+        self._medsam_prompt.setCurrentIndex(max(0, self._medsam_prompt.findData(get("medsam_prompt"))))
+        self._medsam_box = QSpinBox()
+        self._medsam_box.setRange(5, 300)
+        self._medsam_box.setSuffix(" mm")
+        try:
+            self._medsam_box.setValue(int(float(get("medsam_box_mm"))))
+        except ValueError:
+            self._medsam_box.setValue(40)
+        prompt_row.addWidget(self._medsam_prompt, 1)
+        prompt_row.addWidget(self._medsam_box)
+        form.addRow("프롬프트:", prompt_row)
+        self._onnx_paths = QLineEdit(get("onnx_paths"))
+        self._onnx_paths.setPlaceholderText("세그멘테이션 .onnx 경로 (여러 개는 ; 로 구분)")
+        form.addRow("사용자 ONNX 모델:", self._onnx_paths)
+        self._rest_url = QLineEdit(get("rest_url"))
+        self._rest_url.setPlaceholderText("https://my-server/segment (원격 추론)")
+        form.addRow("REST API 주소:", self._rest_url)
+        self._rest_token = QLineEdit(self._model_secure.get("models_rest_token") or "")
+        self._rest_token.setEchoMode(QLineEdit.Password)
+        self._rest_token.setPlaceholderText("선택 (키체인에 저장)")
+        form.addRow("REST 토큰:", self._rest_token)
+        note = QLabel("TotalSegmentator·nnU-Net은 AI 패널 → Models 탭에서 원클릭 설치합니다 "
+                      "(PyTorch 포함 수 GB, 별도 Python 환경). REST API는 볼륨 NIfTI만 보내고 "
+                      "라벨 NIfTI를 받습니다 (형식은 Models 탭 도움말).")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #888;")
+        form.addRow(note)
+        return box
 
     def _cloud_tab(self):
         from .cloud import google_drive, onedrive
@@ -462,6 +550,21 @@ class SettingsDialog(QDialog):
         self._settings.set_report_creator(self._report_creator.text())
         self._settings.set_monai_url(self._monai_url.text())
         self._settings.set_monai_token(self._monai_token.text())
+        for key, widget in (("python", self._model_python), ("nnunet_folder", self._nnunet_folder),
+                            ("nnunet_folds", self._nnunet_folds),
+                            ("medsam_encoder", self._medsam_encoder),
+                            ("medsam_decoder", self._medsam_decoder),
+                            ("onnx_paths", self._onnx_paths), ("rest_url", self._rest_url)):
+            self._settings.set_model_value(key, widget.text())
+        self._settings.set_model_value("device", self._model_device.currentData())
+        self._settings.set_model_value("medsam_mode", self._medsam_mode.currentData())
+        self._settings.set_model_value("medsam_prompt", self._medsam_prompt.currentData())
+        self._settings.set_model_value("medsam_box_mm", self._medsam_box.value())
+        token = self._rest_token.text().strip()
+        if token:
+            self._model_secure.set("models_rest_token", token)
+        else:
+            self._model_secure.delete("models_rest_token")
         self._settings.set_cloud_ids(self._google_id.text(), self._google_key.text(),
                                      self._onedrive_id.text())
         from . import cache

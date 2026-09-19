@@ -512,6 +512,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self._roi_manager)
         self.tabifyDockWidget(self._analysis_dock, self._roi_manager)
         self._roi_manager.hide()
+        self._init_ai_menu(menubar)
         self._preset_menu = menubar.addMenu("&Presets")
         self._help_menu = menubar.addMenu("&Help")
         about = QAction(f"About {APP_NAME}", self)
@@ -526,8 +527,64 @@ class MainWindow(QMainWindow):
         deploy.setToolTip("DabbaView-Web(GitHub Pages)을 GitHub Actions로 다시 배포")
         deploy.triggered.connect(self._open_deploy_web)
         self._help_menu.addAction(deploy)
+        self._help_menu.addSeparator()
+        datasets = self._help_menu.addMenu("📚 Open Datasets")
+        from .open_datasets import OPEN_DATASETS
+        for entry in OPEN_DATASETS:
+            if entry is None:
+                datasets.addSeparator()
+                continue
+            _group, name, desc, url = entry
+            action = datasets.addAction(f"{name}  —  {desc}")
+            action.setToolTip(url)
+            action.setStatusTip(url)
+            action.triggered.connect(lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
         self._preset_menu.aboutToShow.connect(self._rebuild_preset_menu)
         self._rebuild_preset_menu()
+
+    def _init_ai_menu(self, menubar):
+        """AI 메뉴: AI Research 패널 + Open Source Models (TotalSegmentator, nnU-Net, ...)"""
+        menu = menubar.addMenu("A&I")
+        menu.addAction(self._act_ai)
+        models = menu.addMenu("🧩 Open Source Models")
+        panel = self._ai_panel
+
+        def tab():
+            panel.show_models_tab()
+            return panel.models_tab
+
+        def run_totalseg(task):
+            t = tab()
+            t.task.setCurrentIndex(max(0, t.task.findData(task)))
+            t.run_totalseg()
+
+        entries = [
+            ("Models 탭 (설치·상태·로그)", lambda: tab()),
+            None,
+            ("TotalSegmentator ▸ 실행 — CT (total)", lambda: run_totalseg("total")),
+            ("TotalSegmentator ▸ 실행 — MR (total_mr)", lambda: run_totalseg("total_mr")),
+            ("TotalSegmentator ▸ 설치/업데이트…", lambda: tab().install("totalseg")),
+            None,
+            ("nnU-Net ▸ 실행", lambda: tab().run_nnunet()),
+            ("nnU-Net ▸ 설치/업데이트…", lambda: tab().install("nnunet")),
+            None,
+            ("MONAI Label ▸ 서버 연결 탭", lambda: (panel.show(), panel.raise_(),
+                                             panel.tabs.setCurrentWidget(panel.model_tab_page))),
+            ("MedSAM ▸ 클릭 도구 (M)", lambda: panel.enable_medsam()),
+            None,
+            ("사용자 ONNX 모델 ▸ 실행", lambda: tab().run_onnx()),
+            ("REST API ▸ 원격 추론", lambda: tab().run_rest()),
+            None,
+            ("모델 설정 (경로·장치·REST)…", lambda: self._open_settings(tab="ai")),
+        ]
+        for entry in entries:
+            if entry is None:
+                models.addSeparator()
+                continue
+            text, slot = entry
+            action = models.addAction(text)
+            action.triggered.connect(lambda _=False, fn=slot: fn())
+        return menu
 
     def _init_toolbar(self):
         """도구 모음 (3줄): 도구 / 보기·동기화 / 출력·시네"""
