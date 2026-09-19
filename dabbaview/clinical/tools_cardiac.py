@@ -8,6 +8,7 @@ import re
 import numpy as np
 from PyQt5.QtWidgets import QComboBox, QLabel, QLineEdit
 
+from ..annotations import instance_key
 from . import cardiac as C
 from . import models as M
 from .data import build_stack, detect, parse_values, position_key, slice_param
@@ -105,7 +106,7 @@ class ContoursTool(Tool):
     def remove_here(self):
         s = self.ctx.series()
         ds = s.slices[self.ctx.slice_index()]
-        self.ctx.main._contours.remove_for_image(str(getattr(ds, "SOPInstanceUID", "")))
+        self.ctx.main._contours.remove_for_image(instance_key(ds))
 
     def clear_all(self):
         s = self.ctx.series()
@@ -441,7 +442,7 @@ class StrainTool(Tool):
     def run(self):
         s = self.ctx.series()
         ds = s.slices[self.ctx.slice_index()]
-        here = {c["kind"]: c for c in self.ctx.main._contours.for_image(str(ds.SOPInstanceUID))}
+        here = {c["kind"]: c for c in self.ctx.main._contours.for_image(instance_key(ds))}
         if "lv_endo" not in here or "lv_epi" not in here:
             raise ValueError("현재 영상(ED)에 LV Endo와 LV Epi 윤곽을 저장하세요.")
         frames, trig, indices = frames_at_current_position(self.ctx, s, "phase")

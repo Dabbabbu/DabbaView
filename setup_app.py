@@ -80,6 +80,8 @@ OPTIONS = {
                  'onnxruntime',
                  # 다중 포맷 불러오기/변환 (NIfTI, NRRD, MetaImage) + HTTPS 인증서
                  'nibabel', 'nrrd', 'SimpleITK', 'certifi',
+                 # 압축 DICOM 디코더 (JPEG, JPEG-LS, JPEG 2000, GDCM)
+                 'pylibjpeg', 'libjpeg', 'openjpeg', '_gdcm',
                  # 분석: Python 콘솔·히스토그램 그래프, 입자 분석·Canny
                  'matplotlib', 'skimage',
                  # 클라우드: Google Drive (정적 API 문서·CA 파일 포함) / OneDrive / 키체인
@@ -92,7 +94,7 @@ OPTIONS = {
                  'google.auth', 'google.auth.transport.requests', 'google.oauth2.credentials',
                  'google.api_core.client_options', 'google.api_core.exceptions',
                  'google.protobuf', 'jaraco.context', 'jaraco.functools',
-                 'jaraco.classes.properties', 'keyring.backends.macOS'],
+                 'jaraco.classes.properties', 'keyring.backends.macOS', 'gdcm'],
     'excludes': ['tkinter', 'PySide2', 'PySide6', 'PyQt6'],
 }
 

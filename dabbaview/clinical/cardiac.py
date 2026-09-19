@@ -13,6 +13,7 @@ import math
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from ..annotations import instance_key
 from ..roi import polygon_mask
 from .data import position_key, slice_param
 
@@ -65,7 +66,7 @@ class ContourStore(QObject):
         from .. import dicom_info
         spacing = dicom_info.pixel_spacing(ds) or (1.0, 1.0)
         item = {"series_uid": series.series_uid, "index": index, "kind": kind,
-                "sop": str(getattr(ds, "SOPInstanceUID", index)),
+                "sop": instance_key(ds, str(index)),
                 "pts": [tuple(map(float, p)) for p in pts],
                 "position": position_key(ds, 0.1) / 10.0,
                 "phase": slice_param(ds, "phase"),

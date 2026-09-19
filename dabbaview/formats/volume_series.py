@@ -173,6 +173,12 @@ class VolumeSeries(DicomSeries):
     def get_all_pixel_arrays(self, max_workers=None):
         return [self._array[k] for k in range(self._array.shape[0])]
 
+    def get_volume_array(self):
+        return self._array
+
+    def decode_error(self, index):
+        return None   # 메모리에 있는 배열이라 디코딩 실패 없음
+
     def get_full_dataset(self, index):
         """픽셀까지 포함한 DICOM Dataset (Send·익명화·Print 등에서 사용)"""
         if index < 0 or index >= len(self.slices):

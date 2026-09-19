@@ -348,7 +348,7 @@ class SegmentationController(QObject):
         tol = self.wand_tolerance
         if self.wand_3d:
             self.status.emit("Magic Wand 3D: 전체 슬라이스 읽는 중...")
-            vol = np.stack(series.get_all_pixel_arrays())
+            vol = series.get_volume_array()
             within = np.abs(vol - seed) <= tol
             labeled, _ = ndimage.label(within)
             region = labeled == labeled[k, y, x]

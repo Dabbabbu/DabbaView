@@ -1338,6 +1338,19 @@ class DicomViewport(QWidget):
         self._cache_valid = True
         return self._cached_pixmap
 
+    def _draw_decode_failure(self, painter):
+        """디코딩에 실패한 슬라이스: 이유를 보여 주고 다른 슬라이스로 넘길 수 있게"""
+        error_fn = getattr(self._series, "decode_error", None)
+        reason = (error_fn(self._current_slice) if error_fn else None) or "픽셀 데이터를 읽지 못했습니다."
+        ds = self.current_dataset()
+        name = os.path.basename(str(getattr(ds, "filename", "") or "")) if ds is not None else ""
+        painter.setFont(self._overlay_font())
+        painter.setPen(QColor(255, 190, 80))
+        text = (f"⚠ 이 영상을 표시할 수 없습니다\n{reason}\n{name}\n\n"
+                f"슬라이스 {self._current_slice + 1}/{self._series.num_slices} — 다른 슬라이스는 계속 볼 수 있습니다")
+        painter.drawText(self.rect().adjusted(20, 20, -20, -20),
+                         Qt.AlignCenter | Qt.TextWordWrap, text)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -1345,6 +1358,11 @@ class DicomViewport(QWidget):
 
         pixmap = self._render_image()
         transform = self._display_transform() if pixmap else None
+        if not pixmap and self._series is not None and self._series.num_slices:
+            self._draw_decode_failure(painter)
+            self._draw_highlight(painter)
+            painter.end()
+            return
         if not pixmap or transform is None:
             self._draw_start_screen(painter)
             self._draw_highlight(painter)
