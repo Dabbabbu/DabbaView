@@ -218,6 +218,35 @@ class AppSettings:
     def set_overlay_items(self, items):
         self._save_json("overlay_items", {k: bool(v) for k, v in items.items()})
 
+    # 작업 저장 (ROI · 측정 · 주석)
+    def autosave_enabled(self):
+        return self._qs.value("work/autosave", False, type=bool)
+
+    def set_autosave_enabled(self, on):
+        self._qs.setValue("work/autosave", bool(on))
+
+    def autosave_minutes(self):
+        return max(1, int(self._qs.value("work/autosave_minutes", 5, type=int)))
+
+    def set_autosave_minutes(self, minutes):
+        self._qs.setValue("work/autosave_minutes", int(minutes))
+
+    def exit_save(self):
+        """'ask' (물어보기) | 'auto' (항상 저장) | 'never' (묻지 않음)"""
+        value = self._qs.value("work/exit_save", "ask", type=str)
+        return value if value in ("ask", "auto", "never") else "ask"
+
+    def set_exit_save(self, mode):
+        self._qs.setValue("work/exit_save", mode if mode in ("ask", "auto", "never") else "ask")
+
+    def restore_work(self):
+        """다시 열 때 복원: 'ask' | 'auto' | 'never'"""
+        value = self._qs.value("work/restore", "ask", type=str)
+        return value if value in ("ask", "auto", "never") else "ask"
+
+    def set_restore_work(self, mode):
+        self._qs.setValue("work/restore", mode if mode in ("ask", "auto", "never") else "ask")
+
     # Reading (기록)
     def report_folder(self):
         return self._qs.value("report_folder", "", type=str)

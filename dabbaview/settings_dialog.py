@@ -62,7 +62,7 @@ def _append_row(table, values):
 
 class SettingsDialog(QDialog):
 
-    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache", "acr", "display")
+    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache", "acr", "display", "work")
 
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
@@ -84,6 +84,7 @@ class SettingsDialog(QDialog):
         self._acr = ACRCriteriaWidget(app_settings)
         self._tabs.addTab(self._acr, "ACR QC")
         self._tabs.addTab(self._display_tab(), "Display")
+        self._tabs.addTab(self._work_tab(), "작업 저장")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -108,6 +109,49 @@ class SettingsDialog(QDialog):
             cb.setChecked(items.get(key, True))
             layout.addWidget(cb)
             self._overlay_checks[key] = cb
+        layout.addStretch(1)
+        return page
+
+    # ─── 작업 저장 ───
+    def _work_tab(self):
+        from . import worksave
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.addWidget(QLabel("ROI · 측정 · 주석 · Key Image 저장"))
+        self._autosave = QCheckBox("작업 중 자동 저장")
+        self._autosave.setChecked(self._settings.autosave_enabled())
+        layout.addWidget(self._autosave)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("자동 저장 간격:"))
+        self._autosave_min = QSpinBox()
+        self._autosave_min.setRange(1, 120)
+        self._autosave_min.setSuffix(" 분")
+        self._autosave_min.setValue(self._settings.autosave_minutes())
+        row.addWidget(self._autosave_min)
+        row.addStretch(1)
+        layout.addLayout(row)
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("종료할 때:"))
+        self._exit_save = QComboBox()
+        for text, value in (("물어보기", "ask"), ("항상 저장", "auto"), ("묻지 않고 종료", "never")):
+            self._exit_save.addItem(text, value)
+        self._exit_save.setCurrentIndex(max(0, self._exit_save.findData(self._settings.exit_save())))
+        row2.addWidget(self._exit_save)
+        row2.addStretch(1)
+        layout.addLayout(row2)
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("같은 검사를 다시 열 때:"))
+        self._restore_work = QComboBox()
+        for text, value in (("복원할지 물어보기", "ask"), ("항상 복원", "auto"), ("복원하지 않음", "never")):
+            self._restore_work.addItem(text, value)
+        self._restore_work.setCurrentIndex(max(0, self._restore_work.findData(self._settings.restore_work())))
+        row3.addWidget(self._restore_work)
+        row3.addStretch(1)
+        layout.addLayout(row3)
+        folder = QLabel(f"자동 저장 위치: {worksave.base_dir()}")
+        folder.setWordWrap(True)
+        folder.setStyleSheet("color: #9aa7b5;")
+        layout.addWidget(folder)
         layout.addStretch(1)
         return page
 
@@ -576,6 +620,10 @@ class SettingsDialog(QDialog):
         self._settings.set_dicom_edit_backup(self._dicom_backup.isChecked())
         self._acr.save()
         self._settings.set_overlay_items({k: cb.isChecked() for k, cb in self._overlay_checks.items()})
+        self._settings.set_autosave_enabled(self._autosave.isChecked())
+        self._settings.set_autosave_minutes(self._autosave_min.value())
+        self._settings.set_exit_save(self._exit_save.currentData())
+        self._settings.set_restore_work(self._restore_work.currentData())
         self._settings.set_monai_url(self._monai_url.text())
         self._settings.set_monai_token(self._monai_token.text())
         for key, widget in (("python", self._model_python), ("nnunet_folder", self._nnunet_folder),
