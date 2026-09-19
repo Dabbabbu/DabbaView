@@ -196,6 +196,12 @@ class ExportDialog(QDialog):
         self.procedure = QCheckBox("측정 과정 단계별 영상 넣기 (두께 · 균일도 · 고스팅, W/L 조절 화면)")
         self.procedure.setChecked(True)
         form.addRow(self.procedure)
+        self.evidence = QCheckBox("증빙 영상 44장 넣기 (콘솔 수동 캡처와 1:1, 날짜·장비·검사자 표시)")
+        self.evidence.setChecked(True)
+        form.addRow(self.evidence)
+        self.evidence_files = QCheckBox("증빙 영상을 보고서 옆 폴더에도 JPG로 저장")
+        self.evidence_files.setChecked(True)
+        form.addRow(self.evidence_files)
         self.history = QCheckBox("추세 기록에도 저장")
         self.history.setChecked(True)
         form.addRow(self.history)
@@ -313,6 +319,7 @@ class ACRTool(Tool):
         self.markers = {}          # 영상 키 → [(종류, ...)] (원판·구멍 배열 표시)
         self.values, self.rows = {}, []
         self.step_errors = {}
+        self.site_sets = []        # 사이트 시퀀스 (ACR T1·T2 외 11장 세트) - 증빙 영상용
         self._imgs = {}
         self._calibrated = {}      # 화면 캡처 시리즈 uid → 넣은 픽셀 크기
         self._busy = False
@@ -484,6 +491,7 @@ class ACRTool(Tool):
             self.sets = {"LOC": found["LOC"].ref if found["LOC"] is not None else None,
                          "T1": [img.ref for img in found["T1"]],
                          "T2": [img.ref for img in found["T2"]] if found["T2"] else None}
+            self.site_sets = [[img.ref for img in imgs] for imgs in found.get("extra", [])[:2]]
             self._fill_pickers()
             detail = "T1 " + self._describe(self.sets["T1"]) + (
                 ", T2 " + self._describe(self.sets["T2"]) if self.sets["T2"] else ", T2 없음")
@@ -848,6 +856,17 @@ class ACRTool(Tool):
                     out.append(step)
         return out
 
+    def _evidence(self, folder, info):
+        """증빙 영상 44장 (+ 분해능 2장) → [(번호, 검사, 내용, 비고, 경로)]"""
+        from PyQt5.QtWidgets import QApplication
+        from .acr_evidence import Evidence
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            return Evidence(self, info).build(folder, progress=lambda i, n: (
+                self.ctx.status(f"증빙 영상 만드는 중 {i}/{n}"), QApplication.processEvents()))
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def export_report(self):
         if not self.rows:
             raise ValueError("먼저 Auto Analyze를 실행하세요.")
@@ -862,7 +881,18 @@ class ACRTool(Tool):
         with tempfile.TemporaryDirectory() as tmp:
             snaps = self._snapshots(tmp) if dialog.snapshots.isChecked() and fmt != "xlsx" else []
             steps = self._procedure(tmp, images=fmt != "xlsx") if dialog.procedure.isChecked() else []
-            acr_report.write_report(fmt, path, info, self.rows, self._any_capture(), snaps, steps)
+            evidence = []
+            if dialog.evidence.isChecked() or dialog.evidence_files.isChecked():
+                evidence = self._evidence(os.path.join(tmp, "evidence"), info)
+                if dialog.evidence_files.isChecked():
+                    folder = os.path.splitext(path)[0] + "_증빙영상"
+                    os.makedirs(folder, exist_ok=True)
+                    import shutil
+                    for item in evidence:
+                        shutil.copy2(item[4], os.path.join(folder, os.path.basename(item[4])))
+                if not dialog.evidence.isChecked():
+                    evidence = []
+            acr_report.write_report(fmt, path, info, self.rows, self._any_capture(), snaps, steps, evidence)
         if dialog.history.isChecked():
             acr_report.save_record(acr_report.make_record(info, self.values, self.rows))
         self.ctx.status(f"ACR QC 보고서 저장: {path}")
