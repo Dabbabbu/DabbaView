@@ -15,8 +15,8 @@ from PyQt5.QtWidgets import (
     QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy
 )
 from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings,
-                          QVariantAnimation, QEasingCurve, QTimer)
-from PyQt5.QtGui import QIcon, QKeySequence, QFont
+                          QVariantAnimation, QEasingCurve, QTimer, QUrl)
+from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices
 
 from .dicom_loader import DicomLoader
 from .viewport import DicomViewport
@@ -29,6 +29,10 @@ from .ai.labels import LabelSet
 from .ai.panel import AIResearchPanel
 from .ai.segmentation import SegmentationController
 from .ai.worklist import Worklist
+from .formats import OPEN_FILTERS
+from . import APP_NAME, GITHUB_URL, __version__
+from .about_dialog import AboutDialog
+from .formats.convert_dialog import ConvertDialog
 from .video_exporter import VideoExportDialog
 from .series_tree import SeriesTreeWidget
 from .cursor_sync import CursorSyncController
@@ -119,7 +123,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DabbaView - DICOM Viewer")
+        self.setWindowTitle(f"{APP_NAME} v{__version__} - DICOM Viewer")
         self.resize(1400, 900)
 
         self._loader = DicomLoader()
@@ -145,6 +149,7 @@ class MainWindow(QMainWindow):
         self._info_panel.hide()
         # AI Research: 라벨 목록·마스크 편집·워크리스트를 모든 뷰포트가 공유
         self._pending_select_uid = None
+        self._pending_segmentations = []  # 참조 시리즈를 기다리는 DICOM SEG 경로
         self._labels = LabelSet(parent=self)
         self._seg = SegmentationController(self._labels, self)
         self._worklist = Worklist(parent=self)
@@ -293,7 +298,7 @@ class MainWindow(QMainWindow):
         # File 메뉴
         file_menu = menubar.addMenu("&File")
 
-        open_file = QAction("Open DICOM File...", self)
+        open_file = QAction("Open File... (DICOM, NIfTI, NRRD, MHA, NumPy, PNG/JPEG, STL)", self)
         open_file.setShortcut(QKeySequence("Ctrl+O"))
         open_file.triggered.connect(self._open_file)
         file_menu.addAction(open_file)
@@ -319,6 +324,32 @@ class MainWindow(QMainWindow):
         export_video_action.setShortcut(QKeySequence("Ctrl+Shift+E"))
         export_video_action.triggered.connect(self._export_video)
         file_menu.addAction(export_video_action)
+
+        # 포맷 변환 (소스 형식 → 대상 형식)
+        convert_menu = file_menu.addMenu("Convert / Export As")
+        for entry in (
+                ("DICOM → NIfTI...", "dicom", "nifti"),
+                ("DICOM → NRRD...", "dicom", "nrrd"),
+                ("DICOM → MetaImage (.mha)...", "dicom", "metaimage"),
+                ("DICOM → NumPy...", "dicom", "numpy"),
+                ("DICOM → PNG 시퀀스...", "dicom", "png"),
+                None,
+                ("NIfTI → DICOM...", "nifti", "dicom"),
+                ("NIfTI → NumPy...", "nifti", "numpy"),
+                ("NIfTI → NRRD...", "nifti", "nrrd"),
+                ("NumPy → NIfTI...", "numpy", "nifti"),
+                ("NRRD → NIfTI...", "nrrd", "nifti"),
+                ("MetaImage → NIfTI...", "metaimage", "nifti"),
+                ("PNG/JPEG 시퀀스 → NIfTI...", "image", "nifti"),
+                None,
+                ("다른 조합 (모든 형식)...", None, None)):
+            if entry is None:
+                convert_menu.addSeparator()
+                continue
+            text, source, target = entry
+            action = convert_menu.addAction(text)
+            action.triggered.connect(
+                lambda _=False, src=source, tgt=target: self._open_convert(src, tgt))
 
         file_menu.addSeparator()
         file_menu.addAction(self._act_save_ann)
@@ -401,6 +432,19 @@ class MainWindow(QMainWindow):
 
         # Window presets 메뉴 (설정에서 추가/편집/삭제, 열 때마다 새로 구성)
         self._preset_menu = menubar.addMenu("&Presets")
+        self._help_menu = menubar.addMenu("&Help")
+        about = QAction(f"About {APP_NAME}", self)
+        about.setMenuRole(QAction.AboutRole)  # macOS: 앱 메뉴(DabbaView → About)로 이동
+        about.triggered.connect(lambda: AboutDialog(self).exec_())
+        self._help_menu.addAction(about)
+        github = QAction("GitHub 저장소 열기", self)
+        github.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
+        self._help_menu.addAction(github)
+        self._help_menu.addSeparator()
+        deploy = QAction("🚀 Deploy Web...", self)
+        deploy.setToolTip("DabbaView-Web(GitHub Pages)을 GitHub Actions로 다시 배포")
+        deploy.triggered.connect(self._open_deploy_web)
+        self._help_menu.addAction(deploy)
         self._preset_menu.aboutToShow.connect(self._rebuild_preset_menu)
         self._rebuild_preset_menu()
 
@@ -655,11 +699,11 @@ class MainWindow(QMainWindow):
     # ─── 파일 열기 ───
 
     def _open_file(self):
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "Open DICOM File", self._last_dir(),
-            "DICOM Files (*.dcm *.DCM *.dicom);;All Files (*)")
-        if filepath:
-            self.load_path(filepath)
+        # 여러 파일 선택 가능 (PNG/JPEG 여러 장 → 한 시리즈)
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open File", self._last_dir(), OPEN_FILTERS)
+        if paths:
+            self.load_paths(paths)
 
     def _open_directory(self):
         dirpath = QFileDialog.getExistingDirectory(
@@ -795,6 +839,11 @@ class MainWindow(QMainWindow):
             self._add_recent_paths(loaded_paths)
 
         protocol_name = None
+        if not loader.series_dict:
+            # SEG / STL만 불러온 경우: 지금 보고 있는 시리즈 목록은 그대로
+            notes = self._apply_loaded_extras(loader)
+            self._statusbar.showMessage("  ·  ".join([f"Loaded {loaded} files"] + notes), 12000)
+            return
         if target_viewport is None:
             self._loader = loader
             pending, self._pending_select_uid = self._pending_select_uid, None
@@ -806,15 +855,141 @@ class MainWindow(QMainWindow):
             # 기존 목록에 추가하고, 드롭한 뷰포트를 활성화한 뒤 첫 새 시리즈 선택
             new_uids = self._loader.merge(loader)
             self._multi_viewport.set_active(target_viewport)
-            self._update_series_list(select_uid=new_uids[0])
+            self._update_series_list(select_uid=new_uids[0] if new_uids else None)
         self._report_library.set_studies(self._studies_for_matching())
+        notes = self._apply_loaded_extras(loader)
         errors = loader.load_errors
         message = f"Loaded {loaded} files"
         if errors:
             message += f" ({len(errors)} errors)"
         if protocol_name:
             message += f"  ·  Hanging Protocol: {protocol_name}"
-        self._statusbar.showMessage(message, 8000)
+        if notes:
+            message += "  ·  " + "  ·  ".join(notes)
+        self._statusbar.showMessage(message, 12000 if notes else 8000)
+
+    # ─── DICOM 외 포맷: 마스크 / 라벨맵 / DICOM SEG / STL ───
+
+    def _apply_loaded_extras(self, loader):
+        """함께 불러온 마스크·라벨맵은 AI 오버레이로, SEG는 참조 시리즈에, STL은 3D 탭에"""
+        notes = []
+        for uid, mask in loader.volume_masks.items():
+            series = self._loader.get_series_by_uid(uid)
+            if series is not None and self._apply_mask(series, mask):
+                notes.append(f"마스크: {series.description}")
+        removed = False
+        for label_series in loader.label_candidates:
+            base = self._find_matching_series(label_series)
+            if base is None:
+                continue
+            if self._apply_mask(base, label_series.array.astype("uint8")):
+                self._loader.series_dict.pop(label_series.series_uid, None)
+                removed = True
+                notes.append(f"라벨맵 {label_series.description} → {base.description}")
+        self._pending_segmentations.extend(loader.segmentations)
+        notes += self._apply_pending_segmentations()
+        if loader.meshes:
+            notes += self._show_meshes(loader.meshes)
+        if removed:
+            current = self._current_series
+            self._update_series_list(
+                select_uid=current.series_uid if current is not None
+                and self._loader.get_series_by_uid(current.series_uid) else None)
+        if loader.load_errors:
+            first = loader.load_errors[0]
+            notes.append(f"예: {os.path.basename(first[0])}: {first[1][:80]}")
+        return notes
+
+    def _apply_mask(self, series, mask):
+        """라벨 값마다 라벨이 없으면 만들고 AI 마스크로 표시 (기존 칠한 곳은 유지)"""
+        import numpy as np
+        case = self._seg.case(series)
+        if not case.editable or tuple(mask.shape) != tuple(case.shape):
+            return False
+        for value in np.unique(mask):
+            if value and self._labels.get(int(value)) is None:
+                self._labels.ensure(f"Label {int(value)}", int(value))
+        merged = mask.astype(np.uint8)
+        if not case.is_empty():
+            merged = case.mask.copy()
+            merged[mask > 0] = mask[mask > 0]
+        self._seg.set_mask(series, merged)
+        return True
+
+    def _find_matching_series(self, label_series):
+        """같은 크기·위치·방향의 다른 시리즈 (라벨맵을 얹을 영상)"""
+        import numpy as np
+        ref = label_series.slices[0]
+        for series in self._loader.get_series_list():
+            if series is label_series or series.num_slices != label_series.num_slices:
+                continue
+            first = series.slices[0]
+            try:
+                same_size = (int(first.Rows), int(first.Columns)) == (int(ref.Rows), int(ref.Columns))
+                same_pos = np.allclose([float(v) for v in first.ImagePositionPatient],
+                                       [float(v) for v in ref.ImagePositionPatient], atol=1.0)
+                same_dir = np.allclose([float(v) for v in first.ImageOrientationPatient],
+                                       [float(v) for v in ref.ImageOrientationPatient], atol=1e-3)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if same_size and same_pos and same_dir:
+                return series
+        return None
+
+    def _apply_pending_segmentations(self):
+        """DICOM SEG → 참조 시리즈 오버레이. 참조 시리즈가 아직 없으면 다음 로딩 때 다시 시도"""
+        from .formats.seg_reader import SegmentationFile
+        notes, still_pending = [], []
+        for path in self._pending_segmentations:
+            try:
+                seg_file = SegmentationFile(path)
+            except Exception as e:  # noqa: BLE001 - 손상된 SEG는 건너뜀
+                notes.append(f"SEG 읽기 실패 {os.path.basename(path)}: {e}")
+                continue
+            target = next((s for s in self._loader.get_series_list()
+                           if seg_file.matches(s)), None)
+            if target is None:
+                still_pending.append(path)
+                notes.append(f"SEG {os.path.basename(path)}: 참조 시리즈를 불러오면 자동으로 표시")
+                continue
+
+            def label_for(number, info):
+                label = self._labels.ensure(info["label"])
+                if info.get("color"):
+                    self._labels.set_color(label["id"], info["color"])
+                return label["id"]
+            try:
+                mask = seg_file.to_mask(target, label_for)
+            except ValueError as e:
+                notes.append(f"SEG {os.path.basename(path)}: {e}")
+                continue
+            self._apply_mask(target, mask)
+            if self._current_series is not target:
+                self._select_series(target)
+            notes.append(f"SEG: {seg_file.description} → {target.description} "
+                         f"({len(seg_file.segments)}개 세그먼트)")
+        self._pending_segmentations = still_pending
+        return notes
+
+    def _show_meshes(self, paths):
+        if not vtk_usable():
+            return ["STL 메시는 3D Volume 탭(VTK)이 필요합니다"]
+        notes = []
+        for path in paths:
+            try:
+                cells = self._volume_widget.add_mesh(path)
+                notes.append(f"STL {os.path.basename(path)} ({cells:,} 삼각형)")
+            except ValueError as e:
+                notes.append(str(e))
+        self._tab_widget.setCurrentWidget(self._volume_widget)
+        return notes
+
+    def _open_deploy_web(self):
+        from .deploy_web import DeployWebDialog
+        DeployWebDialog(self._app_settings, self).exec_()
+
+    def _open_convert(self, source_kind=None, target=None):
+        ConvertDialog(self, source_kind, target).exec_()
 
     def _on_series_dropped(self, viewport_index, uid):
         """트리에서 Multi View 뷰포트로 시리즈를 드롭"""

@@ -6,6 +6,9 @@ DICOM 파일 로딩 및 시리즈 분류 엔진
 
 - 폴더 로딩 시 메타데이터만 병렬로 읽고(stop_before_pixels=True)
 - 픽셀 데이터는 뷰포트가 요청할 때 파일에서 lazy load
+- DICOM이 아닌 의료영상(NIfTI, NRRD, MetaImage, NumPy, 이미지 시퀀스)은
+  formats.readers가 메모리 시리즈(VolumeSeries)로 만들어 함께 목록에 넣음
+- DICOM SEG는 시리즈가 아니라 세그멘테이션 오버레이, STL은 3D 메시로 따로 모음
 """
 import os
 import threading
@@ -295,8 +298,23 @@ class DicomLoader:
     def __init__(self):
         self.series_dict = {}  # series_uid -> DicomSeries
         self.load_errors = []
+        self._reset_extras()
+
+    def _reset_extras(self):
+        self.volume_masks = {}       # series_uid -> 함께 읽은 마스크 (NumPy _mask 등)
+        self.label_candidates = []   # 라벨맵으로 보이는 VolumeSeries (다른 시리즈 오버레이 후보)
+        self.segmentations = []      # DICOM SEG 파일 경로
+        self.meshes = []             # STL 경로
+
+    @property
+    def extra_count(self):
+        return len(self.segmentations) + len(self.meshes)
 
     def _add_dataset(self, ds):
+        from .formats.seg_reader import is_segmentation
+        if is_segmentation(ds):
+            self.segmentations.append(str(getattr(ds, "filename", "")))
+            return
         series_uid = str(getattr(ds, 'SeriesInstanceUID', 'unknown'))
         if series_uid not in self.series_dict:
             self.series_dict[series_uid] = DicomSeries(series_uid)
@@ -316,17 +334,22 @@ class DicomLoader:
 
     @staticmethod
     def collect_files(dirpath, recursive=True):
-        """디렉토리에서 DICOM 후보 파일 경로 수집 (확장자 사전 필터링)"""
+        """디렉토리에서 불러올 파일 경로 수집 (DICOM 후보 + 지원하는 다른 형식)"""
+        from .formats.readers import file_kind
         files = []
+
+        def wanted(fn):
+            return is_candidate_file(fn) or (
+                not fn.startswith('.') and file_kind(fn) != "dicom")
         if recursive:
             for root, _, filenames in os.walk(dirpath):
                 for fn in filenames:
-                    if is_candidate_file(fn):
+                    if wanted(fn):
                         files.append(os.path.join(root, fn))
         else:
             for fn in os.listdir(dirpath):
                 path = os.path.join(dirpath, fn)
-                if is_candidate_file(fn) and os.path.isfile(path):
+                if wanted(fn) and os.path.isfile(path):
                     files.append(path)
         return files
 
@@ -347,8 +370,10 @@ class DicomLoader:
         직접 지정한 파일은 확장자와 관계없이 시도하고,
         폴더 안의 파일은 확장자 사전 필터링 적용.
         """
+        from .formats.readers import file_kind
         self.series_dict.clear()
         self.load_errors.clear()
+        self._reset_extras()
 
         files = []
         for path in paths:
@@ -356,12 +381,17 @@ class DicomLoader:
                 files.extend(self.collect_files(path, recursive))
             elif os.path.isfile(path):
                 files.append(path)
-        total = len(files)
+        # 형식별 분류: DICOM은 병렬 메타데이터 읽기, 나머지는 형식별 reader
+        others = [f for f in files if file_kind(f) != "dicom"]
+        files = [f for f in files if file_kind(f) == "dicom"]
+        total = len(files) + len(others)
         if total == 0:
             return 0
 
-        loaded = 0
-        done = 0
+        loaded = self._load_other_formats(others, progress_callback, total)
+        done = len(others)
+        if cancel_event is not None and cancel_event.is_set():
+            return loaded
         with ThreadPoolExecutor(
                 max_workers=max_workers or default_worker_count()) as ex:
             futures = {ex.submit(_read_metadata, f): f for f in files}
@@ -390,6 +420,44 @@ class DicomLoader:
 
         return loaded
 
+    def _load_other_formats(self, paths, progress_callback=None, total=0):
+        """NIfTI/NRRD/MetaImage/NumPy/이미지/STL. 불러온 항목 수 반환"""
+        from .formats.readers import (file_kind, read_volume_file, read_image_sequence,
+                                      is_mask_image_folder)
+        loaded = 0
+        images = {}
+        for i, path in enumerate(paths):
+            kind = file_kind(path)
+            if kind == "mesh":
+                self.meshes.append(path)
+                loaded += 1
+            elif kind == "image":
+                images.setdefault(os.path.dirname(path), []).append(path)
+            else:
+                try:
+                    loaded += self._add_volumes(read_volume_file(path))
+                except Exception as e:  # noqa: BLE001 - 형식 오류는 목록에만 기록
+                    self.load_errors.append((path, str(e)))
+            if progress_callback and total:
+                progress_callback(i + 1, total)
+        for folder, files in images.items():
+            if is_mask_image_folder(folder):
+                continue  # images/ 시리즈의 마스크로 함께 읽음
+            try:
+                loaded += self._add_volumes(read_image_sequence(files))
+            except Exception as e:  # noqa: BLE001
+                self.load_errors.append((folder, str(e)))
+        return loaded
+
+    def _add_volumes(self, volumes):
+        for lv in volumes:
+            self.series_dict[lv.series.series_uid] = lv.series
+            if lv.mask is not None:
+                self.volume_masks[lv.series.series_uid] = lv.mask
+            if lv.label_candidate:
+                self.label_candidates.append(lv.series)
+        return len(volumes)
+
     def get_series_list(self):
         """로드된 시리즈 목록 반환"""
         series_list = list(self.series_dict.values())
@@ -407,6 +475,10 @@ class DicomLoader:
             self.series_dict.setdefault(series.series_uid, series)
             uids.append(series.series_uid)
         self.load_errors.extend(other.load_errors)
+        self.volume_masks.update(other.volume_masks)
+        self.label_candidates.extend(other.label_candidates)
+        self.segmentations.extend(other.segmentations)
+        self.meshes.extend(other.meshes)
         return uids
 
     def get_series_by_uid(self, uid):
@@ -417,3 +489,4 @@ class DicomLoader:
         """모든 데이터 초기화"""
         self.series_dict.clear()
         self.load_errors.clear()
+        self._reset_extras()

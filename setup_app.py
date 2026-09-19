@@ -5,12 +5,51 @@
 py2app 설정 파일
 macOS .app 번들 생성용
 """
+import datetime
 import glob
 import os
+import re
 import shutil
+import subprocess
 import sys
 
 from setuptools import setup
+
+
+def read_version():
+    """dabbaview/__init__.py의 __version__ (버전의 단일 소스)"""
+    with open(os.path.join('dabbaview', '__init__.py'), encoding='utf-8') as f:
+        return re.search(r'^__version__\s*=\s*"([^"]+)"', f.read(), re.M).group(1)
+
+
+def write_build_info():
+    """빌드 날짜·커밋을 dabbaview/_build_info.py로 (About 대화상자 표시용, git에는 안 올림)"""
+    try:
+        commit = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], capture_output=True,
+                                text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = ''
+    with open(os.path.join('dabbaview', '_build_info.py'), 'w', encoding='utf-8') as f:
+        f.write('# setup_app.py가 빌드할 때 생성 - 직접 고치지 마세요\n')
+        f.write(f'BUILD_DATE = "{datetime.datetime.now():%Y-%m-%d %H:%M}"\n')
+        f.write(f'GIT_COMMIT = "{commit}"\n')
+
+
+def sync_readme_version(version):
+    """README의 버전 표기를 __version__에 맞춤"""
+    path = 'README.md'
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
+    new = re.sub(r'(<!-- version -->\*\*Version\*\* )[0-9A-Za-z.\-+]+', rf'\g<1>{version}', text)
+    if new != text:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(new)
+
+
+VERSION = read_version()
+if 'py2app' in sys.argv:
+    write_build_info()
+    sync_readme_version(VERSION)
 
 APP = ['run.py']
 DATA_FILES = []
@@ -21,8 +60,9 @@ OPTIONS = {
         'CFBundleName': 'DabbaView',
         'CFBundleDisplayName': 'DabbaView - DICOM Viewer',
         'CFBundleIdentifier': 'com.dabbaview.dicomviewer',
-        'CFBundleVersion': '0.2.0',
-        'CFBundleShortVersionString': '0.2.0',
+        'CFBundleVersion': VERSION,
+        'CFBundleShortVersionString': VERSION,
+        'NSHumanReadableCopyright': 'Copyright (c) 2026 Park Seongho (Dabbabbu) · GPL-3.0',
         'NSHighResolutionCapable': True,
         'CFBundleDocumentTypes': [
             {
@@ -37,7 +77,9 @@ OPTIONS = {
                  # 3D Volume Rendering (import vtk → vtkmodules.*, .dylibs 포함)
                  'vtkmodules',
                  # AI Research: ONNX 모델 로컬 추론
-                 'onnxruntime'],
+                 'onnxruntime',
+                 # 다중 포맷 불러오기/변환 (NIfTI, NRRD, MetaImage) + HTTPS 인증서
+                 'nibabel', 'nrrd', 'SimpleITK', 'certifi'],
     'includes': ['PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui',
                  'PyQt5.QtPrintSupport', 'vtk'],
     # vtk wheel이 끌어오는 matplotlib 등은 앱에서 쓰지 않음
@@ -45,6 +87,8 @@ OPTIONS = {
 }
 
 setup(
+    name='DabbaView',
+    version=VERSION,
     app=APP,
     data_files=DATA_FILES,
     options={'py2app': OPTIONS},

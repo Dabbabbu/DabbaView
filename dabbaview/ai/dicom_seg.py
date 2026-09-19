@@ -16,6 +16,8 @@ from pydicom.dataset import Dataset, FileMetaDataset
 from pydicom.sequence import Sequence
 from pydicom.uid import ExplicitVRLittleEndian, generate_uid
 
+from .. import __version__
+
 SEG_SOP_CLASS = "1.2.840.10008.5.1.4.1.1.66.4"
 
 _COPY_FROM_SOURCE = (
@@ -94,7 +96,7 @@ def build_segmentation(series, mask, labels, series_description="AI Segmentation
     ds.Manufacturer = "DabbaView"
     ds.ManufacturerModelName = "DabbaView AI Research"
     ds.DeviceSerialNumber = "0"
-    ds.SoftwareVersions = "0.2.0"
+    ds.SoftwareVersions = __version__
     ds.ImageType = ["DERIVED", "PRIMARY"]
     ds.SegmentationType = "BINARY"
     ds.SamplesPerPixel = 1

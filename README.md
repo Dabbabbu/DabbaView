@@ -3,12 +3,26 @@
 RadiAnt, GE AW, INFINITT PACS 워크스테이션의 작업 방식을 참고한 Python/PyQt5 기반 DICOM 뷰어입니다.
 macOS(.app)와 Windows(.exe)로 빌드됩니다.
 
+<!-- version -->**Version** 1.0.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
+
 > ⚠️ 진단용으로 인증된 의료기기가 아닙니다. 학습·연구·참고용으로 사용하세요.
 
 ## 주요 기능
 
 ### 불러오기 / 시리즈 목록
 - **파일·폴더 열기**: 메뉴, 드래그 앤 드롭, Recent Files(최근 10개). 앱 시작 시 자동으로 불러오지 않음
+- **다중 포맷**: DICOM 외에 아래 형식도 파일 열기·드래그 앤 드롭·폴더 열기로 불러와 DICOM 시리즈처럼 봅니다 (MPR·3D·AI·측정 모두 사용 가능, 공간 정보 유지)
+
+  | 형식 | 확장자 | 비고 |
+  |---|---|---|
+  | NIfTI | .nii, .nii.gz | nibabel. 4D는 볼륨마다 시리즈. 이름에 label/mask/seg가 있는 라벨맵은 같은 위치의 영상에 AI 오버레이로 |
+  | NRRD | .nrrd, .nhdr | pynrrd (LPS/RAS 공간 자동 변환) |
+  | MetaImage | .mha, .mhd | SimpleITK |
+  | NumPy | .npy, .npz | (슬라이스, 행, 열). `_mask.npy` / npz의 `mask`는 오버레이로, 옆의 `.json`·`dataset.json`에서 간격 복원 |
+  | 이미지 시퀀스 | .png, .jpg, .bmp, .tif | 폴더(또는 여러 파일)를 파일 이름 순서대로 한 시리즈로. `images/` 옆 `masks/`는 오버레이로 |
+  | DICOM SEG | .dcm (SEG) | 참조 시리즈 위에 세그멘테이션 오버레이 (참조 시리즈를 나중에 열어도 자동 적용) |
+  | STL | .stl | 3D Volume 탭에 메시로 표시 (LPS mm 좌표, 볼륨과 겹쳐 봄) |
+- **포맷 변환** (File → Convert / Export As): DICOM → NIfTI / NRRD / MetaImage / NumPy / PNG 시퀀스, NIfTI → DICOM / NumPy / NRRD, NumPy → NIfTI 등 모든 조합. 소스는 현재 시리즈 또는 파일·폴더, 옵션: voxel spacing 변경, 데이터 타입(int16/float32/uint8), 압축, AI 마스크 함께 저장(DICOM은 SEG로), PNG 8/16비트, DICOM Modality·환자 정보. 진행률 표시
 - **빠른 로딩**: 메타데이터만 병렬로 먼저 읽고 픽셀은 필요할 때 읽음 (확장자 사전 필터링)
 - **시리즈 패널 (INFINITT 스타일)**: 중간 슬라이스 썸네일, `시리즈번호/총 장수`, 시퀀스 이름, 선택 시 노란 테두리, 검사별 묶음
   - **클릭(버튼을 뗄 때) / Enter = 활성 칸에 표시**, 누른 채 **끌면 로드하지 않고 드래그 앤 드롭** → 놓은 칸에 표시 (트리도 동일)
@@ -125,6 +139,7 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 - **Hanging Protocols**: 모달리티, 부위 키워드, 레이아웃, 칸별 시리즈 키워드
 - **DICOM Nodes**: 이 컴퓨터의 AE Title, 전송/인쇄 대상 (AE Title, Host, Port)
 - **Reading**: 판독문 폴더(감시), 기본 Creator
+- **Deploy Web**(Help → Deploy Web): 저장소·워크플로·브랜치, GitHub 토큰
 - **AI**: MONAI Label 서버 주소, Access Token
 
 설정은 QSettings로 저장됩니다 (macOS: `~/Library/Preferences/com.dabbaview.DabbaView.plist`).
@@ -195,6 +210,15 @@ DabbaView/
     ├── text_dialog.py       # 텍스트 주석 입력
     ├── render.py            # 8비트 렌더링 (내보내기/인쇄)
     ├── shortcut_fallback.py # 한글 입력 상태에서도 단축키 동작
+    ├── about_dialog.py      # Help → About
+    ├── deploy_web.py        # Help → Deploy Web (GitHub Actions)
+    ├── net_ssl.py           # HTTPS 인증서 (certifi)
+    ├── formats/             # DICOM 외 포맷
+    │   ├── readers.py       # NIfTI/NRRD/MetaImage/NumPy/이미지 → 시리즈
+    │   ├── volume_series.py # 메모리 볼륨을 DICOM 시리즈처럼
+    │   ├── seg_reader.py    # DICOM SEG → 오버레이
+    │   ├── writers.py       # 변환 (NIfTI/NRRD/MHA/NumPy/PNG/DICOM)
+    │   └── convert_dialog.py
     └── ai/                  # AI Research
         ├── panel.py         # 사이드 패널 UI
         ├── segmentation.py  # 마스크 편집 (Brush/Eraser/Wand/Threshold/보간)
@@ -208,6 +232,13 @@ DabbaView/
         ├── worklist.py      # 데이터셋 워크리스트
         └── volume.py        # 시리즈 → 3D 볼륨 + 좌표
 ```
+
+## Help 메뉴
+- **About DabbaView**: 버전, 빌드 날짜·커밋, 저작권, 라이선스, GitHub 링크, 포함된 라이브러리 버전 (macOS는 앱 메뉴 → About)
+- **Deploy Web**: [DabbaView-Web](https://github.com/Dabbabbu/DabbaView-Web)(GitHub Pages)을 GitHub Actions `deploy.yml`로 다시 배포하고, 진행 상태(Deploying... → Deploy complete!)와 사이트 주소를 표시
+  - 선택: 배포 전에 웹 `package.json`·`package-lock.json` 버전을 앱 버전으로 맞춤 (`[skip ci]` 커밋 하나)
+  - 토큰: `gh auth login`이 되어 있으면 gh CLI 토큰을 사용(저장 안 함). 아니면 한 번 입력 → 설정 파일에 **평문** 저장. 필요한 권한: Actions·Contents 쓰기, Pages 읽기
+  - 배포되는 것은 GitHub의 브랜치 내용입니다 (로컬에서 커밋·푸시하지 않은 변경은 포함되지 않음)
 
 ## 향후 추가 예정
 

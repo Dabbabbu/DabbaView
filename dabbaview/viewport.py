@@ -29,7 +29,7 @@ from PyQt5.QtGui import (QImage, QPixmap, QPainter, QPen, QColor, QFont,
                          QFontDatabase, QTransform, QPainterPath, QPolygonF,
                          QBrush)
 
-from . import dicom_info
+from . import __version__, dicom_info
 from .annotations import AnnotationStore, image_key
 from .app_settings import MouseBindings
 from .geometry import reference_line
@@ -1512,7 +1512,7 @@ class DicomViewport(QWidget):
             DicomViewport._logo = QPixmap(LOGO_PATH)
         logo = DicomViewport._logo
 
-        message = "DICOM 파일을 열어주세요"
+        message = "DICOM · NIfTI · NRRD · MHA · NumPy · PNG 파일을 열어주세요"
         hint = "File → Open (Ctrl+O)  ·  폴더 열기 Ctrl+Shift+O  ·  드래그 앤 드롭"
         w, h = self.width(), self.height()
 
@@ -1527,8 +1527,8 @@ class DicomViewport(QWidget):
             return
 
         logo_size = int(min(128, h * 0.25))
-        title_h, msg_h, hint_h, gap = 34, 26, 22, 16
-        block_h = logo_size + gap + title_h + gap + msg_h + hint_h
+        title_h, version_h, msg_h, hint_h, gap = 34, 18, 26, 22, 16
+        block_h = logo_size + gap + title_h + version_h + gap + msg_h + hint_h
         top = (h - block_h) // 2
 
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
@@ -1542,7 +1542,13 @@ class DicomViewport(QWidget):
         painter.setFont(font)
         painter.setPen(QColor(220, 220, 220))
         painter.drawText(QRect(0, y, w, title_h), Qt.AlignCenter, "DabbaView")
-        y += title_h + gap
+        y += title_h
+        font = QFont()
+        font.setPointSize(11)
+        painter.setFont(font)
+        painter.setPen(QColor(120, 120, 120))
+        painter.drawText(QRect(0, y, w, version_h), Qt.AlignCenter, f"v{__version__}")
+        y += version_h + gap
 
         font = QFont()
         font.setPointSize(14)
