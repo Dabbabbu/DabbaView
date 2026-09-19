@@ -158,6 +158,8 @@ def _decode_pixels(ds):
 
 
 def _short_error(exc):
+    if isinstance(exc, TimeoutError):
+        return f"시간 초과: {exc}"
     text = str(exc).strip().splitlines()
     text = text[0] if text else type(exc).__name__
     if "all available plugins" in text or "missing dependenc" in text or "plugins are missing" in text:
