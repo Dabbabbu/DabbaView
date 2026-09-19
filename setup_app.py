@@ -79,11 +79,12 @@ OPTIONS = {
                  # AI Research: ONNX 모델 로컬 추론
                  'onnxruntime',
                  # 다중 포맷 불러오기/변환 (NIfTI, NRRD, MetaImage) + HTTPS 인증서
-                 'nibabel', 'nrrd', 'SimpleITK', 'certifi'],
+                 'nibabel', 'nrrd', 'SimpleITK', 'certifi',
+                 # 분석: Python 콘솔·히스토그램 그래프, 입자 분석·Canny
+                 'matplotlib', 'skimage'],
     'includes': ['PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui',
                  'PyQt5.QtPrintSupport', 'vtk'],
-    # vtk wheel이 끌어오는 matplotlib 등은 앱에서 쓰지 않음
-    'excludes': ['matplotlib', 'tkinter', 'PySide2', 'PySide6', 'PyQt6'],
+    'excludes': ['tkinter', 'PySide2', 'PySide6', 'PyQt6'],
 }
 
 setup(

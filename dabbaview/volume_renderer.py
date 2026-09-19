@@ -368,6 +368,53 @@ class VolumeRenderWidget(QWidget):
         self._reset_camera()
         return polydata.GetNumberOfCells()
 
+    def add_polydata(self, polydata, name, color=(230, 200, 170)):
+        """표면 모델(vtkPolyData, LPS mm) 추가 - Surface Modeling 결과"""
+        if not self._vtk_ok:
+            return False
+        mapper = vtk.vtkPolyDataMapper()
+        mapper.SetInputData(polydata)
+        mapper.ScalarVisibilityOff()
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor.GetProperty().SetColor(*[c / 255.0 for c in color])
+        actor.GetProperty().SetSpecular(0.3)
+        actor.GetProperty().SetSpecularPower(20)
+        self._renderer.AddActor(actor)
+        self._mesh_actors.append((name, actor))
+        self._update_mesh_label()
+        self._reset_camera()
+        return True
+
+    def set_landmarks(self, points):
+        """랜드마크를 3D 구 + 이름으로 표시 (points: [{name, position}])"""
+        if not self._vtk_ok:
+            return
+        for actor in getattr(self, "_landmark_actors", []):
+            self._renderer.RemoveActor(actor)
+        self._landmark_actors = []
+        for p in points:
+            sphere = vtk.vtkSphereSource()
+            sphere.SetCenter(*p["position"])
+            sphere.SetRadius(2.0)
+            sphere.SetThetaResolution(16)
+            sphere.SetPhiResolution(16)
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(sphere.GetOutputPort())
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor.GetProperty().SetColor(0.47, 1.0, 0.47)
+            text = vtk.vtkBillboardTextActor3D()
+            text.SetInput(p["name"])
+            text.SetPosition(*p["position"])
+            text.GetTextProperty().SetFontSize(14)
+            text.GetTextProperty().SetColor(0.47, 1.0, 0.47)
+            text.SetDisplayOffset(8, 8)
+            for a in (actor, text):
+                self._renderer.AddActor(a)
+                self._landmark_actors.append(a)
+        self._render()
+
     def clear_meshes(self):
         if not self._vtk_ok:
             return
@@ -379,7 +426,7 @@ class VolumeRenderWidget(QWidget):
 
     def _update_mesh_label(self):
         import os
-        names = [os.path.basename(p) for p, _ in self._mesh_actors]
+        names = [os.path.basename(p) for p, _ in self._mesh_actors]  # 경로 또는 표면 이름
         self._mesh_label.setText(("  메시: " + ", ".join(names)) if names else "")
         self._clear_mesh_btn.setVisible(bool(names))
 

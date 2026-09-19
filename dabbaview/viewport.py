@@ -78,6 +78,7 @@ class DicomViewport(QWidget):
     status_message = pyqtSignal(str)  # 측정 결과 등
     scrolled = pyqtSignal(int)  # 사용자가 슬라이스를 넘김 (동기화 스크롤용)
     window_adjusted = pyqtSignal(float, float)  # 사용자가 W/L 변경 (동기화 윈도잉용)
+    profile_measured = pyqtSignal(object)  # 라인 프로파일 결과 dict (하단 패널 그래프)
 
     # 도구 모드
     TOOL_WINDOW = 0
@@ -94,10 +95,12 @@ class DicomViewport(QWidget):
     TOOL_ELLIPSE = 11
     TOOL_TEXT = 12
     TOOL_COBB = 13
+    TOOL_LANDMARK = 14   # 랜드마크/Fiducial 점 찍기
+    TOOL_PROFILE = 15    # 라인 프로파일
 
     # 좌클릭 드래그가 '그리기'인 도구 (더블클릭을 Fit으로 해석하지 않음)
     DRAWING_TOOLS = (TOOL_MEASURE, TOOL_ANGLE, TOOL_ROI, TOOL_AREA, TOOL_ARROW,
-                     TOOL_ELLIPSE, TOOL_TEXT, TOOL_COBB)
+                     TOOL_ELLIPSE, TOOL_TEXT, TOOL_COBB, TOOL_LANDMARK, TOOL_PROFILE)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -176,6 +179,14 @@ class DicomViewport(QWidget):
 
         # AI Research 세그멘테이션 (SegmentationController, 모든 뷰포트 공유)
         self._seg = None
+
+        # 분석: 컬러맵(LUT), 영상 융합, 랜드마크, 라인 프로파일
+        self._lut = None             # (256, 3) uint8 또는 None(흑백)
+        self._lut_name = "Gray"
+        self._fusion = None          # analysis.fusion.FusionLayer
+        self._fusion_affine = None   # (series_uid, 기준 시리즈 affine)
+        self._landmarks = None       # analysis.landmarks.LandmarkStore (공유)
+        self._profile_line = None    # (영상 키, p0, p1) - 마지막 프로파일 선
 
     # ─── 시리즈 ───
 
@@ -317,6 +328,171 @@ class DicomViewport(QWidget):
         self._magnifying = False
         self.set_tool_cursor()
         self.update()
+
+    # ─── 분석: 컬러맵 / 융합 / 랜드마크 / 프로파일 ───
+
+    def set_colormap(self, name, lut):
+        """컬러맵 적용 (lut=None이면 흑백)"""
+        self._lut_name = name or "Gray"
+        self._lut = lut
+        self._cache_valid = False
+        self.update()
+
+    @property
+    def colormap_name(self):
+        return self._lut_name
+
+    def set_fusion(self, layer):
+        """두 번째 시리즈 컬러 오버레이 (None = 끄기)"""
+        self._fusion = layer
+        self._cache_valid = False
+        self.update()
+
+    @property
+    def fusion(self):
+        return self._fusion
+
+    def refresh_fusion(self):
+        self._cache_valid = False
+        self.update()
+
+    def _base_affine(self):
+        from .ai.volume import series_spacing_affine
+        uid = self._series.series_uid
+        if self._fusion_affine is None or self._fusion_affine[0] != uid:
+            self._fusion_affine = (uid, series_spacing_affine(self._series)[1])
+        return self._fusion_affine[1]
+
+    def _colorize(self, gray8):
+        """흑백 8비트 → RGB (컬러맵 + 융합)"""
+        rgb = (self._lut[gray8] if self._lut is not None
+               else np.repeat(gray8[..., None], 3, axis=2))
+        layer = self._fusion
+        if layer is not None and self._series is not None:
+            from .analysis.fusion import composite
+            try:
+                values = layer.sample_slice(self._base_affine(), self._current_slice,
+                                            gray8.shape)
+                rgb = composite(rgb, layer, values)
+            except Exception as e:  # noqa: BLE001 - 융합 실패해도 기준 영상은 보이도록
+                self.status_message.emit(f"Fusion 오류: {e}")
+        return np.ascontiguousarray(rgb)
+
+    def _draw_colorbars(self, painter):
+        bars = []
+        if self._lut is not None:
+            bars.append((self._lut, self._window_center, self._window_width, self._lut_name))
+        layer = self._fusion
+        if layer is not None and layer.lut is not None:
+            bars.append((layer.lut, layer.window[0], layer.window[1], "Fusion"))
+        x = self.width() - 26
+        for lut, center, width, name in bars:
+            self._draw_colorbar(painter, lut, center, width, name, x)
+            x -= 64
+
+    def _draw_colorbar(self, painter, lut, center, width, name, x):
+        h = max(80, min(260, int(self.height() * 0.4)))
+        top = (self.height() - h) // 2
+        strip = np.ascontiguousarray(lut[::-1][:, None, :].repeat(12, axis=1))
+        image = QImage(strip.data, 12, 256, 36, QImage.Format_RGB888)
+        painter.drawImage(QRect(x, top, 12, h), image)
+        painter.setPen(QColor(200, 200, 200))
+        painter.drawRect(x, top, 12, h)
+        painter.setFont(self._overlay_font())
+        lo, hi = center - width / 2, center + width / 2
+        fm = painter.fontMetrics()
+        for value, y in ((hi, top + fm.ascent()), (center, top + h // 2 + fm.ascent() // 2),
+                         (lo, top + h)):
+            text = f"{value:.4g}"
+            self._draw_text_shadow(painter, x - fm.horizontalAdvance(text) - 4, y, text)
+        self._draw_text_shadow(painter, x - 4 - fm.horizontalAdvance(name) + 12, top - 6, name)
+
+    def set_landmark_store(self, store):
+        self._landmarks = store
+        store.changed.connect(self.update)
+
+    def _add_landmark(self, img_pos):
+        if self._landmarks is None:
+            return
+        info = self.pixel_info(img_pos)
+        if info is None:
+            return
+        position = info["patient"]
+        if position is None:
+            # 공간 정보가 없는 영상: 픽셀 좌표를 그대로 (x, y, 슬라이스)
+            position = (img_pos[0] - 0.5, img_pos[1] - 0.5, float(self._current_slice))
+        ds = self.current_dataset()
+        point = self._landmarks.add(position, frame_uid=str(getattr(ds, "FrameOfReferenceUID", "")),
+                                    series_uid=self._series.series_uid)
+        text = ", ".join(f"{v:.1f}" for v in point["position"])
+        self.status_message.emit(f"랜드마크 {point['name']}: ({text}) mm")
+
+    def _landmarks_here(self):
+        """현재 슬라이스에 보이는 랜드마크 [(이름, 영상 좌표)]"""
+        store, series = self._landmarks, self._series
+        if store is None or not len(store) or series is None:
+            return []
+        geom = series.geometry
+        if geom is None:
+            return [(p["name"], (p["position"][0] + 0.5, p["position"][1] + 0.5))
+                    for p in store if p.get("series_uid") == series.series_uid
+                    and int(round(p["position"][2])) == self._current_slice]
+        spacing = geom.slice_spacing()
+        tolerance = (spacing / 2 if spacing else 1.0) + 0.01
+        frame = str(getattr(self.current_dataset(), "FrameOfReferenceUID", ""))
+        points = list(store)
+        return [(points[i]["name"], (col + 0.5, row + 0.5))
+                for i, col, row, _dist in store.points_near(geom, self._current_slice,
+                                                            tolerance, frame)]
+
+    def _finish_profile(self):
+        from .analysis.measure import line_profile
+        p0, p1 = self._draft["pts"]
+        self._draft = None
+        arr = self._current_array()
+        if arr is None or arr.ndim != 2 or (p0[0] == p1[0] and p0[1] == p1[1]):
+            return
+        spacing = self._spacing() or (1.0, 1.0)
+        distances, values = line_profile(arr, p0, p1, spacing)
+        self._profile_line = (self._image_key(), p0, p1)
+        self.profile_measured.emit({
+            "distances": distances, "values": values, "p0": p0, "p1": p1,
+            "calibrated": self._spacing() is not None,
+            "title": f"{self._series.description} · slice {self._current_slice + 1}"})
+
+    def roi_mask(self):
+        """현재 영상의 마지막 ROI(자유곡선·타원) 마스크 (없으면 None)"""
+        from .roi import ellipse_mask, polygon_mask
+        arr = self._current_array()
+        if arr is None:
+            return None
+        for ann in reversed(self.annotations_here()):
+            if ann["type"] == "roi":
+                return polygon_mask(ann["pts"], arr.shape[:2])
+            if ann["type"] == "ellipse":
+                return ellipse_mask(ann["pts"][0], ann["pts"][1], arr.shape[:2])
+        return None
+
+    def _draw_analysis(self, painter):
+        """랜드마크 + 라인 프로파일 선"""
+        color = QColor(120, 255, 120)
+        painter.setFont(self._overlay_font())
+        for name, img_pos in self._landmarks_here():
+            p = self._image_to_screen_f(img_pos)
+            painter.setPen(QPen(QColor(0, 0, 0), 3))
+            painter.drawEllipse(p, 5, 5)
+            painter.setPen(QPen(color, 1.5))
+            painter.drawEllipse(p, 5, 5)
+            painter.drawLine(QPointF(p.x() - 8, p.y()), QPointF(p.x() - 3, p.y()))
+            painter.drawLine(QPointF(p.x() + 3, p.y()), QPointF(p.x() + 8, p.y()))
+            self._draw_text_shadow(painter, int(p.x() + 9), int(p.y() - 6), name)
+        line = self._profile_line
+        if line is not None and line[0] == self._image_key():
+            a, b = self._image_to_screen_f(line[1]), self._image_to_screen_f(line[2])
+            painter.setPen(QPen(QColor(255, 200, 0), 1.5))
+            painter.drawLine(a, b)
+            painter.drawEllipse(a, 3, 3)
+            painter.drawEllipse(b, 3, 3)
 
     # ─── 세그멘테이션 (AI Research) ───
 
@@ -503,6 +679,12 @@ class DicomViewport(QWidget):
         elif tool == self.TOOL_TEXT and img_pos:
             self._add_text_annotation(img_pos)
 
+        elif tool == self.TOOL_LANDMARK and img_pos:
+            self._add_landmark(img_pos)
+
+        elif tool == self.TOOL_PROFILE and img_pos:
+            self._draft = {"type": "profile", "pts": [img_pos, img_pos]}
+
         elif tool == self.TOOL_CURSOR3D and img_pos:
             self._place_cursor3d(img_pos)
 
@@ -575,7 +757,7 @@ class DicomViewport(QWidget):
                 img_pos = (x0 + math.copysign(r / sp[1], img_pos[0] - x0),
                            y0 + math.copysign(r / sp[0], img_pos[1] - y0))
             draft["pts"][1] = img_pos
-        elif draft and draft["type"] in ("arrow", "cobb") and img_pos:
+        elif draft and draft["type"] in ("arrow", "cobb", "profile") and img_pos:
             draft["pts"][-1] = img_pos
         elif tool == self.TOOL_CURSOR3D and img_pos:
             self._place_cursor3d(img_pos)
@@ -606,6 +788,8 @@ class DicomViewport(QWidget):
                 self._finish_ellipse()
             elif kind == "arrow":
                 self._finish_arrow()
+            elif kind == "profile":
+                self._finish_profile()
             elif kind == "cobb" and len(self._draft["pts"]) == 4:
                 self._finish_cobb()
         if action == "pan" or self._current_tool == self.TOOL_PAN:
@@ -1133,6 +1317,8 @@ class DicomViewport(QWidget):
             return None
 
         img_8bit = np.ascontiguousarray(self._apply_window(arr))
+        if img_8bit.ndim == 2 and (self._lut is not None or self._fusion is not None):
+            img_8bit = self._colorize(img_8bit)
         if img_8bit.ndim == 3 and img_8bit.shape[2] == 3:
             h, w, _ = img_8bit.shape
             qimg = QImage(img_8bit.data, w, h, 3 * w, QImage.Format_RGB888)
@@ -1172,11 +1358,13 @@ class DicomViewport(QWidget):
             self._draw_annotations(painter)
             self._draw_draft(painter)
             self._draw_key_marker(painter)
+            self._draw_analysis(painter)
         self._draw_reference_cursor(painter)
         self._draw_wl_roi(painter)
 
         if self._show_overlay:
             self._draw_overlay(painter)
+            self._draw_colorbars(painter)
             has_scale_bar = self._draw_scale_bar(painter)
             self._draw_window_bottom_right(painter, has_scale_bar)
 
@@ -1389,6 +1577,9 @@ class DicomViewport(QWidget):
             painter.setPen(QPen(COLOR_COBB, 2, Qt.DashLine))
             for i in range(0, len(pts) - 1, 2):
                 painter.drawLine(pts[i], pts[i + 1])
+        elif kind == "profile":
+            painter.setPen(QPen(QColor(255, 200, 0), 2, Qt.DashLine))
+            painter.drawLine(pts[0], pts[1])
 
     def _draw_reference_lines(self, painter):
         """다른 뷰포트 슬라이스의 위치 (Scout / Reference Line)"""
