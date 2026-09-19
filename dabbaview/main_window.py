@@ -19,7 +19,7 @@ from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings,
                           QVariantAnimation, QEasingCurve, QTimer, QUrl)
 from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices
 
-from .dicom_loader import DicomLoader
+from .dicom_loader import CLOUD_TIMEOUT_S as DL_CLOUD_TIMEOUT, DicomLoader
 from .viewport import DicomViewport
 from .tag_viewer import TagViewer
 from .multi_viewport import MultiViewport
@@ -92,7 +92,7 @@ class DirectoryLoadWorker(QThread):
 
     progress = pyqtSignal(int, int)          # current, total
     finished_loading = pyqtSignal(object, int)  # DicomLoader, loaded count
-    placeholders_found = pyqtSignal(int, int)   # 클라우드에만 있는 파일 수, 전체 DICOM 수
+    placeholders_found = pyqtSignal(object)     # 클라우드 폴더 정보 dict (DicomLoader.load_paths 참고)
 
     def __init__(self, paths, target_viewport=None, remember=True,
                  parent=None):
@@ -114,9 +114,9 @@ class DirectoryLoadWorker(QThread):
         self._policy_answer = policy
         self._policy_event.set()
 
-    def _ask_placeholders(self, count, total):
+    def _ask_placeholders(self, info):
         # 로더 스레드에서 호출됨: 메인 스레드에 물어보고 답을 기다림 (취소하면 바로 끝)
-        self.placeholders_found.emit(count, total)
+        self.placeholders_found.emit(info)
         while not self._policy_event.wait(0.2):
             if self._cancel_event.is_set():
                 return "cancel"
@@ -915,28 +915,63 @@ class MainWindow(QMainWindow):
 
     LOAD_STALL_S = 5
 
-    def _on_placeholders_found(self, count, total):
-        """OneDrive 등에서 아직 받지 않은 파일: 받으면서 읽을지, 받은 것만 읽을지"""
+    def _on_placeholders_found(self, info):
+        """클라우드 동기화 폴더(OneDrive 등): 경고하고 계속 / 받은 것만 / 로컬로 복사 / 취소"""
         worker = self._load_worker
         if worker is None:
             return
+        count, total = info["placeholders"], info["total"]
+        provider = info["provider"] or "클라우드"
         box = QMessageBox(self)
-        box.setIcon(QMessageBox.Question)
-        box.setWindowTitle("클라우드 파일")
-        box.setText(f"DICOM 파일 {total}개 중 {count}개가 클라우드(OneDrive 등)에만 있고 "
-                    "이 컴퓨터에는 아직 다운로드되지 않았습니다.")
-        box.setInformativeText(
-            "다운로드하며 불러오면 동기화 앱이 파일을 받는 동안 시간이 걸립니다. "
-            "받지 못하는 파일이 계속되면 나머지는 자동으로 건너뛰고 목록(⚠)에 표시합니다.\n\n"
-            "빠르게 보려면 Finder에서 폴더를 우클릭 → '다운로드'한 뒤 다시 여세요.")
-        download = box.addButton("다운로드하며 불러오기", QMessageBox.AcceptRole)
-        skip = box.addButton(f"다운로드된 {total - count}개만 불러오기", QMessageBox.ActionRole)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("클라우드 동기화 폴더")
+        box.setText(f"클라우드 동기화 폴더입니다 ({provider}). 로딩이 느릴 수 있습니다.\n"
+                    "로컬로 복사 후 열기를 권장합니다. 계속하시겠습니까?")
+        size_gb = info["bytes"] / 1e9
+        if count:
+            detail = (f"DICOM 파일 {total:,}개 ({size_gb:.1f} GB) 중 {count:,}개는 아직 이 Mac에 "
+                      "다운로드되지 않았습니다. 이 파일들은 읽을 때 다운로드되며, "
+                      f"동기화 앱이 응답하지 않으면 {DL_CLOUD_TIMEOUT:.0f}초 뒤 건너뜁니다.")
+        else:
+            detail = f"DICOM 파일 {total:,}개 ({size_gb:.1f} GB) 모두 이 Mac에 다운로드되어 있습니다."
+        box.setInformativeText(detail + "\n\n받지 못한 파일은 상태바 ⚠ 목록에 표시됩니다.")
+        copy = box.addButton("로컬로 복사 후 열기 (권장)", QMessageBox.AcceptRole)
+        go = box.addButton("계속" + (" (다운로드하며 불러오기)" if count else ""),
+                           QMessageBox.ActionRole)
+        skip = (box.addButton(f"다운로드된 {total - count:,}개만 불러오기", QMessageBox.ActionRole)
+                if count else None)
         box.addButton("취소", QMessageBox.RejectRole)
-        box.setDefaultButton(download)
+        box.setDefaultButton(copy if count else go)
         box.exec_()
         clicked = box.clickedButton()
-        worker.answer_placeholders("download" if clicked is download
-                                   else "skip" if clicked is skip else "cancel")
+        if clicked is copy:
+            dest = self._choose_copy_destination(info)
+            worker.answer_placeholders(("copy", dest) if dest else "cancel")
+        elif clicked is go:
+            worker.answer_placeholders("download")
+        elif skip is not None and clicked is skip:
+            worker.answer_placeholders("skip")
+        else:
+            worker.answer_placeholders("cancel")
+
+    def _choose_copy_destination(self, info):
+        """복사할 로컬 폴더 선택 (여유 공간 확인). 취소하면 None"""
+        import shutil
+        default = self._settings.value("local_copy_dir", "") or os.path.join(
+            os.path.expanduser("~"), "Documents", "DabbaView Local")
+        os.makedirs(default, exist_ok=True)
+        dest = QFileDialog.getExistingDirectory(
+            self, "로컬 복사본을 저장할 폴더 (선택한 폴더 안에 같은 이름으로 복사)", default)
+        if not dest:
+            return None
+        free = shutil.disk_usage(dest).free
+        if free < info["bytes"] * 1.05:
+            QMessageBox.warning(self, "공간 부족",
+                                f"필요 {info['bytes'] / 1e9:.1f} GB, 남은 공간 {free / 1e9:.1f} GB입니다. "
+                                "다른 위치를 고르세요.")
+            return None
+        self._settings.setValue("local_copy_dir", dest)
+        return dest
 
     def _check_load_stall(self):
         worker, progress = self._load_worker, self._load_progress
@@ -981,7 +1016,7 @@ class MainWindow(QMainWindow):
     def _on_load_finished(self, loader, loaded):
         cancelled = self._load_worker.was_cancelled()
         target_viewport = self._load_worker.target_viewport
-        loaded_paths = self._load_worker.paths
+        loaded_paths = getattr(loader, "opened_paths", None) or self._load_worker.paths   # 로컬 복사본이면 그 경로
         remember = self._load_worker.remember
         self._load_worker = None
         self._load_watchdog.stop()
@@ -1041,6 +1076,8 @@ class MainWindow(QMainWindow):
             message = f"불러오기 취소 — 지금까지 읽은 {loaded}개 파일만 표시"
         if errors:
             message += f" ({len(errors)}개 건너뜀 — 오른쪽 아래 ⚠ 버튼으로 목록 보기)"
+        if getattr(loader, "copied_to", None):
+            message += f"  ·  로컬 복사본: {loader.copied_to}"
         if protocol_name:
             message += f"  ·  Hanging Protocol: {protocol_name}"
         if notes:
