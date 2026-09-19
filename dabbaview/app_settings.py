@@ -70,7 +70,7 @@ DEFAULT_MOUSE_BINDINGS = {
     "left_double": "fit",
     "right_double": "reset_window",
     "fast_scroll_step": 5,
-    "roi_window_method": "minmax",
+    "roi_window_method": "mean2sd",  # Ctrl+드래그 ROI W/L: 평균±2SD (잡음·이상값에 강함)
 }
 MOUSE_BINDINGS_VERSION = 2  # 2: Ctrl+좌클릭 = Zoom → ROI 자동 W/L
 

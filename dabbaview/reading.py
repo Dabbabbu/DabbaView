@@ -8,7 +8,7 @@ Reading(판독) 팝업 - INFINITT PACS 판독 창 형태
 - 본문: 판독문 편집기 ('====== [Conclusion] =======' 구분선으로 결론 구분)
 - 서명: Creator / Approver / Approver2 / My Comment
 - 하단: Study Comment, Exam Date(상태), Report Date
-- 버튼: Edit, Import, Copy, Print, Save, Approve, Close
+- 버튼: Edit, Import, JSON 열기/저장, Copy, Print, Save, Approve, Close
 - 탭: Report | Series(시퀀스 요약) | 가져온/자동 매칭된 판독문 파일(텍스트·이미지·PDF·SR)
 
 판독문은 StudyInstanceUID별 JSON으로 저장 (이 컴퓨터의 앱 데이터 폴더).
@@ -301,6 +301,12 @@ class ReadingDialog(QDialog):
         self._btn_edit.toggled.connect(self._set_editable)
         self._btn_import = QPushButton("Import…")
         self._btn_import.clicked.connect(self._import_files)
+        self._btn_json_open = QPushButton("JSON 열기…")
+        self._btn_json_open.setToolTip("판독문 JSON 파일 불러오기 (이 앱에서 저장한 형식)")
+        self._btn_json_open.clicked.connect(self._open_json)
+        self._btn_json_save = QPushButton("JSON 저장…")
+        self._btn_json_save.setToolTip("현재 판독문을 JSON 파일로 저장 (환자·검사 정보, 서명, 날짜 포함)")
+        self._btn_json_save.clicked.connect(self._save_json)
         self._btn_copy = QPushButton("Copy")
         self._btn_copy.clicked.connect(self.copy_to_clipboard)
         self._btn_print = QPushButton("Print…")
@@ -311,7 +317,8 @@ class ReadingDialog(QDialog):
         self._btn_approve.clicked.connect(self.approve)
         close = QPushButton("Close")
         close.clicked.connect(self.close)
-        for b in (self._btn_edit, self._btn_import, self._btn_copy, self._btn_print):
+        for b in (self._btn_edit, self._btn_import, self._btn_json_open, self._btn_json_save,
+                  self._btn_copy, self._btn_print):
             buttons.addWidget(b)
         buttons.addStretch()
         for b in (self._btn_save, self._btn_approve, close):
@@ -468,6 +475,64 @@ class ReadingDialog(QDialog):
                 self.import_file(path)
             except Exception as e:
                 QMessageBox.warning(self, "Import Report", f"{os.path.basename(path)}\n{e}")
+
+    # ─── JSON 파일 ───
+
+    def _save_json(self):
+        report = self._collect()
+        report["report_datetime"] = (self._report.get("report_datetime")
+                                     or datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        safe = re.sub(r"[^0-9A-Za-z._-]", "_",
+                      f"{self._info.get('patient_id', '')}_{self._info.get('study_date', '')}")
+        path, _ = QFileDialog.getSaveFileName(self, "판독문 JSON 저장",
+                                              os.path.join(os.path.expanduser("~"),
+                                                           f"report_{safe}.json"),
+                                              "JSON (*.json)")
+        if not path:
+            return None
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        return path
+
+    def _open_json(self):
+        path, _ = QFileDialog.getOpenFileName(self, "판독문 JSON 열기", os.path.expanduser("~"),
+                                              "JSON (*.json)")
+        if path:
+            self.load_json(path)
+
+    def load_json(self, path):
+        """JSON 판독문을 편집기에 불러옴 (다른 검사 것이면 확인)"""
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict) or not ("text" in data or "findings" in data):
+                raise ValueError("판독문 JSON 형식이 아닙니다 (text 항목 없음).")
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "판독문 JSON", f"{os.path.basename(path)}\n{e}")
+            return False
+        other_study = data.get("study_uid") and data["study_uid"] != self._info.get("study_uid")
+        other_patient = data.get("patient_id") and data["patient_id"] != self._info.get("patient_id")
+        if other_study or other_patient:
+            who = f"{data.get('patient_name', '')} ({data.get('patient_id', '')}) " \
+                  f"{data.get('study_date', '')}"
+            if QMessageBox.warning(
+                    self, "판독문 JSON",
+                    f"다른 {'환자' if other_patient else '검사'}의 판독문입니다:\n{who}\n\n"
+                    "현재 검사에 불러올까요?", QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No) != QMessageBox.Yes:
+                return False
+        text = data.get("text")
+        if text is None:
+            text = data.get("findings", "")
+            if data.get("conclusion"):
+                text += f"\n\n{CONCLUSION_DIVIDER}\n" + data["conclusion"]
+        self._btn_edit.setChecked(True)
+        self._body.setPlainText(text)
+        for key, widget in (("creator", self._creator), ("approver", self._approver),
+                            ("approver2", self._approver2), ("my_comment", self._my_comment)):
+            if data.get(key):
+                widget.setText(data[key])
+        return True
 
     # ─── 출력 ───
     def plain_report(self):
