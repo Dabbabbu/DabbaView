@@ -273,6 +273,9 @@ class SettingsDialog(QDialog):
         form.addRow("기록 폴더:", folder_row)
         self._report_creator = QLineEdit(self._settings.report_creator())
         form.addRow("기본 Creator:", self._report_creator)
+        self._dicom_backup = QCheckBox("DICOM 원본 수정(스터디·시리즈 이름, 환자 정보) 전에 .bak 백업 만들기")
+        self._dicom_backup.setChecked(self._settings.dicom_edit_backup())
+        form.addRow("원본 수정:", self._dicom_backup)
         layout.addLayout(form)
         layout.addWidget(QLabel(
             "기록 폴더를 지정하면 새 파일을 감시해서 불러온 검사와 자동으로 연결합니다.\n"
@@ -548,6 +551,7 @@ class SettingsDialog(QDialog):
         self._settings.set_local_ae_title(self._local_ae.text())
         self._settings.set_report_folder(self._report_folder.text().strip())
         self._settings.set_report_creator(self._report_creator.text())
+        self._settings.set_dicom_edit_backup(self._dicom_backup.isChecked())
         self._settings.set_monai_url(self._monai_url.text())
         self._settings.set_monai_token(self._monai_token.text())
         for key, widget in (("python", self._model_python), ("nnunet_folder", self._nnunet_folder),

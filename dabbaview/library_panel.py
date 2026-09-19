@@ -92,6 +92,7 @@ class StudyList(QTreeWidget):
 
 class LibraryPanel(QWidget):
     open_requested = pyqtSignal(str)   # StudyInstanceUID
+    rename_requested = pyqtSignal(str, str)   # ("study"|"patient", StudyInstanceUID)
 
     def __init__(self, store, parent=None):
         super().__init__(parent)
@@ -469,7 +470,18 @@ class LibraryPanel(QWidget):
         self.note_status.setText("")
         self._refresh_quick_tags()
 
+    def event(self, event):
+        from PyQt5.QtCore import QEvent
+        if (event.type() == QEvent.ShortcutOverride and event.key() == Qt.Key_F2
+                and self.studies.hasFocus()):
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F2 and self.studies.hasFocus() and self._current:
+            self.rename_requested.emit("study", self._current)
+            return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.studies.hasFocus() and self._current:
             self.open_requested.emit(self._current)
             return
@@ -536,6 +548,8 @@ class LibraryPanel(QWidget):
             return
         menu = QMenu(self)
         menu.addAction("📂 열기", lambda: self.open_requested.emit(uids[0]))
+        menu.addAction("Rename Study… (F2)", lambda: self.rename_requested.emit("study", uids[0]))
+        menu.addAction("Edit Patient Name/ID…", lambda: self.rename_requested.emit("patient", uids[0]))
         menu.addAction("Finder에서 보기", self._reveal_study)
         add = menu.addMenu("컬렉션에 추가")
         for c in self.store.collections:

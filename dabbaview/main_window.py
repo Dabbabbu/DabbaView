@@ -246,6 +246,7 @@ class MainWindow(QMainWindow):
         self._library = LibraryStore(parent=self)
         self._library_panel = LibraryPanel(self._library)
         self._library_panel.open_requested.connect(self._open_library_study)
+        self._library_panel.rename_requested.connect(self._rename_requested)
         self._left_tabs.addTab(self._library_panel, "★ Library")
         self._act_library_add = QAction("☆ Library", self)
         self._act_library_add.setShortcut(QKeySequence("Ctrl+D"))
@@ -299,6 +300,8 @@ class MainWindow(QMainWindow):
         self._series_tree.series_activated.connect(self._on_series_selected)
         self._series_panel.thumbnail_ready.connect(self._series_tree.set_thumbnail)
         self._series_panel.summary_changed.connect(self._show_series_summary)
+        self._series_panel.rename_requested.connect(self._rename_requested)
+        self._series_tree.rename_requested.connect(self._rename_requested)
         self._series_stack.addWidget(self._series_panel)
         self._series_stack.addWidget(self._series_tree)
         left_layout.addWidget(self._series_stack)
@@ -1173,6 +1176,7 @@ class MainWindow(QMainWindow):
             notes = self._apply_loaded_extras(loader)
             self._statusbar.showMessage("  ·  ".join([f"Loaded {loaded} files"] + notes), 12000)
             return
+        self._library.apply_display(loader.get_series_list())   # Library 표시 이름
         if target_viewport is None:
             self._loader = loader
             self._load_errors.reset(loader.load_errors)
@@ -1603,6 +1607,161 @@ class MainWindow(QMainWindow):
     def _toggle_series_view(self, tree):
         self._series_stack.setCurrentWidget(self._series_tree if tree else self._series_panel)
         self._view_toggle.setText("▦" if tree else "☰")
+
+    # ─── 이름 바꾸기 (스터디·시리즈 / 환자) ───
+
+    def _series_of_study(self, study_uid):
+        return [s for s in self._loader.get_series_list() if (s.study_uid or "") == study_uid]
+
+    def _rename_requested(self, kind, uid):
+        if kind == "study":
+            self.rename_study(uid)
+        elif kind == "series":
+            self.rename_series(uid)
+        elif kind == "patient":
+            self.edit_patient(uid)
+
+    def _ensure_in_library(self, study_uid):
+        from .library import study_info
+        if self._library.get(study_uid) is None:
+            info = study_info(self._loader.get_series_list(), study_uid)
+            if info is None:
+                return False
+            self._library.add_study(info)
+        return True
+
+    def rename_study(self, study_uid):
+        from . import dicom_edit
+        from .rename_dialog import RenameDialog
+        members = self._series_of_study(study_uid)
+        entry = self._library.get(study_uid)
+        if not members and entry is None:
+            return
+        current = members[0].study_description if members else entry.get("description", "")
+        files = dicom_edit.files_of(members)
+        dialog = RenameDialog("Rename Study", "StudyDescription", current, len(files),
+                              self._app_settings.dicom_edit_backup(), self)
+        if not files:
+            dialog.modify.setChecked(False)
+            dialog.modify.setEnabled(False)   # 불러오지 않은 스터디는 Library 이름만
+        if dialog.exec_() != dialog.Accepted:
+            return
+        name, modify = dialog.result_value()
+        changes = {"StudyDescription": name}
+        if modify:
+            self._run_dicom_edit(members, files, changes, "Rename Study")
+            return
+        if members:
+            self._ensure_in_library(study_uid)
+        self._library.set_display(study_uid, study_description=name)
+        dicom_edit.apply_in_memory(members, changes)
+        self._after_rename(f"스터디 이름 (Library 표시만): {name}")
+
+    def rename_series(self, series_uid):
+        from . import dicom_edit
+        from .rename_dialog import RenameDialog
+        series = self._loader.get_series_by_uid(series_uid)
+        if series is None:
+            return
+        files = dicom_edit.files_of([series])
+        dialog = RenameDialog("Rename Series", "SeriesDescription", series.description,
+                              len(files), self._app_settings.dicom_edit_backup(), self)
+        if dialog.exec_() != dialog.Accepted:
+            return
+        name, modify = dialog.result_value()
+        changes = {"SeriesDescription": name}
+        if modify:
+            self._run_dicom_edit([series], files, changes, "Rename Series")
+            return
+        if series.study_uid and self._ensure_in_library(series.study_uid):
+            self._library.set_display(series.study_uid, series={series_uid: name})
+        dicom_edit.apply_in_memory([series], changes)
+        self._after_rename(f"시리즈 이름 (Library 표시만): {name}")
+
+    def edit_patient(self, study_uid):
+        from . import dicom_edit
+        from .rename_dialog import PatientEditDialog
+        members = self._series_of_study(study_uid)
+        if not members:
+            QMessageBox.information(self, "환자 정보", "먼저 이 스터디를 여세요.")
+            return
+        first = members[0]
+        same_patient = [s for s in self._loader.get_series_list()
+                        if s.patient_id == first.patient_id and s.patient_name == first.patient_name]
+        dialog = PatientEditDialog(first.patient_name, first.patient_id,
+                                   len(dicom_edit.files_of(members)),
+                                   len(dicom_edit.files_of(same_patient)),
+                                   len({s.study_uid for s in same_patient}),
+                                   self._app_settings.dicom_edit_backup(), self)
+        if dialog.exec_() != dialog.Accepted:
+            return
+        name, pid, scope, modify = dialog.result_value()
+        targets = same_patient if scope == "patient" else members
+        changes = {"PatientName": name, "PatientID": pid}
+        if modify:
+            self._run_dicom_edit(targets, dicom_edit.files_of(targets), changes, "환자 정보 변경")
+            return
+        for uid in {s.study_uid for s in targets if s.study_uid}:
+            if self._ensure_in_library(uid):
+                self._library.set_display(uid, patient=dict(changes))
+        dicom_edit.apply_in_memory(targets, changes)
+        self._after_rename(f"환자 정보 (Library 표시만): {name} / {pid}")
+
+    def _run_dicom_edit(self, series_list, files, changes, title):
+        """원본 파일 태그 수정 (백그라운드, 진행률·취소) → 화면·Library 반영"""
+        from . import dicom_edit
+        from .ai.panel import TaskWorker
+        if getattr(self, "_edit_worker", None) is not None:
+            QMessageBox.information(self, title, "다른 파일 수정이 진행 중입니다.")
+            return
+        backup = self._app_settings.dicom_edit_backup()
+        progress = QProgressDialog(f"{title}: DICOM 파일 수정 중...", "Cancel", 0, max(1, len(files)), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(300)
+
+        def task(report, cancelled):
+            def step(i, total, path):
+                report(f"{i}/{total} {os.path.basename(path)}", i / max(1, total))
+            try:
+                return dicom_edit.rewrite_tags(files, changes, backup, step, cancelled), None
+            except dicom_edit.EditCancelled as e:
+                return None, str(e)
+
+        worker = TaskWorker(task, self)
+        worker.progress.connect(lambda text, f: (progress.setLabelText(f"{title}: {text}"),
+                                                 progress.setValue(int(f * len(files)))))
+        progress.canceled.connect(worker.cancel)
+
+        def done(result):
+            progress.close()
+            outcome, cancelled_note = result
+            if outcome is None:
+                QMessageBox.warning(self, title, cancelled_note + "\n바뀐 파일은 그대로 남아 있습니다.")
+                return
+            ok, errors = outcome
+            dicom_edit.apply_in_memory(series_list, changes)
+            for uid in {s.study_uid for s in series_list if s.study_uid}:
+                entry = self._library.get(uid)
+                if entry is not None:
+                    from .library import study_info
+                    self._library.add_study(study_info(self._loader.get_series_list(), uid))
+            message = f"{title}: {ok:,}개 파일 수정" + (" (.bak 백업)" if backup else "")
+            if errors:
+                message += f", 실패 {len(errors)}개"
+                QMessageBox.warning(self, title, message + "\n\n" + "\n".join(
+                    f"{os.path.basename(p)}: {e}" for p, e in errors[:8]))
+            self._after_rename(message)
+        worker.succeeded.connect(done)
+        worker.failed.connect(lambda m: (progress.close(), QMessageBox.warning(self, title, m)))
+        worker.finished.connect(lambda: setattr(self, "_edit_worker", None))
+        worker.finished.connect(worker.deleteLater)
+        self._edit_worker = worker
+        worker.start()
+
+    def _after_rename(self, message):
+        current = self._current_series.series_uid if self._current_series is not None else None
+        self._update_series_list(select_uid=current)
+        self._statusbar.showMessage(message, 8000)
 
     # ─── 스터디 라이브러리 ───
 

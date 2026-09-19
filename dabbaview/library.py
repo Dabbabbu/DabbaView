@@ -302,6 +302,45 @@ class LibraryStore(QObject):
                 self.tag_color(t)
         self._changed()
 
+    # ─── 표시 이름 (원본 파일은 그대로, 라이브러리에서만) ───
+    def set_display(self, uid, study_description=None, series=None, patient=None):
+        """표시용 이름 덮어쓰기: study_description / series {시리즈 UID: 이름} / patient {PatientName, PatientID}"""
+        s = self.studies.get(uid)
+        if s is None:
+            return
+        display = s.setdefault("display", {})
+        if study_description is not None:
+            display["StudyDescription"] = study_description
+            s["description"] = study_description
+        if series:
+            display.setdefault("series", {}).update(series)
+        if patient:
+            display.update(patient)
+            if "PatientName" in patient:
+                s["patient_name"] = patient["PatientName"]
+            if "PatientID" in patient:
+                s["patient_id"] = patient["PatientID"]
+        self._changed()
+
+    def apply_display(self, series_list):
+        """불러온 시리즈에 라이브러리 표시 이름 적용 (메모리에서만). 바뀐 시리즈 수"""
+        from .dicom_edit import apply_in_memory
+        n = 0
+        for series in series_list:
+            entry = self.studies.get(series.study_uid or "")
+            display = (entry or {}).get("display")
+            if not display:
+                continue
+            changes = {k: display[k] for k in ("StudyDescription", "PatientName", "PatientID")
+                       if k in display}
+            name = (display.get("series") or {}).get(series.series_uid)
+            if name:
+                changes["SeriesDescription"] = name
+            if changes:
+                apply_in_memory([series], changes)
+                n += 1
+        return n
+
     # ─── 검색 ───
     def search(self, query="", collection=None, tags=None):
         """collection: None=전체, "unfiled"=컬렉션 없음, 그 외 id(하위 포함) / tags: 모두 포함(AND)"""
