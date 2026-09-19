@@ -173,6 +173,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         # 오버레이 정보 표시
         self._show_overlay = True
         self._overlay_items = {"phase": True, "orientation": True, "coverage": True}
+        # Phase 띠가 넣어 주는 이동 규칙: fn(현재 슬라이스, 방향, "wheel"|"cine") → 갈 슬라이스 | None
+        self.slice_navigator = None
 
         # 반전
         self._inverted = False
@@ -956,7 +958,9 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             # 위로 = 확대, 아래로 = 축소 (커서 아래 지점을 고정)
             self._zoom_by(1.1 if delta > 0 else 1 / 1.1, event.pos())
         elif action == "scroll":
-            self._go_to_slice(self._current_slice + direction, user=True)
+            target = self.slice_navigator(self._current_slice, direction, "wheel") \
+                if self.slice_navigator is not None else None
+            self._go_to_slice(target if target is not None else self._current_slice + direction, user=True)
         elif action == "fast_scroll":
             step = self._mouse.get("fast_scroll_step")
             self._go_to_slice(self._current_slice + direction * step, user=True)
@@ -1088,7 +1092,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     def _cine_next_frame(self):
         if not self._series:
             return
-        next_slice = (self._current_slice + 1) % self._series.num_slices
+        target = self.slice_navigator(self._current_slice, 1, "cine") if self.slice_navigator is not None else None
+        next_slice = target if target is not None else (self._current_slice + 1) % self._series.num_slices
         self._go_to_slice(next_slice, user=True)
         self.update()
 
