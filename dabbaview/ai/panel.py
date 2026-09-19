@@ -46,6 +46,8 @@ TOOL_BUTTONS = [
     (seg.TOOL_WAND, "🪄", "Wand", "W", "Magic Wand: 클릭한 픽셀 값 ±허용범위의 연결 영역 선택"),
     (seg.TOOL_THRESHOLD, "▤", "Threshold", "G",
      "Threshold: 클릭한 슬라이스에서 값 범위 안의 픽셀을 현재 라벨로 (범위는 미리보기로 표시)"),
+    (seg.TOOL_MEDSAM, "🎯", "MedSAM", "M",
+     "MedSAM: 클릭한 곳의 구조를 자동으로 찾아 현재 라벨로 (Settings → AI에서 ONNX 지정)"),
 ]
 
 
@@ -102,7 +104,14 @@ class AIResearchPanel(QDockWidget):
         self.tabs.addTab(self._scroll(self._build_segment_tab()), "✏️ 세그멘트")
         self.tabs.addTab(self._build_dataset_tab(), "📋 데이터셋")
         self.tabs.addTab(self._scroll(self._build_export_tab()), "📦 내보내기")
-        self.tabs.addTab(self._scroll(self._build_model_tab()), "🤖 모델")
+        self.model_tab_page = self._scroll(self._build_model_tab())
+        self.tabs.addTab(self.model_tab_page, "🤖 모델")
+        from .models_tab import ModelsTab
+        self.models_tab = ModelsTab(self)
+        self.models_page = self._scroll(self.models_tab)
+        self.tabs.addTab(self.models_page, "🧩 Models")
+        self.ctl.medsam_handler = self._medsam_click
+        self._medsam = None
 
         body = QWidget()
         vbox = QVBoxLayout(body)
@@ -1159,6 +1168,113 @@ class AIResearchPanel(QDockWidget):
                     self.labels.ensure(f"Class {value}", int(value))
             self._apply_result(series, result, "ONNX")
         self._run_task("ONNX 추론 중...", task, done)
+
+    # ═══ 오픈소스 모델 (Models 탭) ═══
+
+    def show_models_tab(self):
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        self.tabs.setCurrentWidget(self.models_page)
+
+    def apply_model_result(self, series, mask, names, source):
+        """모델 결과 → 라벨 목록에 구조 이름·색 등록 (번호가 겹치면 새 번호로) → 오버레이. 구조 수"""
+        from .model_hub import distinct_colors
+        values = [int(v) for v in np.unique(mask) if v]
+        colors = distinct_colors(len(values))
+        lut = np.zeros(256, dtype=np.uint8)
+        for i, value in enumerate(values):
+            name = names.get(value) or f"{source} {value}"
+            existed = self.labels.by_name(name) is not None
+            label = self.labels.ensure(name, value)
+            if label is None:   # 라벨 255개가 가득 참
+                continue
+            if not existed and names.get(value):
+                self.labels.set_color(label["id"], colors[i])
+            lut[value] = label["id"]
+        self._apply_result(series, lut[mask], source)
+        return len(values)
+
+    def run_onnx_file(self, path):
+        """Settings에 지정한 ONNX 모델을 불러와 기존 ONNX 추론 실행"""
+        try:
+            self._onnx = OnnxSegmenter(path)
+        except OnnxModelError as e:
+            QMessageBox.warning(self, "ONNX", str(e))
+            return
+        self._onnx_path.setText(path)
+        self._onnx_info.setText(self._onnx.describe())
+        self._onnx_run()
+
+    def prepare_export(self, formats):
+        """내보내기 탭을 현재 시리즈 + 지정 형식으로 맞추고 내보내기 시작"""
+        self._src_current.setChecked(True)
+        for key, cb in self._fmt_checks.items():
+            cb.setChecked(key in formats)
+        self.tabs.setCurrentIndex(2)
+        self._export()
+
+    def refresh_medsam_state(self):
+        get = self.main._app_settings.model_value
+        ready = bool(get("medsam_encoder") and get("medsam_decoder"))
+        button = self._tool_buttons.get(seg.TOOL_MEDSAM)
+        if button is not None:
+            button.setToolTip(button.toolTip().split("\n")[0] + "\n"
+                              + ("모델 준비됨" if ready else "Settings → AI에서 MedSAM ONNX 파일을 지정하세요")
+                              + "\nEsc: 도구 해제")
+
+    def enable_medsam(self):
+        self.select_tool(seg.TOOL_MEDSAM)
+
+    def _medsam_model(self):
+        from .medsam import SamError, SamSegmenter
+        get = self.main._app_settings.model_value
+        enc, dec, mode = get("medsam_encoder"), get("medsam_decoder"), get("medsam_mode")
+        if not (enc and dec and os.path.exists(enc) and os.path.exists(dec)):
+            QMessageBox.information(self, "MedSAM", "Settings → AI에서 MedSAM 인코더/디코더 .onnx 파일을 지정하세요.")
+            return None
+        if self._medsam is None or self._medsam.paths != (enc, dec) or self._medsam.mode != mode:
+            try:
+                self._medsam = SamSegmenter(enc, dec, mode)
+            except SamError as e:
+                QMessageBox.warning(self, "MedSAM", str(e))
+                return None
+        return self._medsam
+
+    def _medsam_click(self, series, k, pos):
+        """MedSAM 도구 클릭: 그 슬라이스에서 클릭한 구조를 찾아 현재 라벨로 (백그라운드)"""
+        from .. import dicom_info
+        from .medsam import click_box
+        model = self._medsam_model()
+        if model is None or self._worker is not None:
+            return
+        image = series.get_pixel_array(k)
+        if image is None or image.ndim != 2:
+            return
+        _s, _k, window = self.target()
+        get = self.main._app_settings.model_value
+        index = (pos[0] - 0.5, pos[1] - 0.5)   # 이미지 좌표 → 픽셀 인덱스
+        box = point = None
+        if get("medsam_prompt") == "point":
+            point = index
+        else:
+            spacing = dicom_info.pixel_spacing(series.slices[k]) or (1.0, 1.0)
+            try:
+                size = float(get("medsam_box_mm") or 40)
+            except ValueError:
+                size = 40.0
+            box = click_box(index, size, spacing, image.shape)
+        label = self.ctl.active_label
+
+        def task(progress, cancelled):
+            progress("MedSAM 추론 중…", 0.3)
+            return model.segment((series.series_uid, k), image, window, point=point, box=box)
+
+        def done(region):
+            n = self.ctl.apply_slice_mask(series, k, region, label)
+            self.main.statusBar().showMessage(
+                f"MedSAM: {n:,} 픽셀을 '{self.labels.name(label)}' 라벨로 (Ctrl+Z로 되돌리기)", 6000)
+        self._run_task("MedSAM 추론 중…", task, done)
 
     def _apply_result(self, series, result, source):
         case = self.ctl.case(series)

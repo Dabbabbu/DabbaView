@@ -25,6 +25,7 @@ TOOL_BRUSH = "brush"
 TOOL_ERASER = "eraser"
 TOOL_WAND = "wand"
 TOOL_THRESHOLD = "threshold"   # 클릭한 슬라이스에 임계값 범위 적용
+TOOL_MEDSAM = "medsam"         # 클릭 → MedSAM/SAM(ONNX)이 영역을 찾아 현재 라벨로
 TOOLS = (TOOL_BRUSH, TOOL_ERASER, TOOL_WAND, TOOL_THRESHOLD)
 
 
@@ -297,7 +298,28 @@ class SegmentationController(QObject):
         if self.tool == TOOL_THRESHOLD:
             self.apply_threshold(series, slices=[k])
             return True
+        if self.tool == TOOL_MEDSAM:
+            handler = getattr(self, "medsam_handler", None)
+            if handler is None:
+                self.status.emit("MedSAM 모델이 설정되지 않았습니다 (Settings → AI).")
+                return True
+            handler(series, k, pos)
+            return True
         return False
+
+    def apply_slice_mask(self, series, k, region, label=None):
+        """슬라이스 k의 bool 영역을 라벨로 칠함 (MedSAM 결과, 되돌리기 가능). 칠한 픽셀 수"""
+        case = self.case(series)
+        if case is None or not case.editable:
+            return 0
+        label = self.active_label if label is None else label
+        region = np.asarray(region, dtype=bool)
+        if region.shape != case.mask[k].shape or not region.any():
+            return 0
+        case.push_undo(k)
+        case.mask[k][region] = label
+        self._edited(case)
+        return int(region.sum())
 
     def move(self, pos):
         if self._stroke is None or pos is None:
