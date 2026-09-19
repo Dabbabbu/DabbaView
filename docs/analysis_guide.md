@@ -1,6 +1,6 @@
 # DabbaView AI & Analysis Guide
 
-버전 2.2.2 · 예시는 **3.0T 심장 MRI(CMR) 임상 영상**을 중심으로 구성했습니다.
+버전 2.3.0 · 예시는 **3.0T 심장 MRI(CMR) 임상 영상**을 중심으로 구성했습니다.
 
 > **이 가이드의 예시**
 > - GE SIGNA Architect 3.0T를 쓰는 MRI실의 실제 업무 흐름을 따라갑니다.

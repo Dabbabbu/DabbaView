@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 2.2.2 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 2.3.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -137,7 +137,15 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
    - 켜고 끄기: **View ▸ 오버레이 항목** (항목별) 또는 **T** (전체). 기본값은 Settings ▸ Display.
 
    ![방향 문자와 위상 방향 — 4CH cine](images/m06b_orientation_phase.jpg)
-6. **▦ Tile** (Shift+T)을 누르면 여러 영상을 격자로 봅니다. 아래 예는 SAX cine의 연속 위상입니다. 격자 크기는 옆의 `4x` 목록에서 고릅니다.
+6. **Phase 버튼 띠** — cine · perfusion처럼 한 위치에 여러 장(시간 위상)이 있는 시리즈에서는 영상 위에 위상 번호 버튼이 나옵니다.
+
+   ![Phase 버튼 띠](images/m06d_phase_bar.png)
+
+   - 번호를 누르면 **그 위상**으로 갑니다 (보고 있던 슬라이스 위치는 그대로). 지금 위상은 노란색입니다.
+   - 오른쪽에 `위치 2/9 · 위상 13/30`처럼 현재 위치와 위상이 나옵니다.
+   - **휠 = 위치, 재생 = 위상** 체크를 켜 두면 (기본): 휠은 위상을 고정한 채 슬라이스 위치를 옮기고, ▶ Play는 그 위치의 위상을 차례로 돌립니다. 체크를 끄면 예전처럼 휠이 영상 순서대로 넘어갑니다.
+   - 위상 구분은 TemporalPositionIdentifier (0020,0100) 또는 TriggerTime (0018,1060)으로 합니다. 위상이 5개 이상일 때만 띠가 나옵니다 (T1/T2 map, DWI b값처럼 파라미터가 다른 영상은 제외).
+7. **▦ Tile** (Shift+T)을 누르면 여러 영상을 격자로 봅니다. 아래 예는 SAX cine의 연속 위상입니다. 격자 크기는 옆의 `4x` 목록에서 고릅니다.
 
 ![Tile 모드](images/m07_tile.jpg)
 

@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings, QObject, QEvent,
                           QVariantAnimation, QEasingCurve, QTimer, QUrl)
-from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices
+from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices, QColor
 
 from .dicom_loader import CLOUD_TIMEOUT_S as DL_CLOUD_TIMEOUT, DicomLoader
 from .viewport import DicomViewport
@@ -380,7 +380,18 @@ class MainWindow(QMainWindow):
         self._stack2d = QStackedWidget()
         self._stack2d.addWidget(self._viewport)
         self._stack2d.addWidget(self._tile_view)
-        self._tab_widget.addTab(self._stack2d, "2D View")
+        # Phase 버튼 띠 + 영상 (cine · perfusion처럼 한 위치에 여러 장일 때만 띠가 보임)
+        from .phase_bar import PhaseBar
+        self._phase_bar = PhaseBar()
+        self._phase_bar.set_viewport(self._viewport)
+        page2d = QWidget()
+        page_layout = QVBoxLayout(page2d)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+        page_layout.addWidget(self._phase_bar)
+        page_layout.addWidget(self._stack2d, 1)
+        self._tab_widget.addTab(page2d, "2D View")
+        self._page2d = page2d
 
         # 탭 2: 다중 뷰포트
         self._multi_viewport = MultiViewport()
@@ -796,8 +807,8 @@ class MainWindow(QMainWindow):
         output_bar.addAction(cine_action)
         self._act_cine = cine_action
         button = output_bar.widgetForAction(cine_action)
-        if button is not None:   # 아이콘 + 글자 (▶ Play / ■ Stop)
-            button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        if button is not None:   # 다른 툴바 버튼과 같은 크기 (글자만, 기호는 글자 안에)
+            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self._set_cine_button(False)
         self._viewport.cine_state_changed.connect(self._set_cine_button)
 
@@ -827,7 +838,7 @@ class MainWindow(QMainWindow):
         """재생 중: ■ Stop (정지 아이콘), 멈춤: ▶ Play (재생 아이콘)"""
         action = self._act_cine
         action.setText("■ Stop" if playing else "▶ Play")
-        action.setIconText("Stop" if playing else "Play")   # 툴바: 아이콘 옆 글자 (기호가 두 번 보이지 않게)
+        action.setIconText("■ Stop" if playing else "▶ Play")
         action.setIcon(_cine_icon(playing))
         action.setToolTip("시네 정지 (P)" if playing else "시네 재생 (P)")
 
@@ -1990,6 +2001,7 @@ class MainWindow(QMainWindow):
         if self._stack2d.currentWidget() is self._tile_view:
             self._tile_view.set_series(series)
         self._viewport.set_series(series)
+        self._phase_bar.set_series(series)
         self._multi_viewport.set_series_to_active(series)
         self._slice_slider.setMaximum(max(0, series.num_slices - 1))
         self._slice_slider.setValue(0)
@@ -2003,7 +2015,7 @@ class MainWindow(QMainWindow):
         self._ai_panel.on_series_changed()
         # 레이아웃 드롭다운 표시를 현재 화면에 맞춤
         current = self._tab_widget.currentWidget()
-        if current is self._stack2d:
+        if current is getattr(self, "_page2d", self._stack2d):
             self._layout_combo.setCurrentText("2D")
         elif current is self._multi_viewport:
             text = self._multi_viewport.current_layout.upper()
@@ -2041,7 +2053,7 @@ class MainWindow(QMainWindow):
             return
         if choice == "2D":
             self._set_tile_mode(False)
-            self._tab_widget.setCurrentWidget(self._stack2d)
+            self._tab_widget.setCurrentWidget(getattr(self, "_page2d", self._stack2d))
             return
         if choice == "Default":
             self._apply_hanging(auto=False)
@@ -2150,7 +2162,7 @@ class MainWindow(QMainWindow):
                                        window=self._viewport.window_level,
                                        start_index=self._viewport.current_slice)
             self._stack2d.setCurrentWidget(self._tile_view)
-            self._tab_widget.setCurrentWidget(self._stack2d)
+            self._tab_widget.setCurrentWidget(getattr(self, "_page2d", self._stack2d))
         else:
             self._stack2d.setCurrentWidget(self._viewport)
 
@@ -2189,7 +2201,7 @@ class MainWindow(QMainWindow):
                                   window=self._viewport.window_level)
         self._act_tile.setChecked(True)
         self._stack2d.setCurrentWidget(self._tile_view)
-        self._tab_widget.setCurrentWidget(self._stack2d)
+        self._tab_widget.setCurrentWidget(self._page2d)
 
     def _window_for(self, series):
         """출력용 W/L: 현재 보고 있는 시리즈면 화면 값, 아니면 DICOM 기본값"""
@@ -2402,10 +2414,10 @@ class MainWindow(QMainWindow):
     def _capture_image(self):
         """현재 화면을 오버레이·측정선 포함해 저장 (Capture Image Only)"""
         current = self._tab_widget.currentWidget()
-        if current is self._stack2d and self._stack2d.currentWidget() is self._tile_view:
+        if current is self._page2d and self._stack2d.currentWidget() is self._tile_view:
             pixmap = self._tile_view.grab()
             name = "tile"
-        elif current in (self._stack2d, self._multi_viewport):
+        elif current in (self._page2d, self._multi_viewport):
             vp = self._target_viewport()
             if vp.series is None:
                 QMessageBox.information(self, "Info", "캡처할 영상이 없습니다.")
@@ -2716,7 +2728,28 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage(dialog.result_message, 8000)
 
     def _apply_dark_theme(self):
-        """다크 테마 적용"""
+        """다크 테마 적용 (스타일시트 + 팔레트)
+
+        macOS 기본 스타일은 스크롤 막대·헤더·탭 배경을 네이티브로 그려서 밝게 남는다
+        (Library 탭 오른쪽 · 목록 아래가 흰색으로 보이던 문제) → 팔레트도 어둡게 맞추고
+        해당 위젯을 스타일시트로 직접 그린다.
+        """
+        from PyQt5.QtGui import QPalette
+        pal = QPalette()
+        for role, color in ((QPalette.Window, "#1e1e1e"), (QPalette.WindowText, "#d4d4d4"),
+                            (QPalette.Base, "#252526"), (QPalette.AlternateBase, "#2a2a2a"),
+                            (QPalette.Text, "#d4d4d4"), (QPalette.Button, "#2d2d2d"),
+                            (QPalette.ButtonText, "#d4d4d4"), (QPalette.ToolTipBase, "#2d2d2d"),
+                            (QPalette.ToolTipText, "#d4d4d4"), (QPalette.Highlight, "#094771"),
+                            (QPalette.HighlightedText, "#ffffff"), (QPalette.Link, "#4aa3ff"),
+                            (QPalette.Mid, "#3d3d3d"), (QPalette.Dark, "#151515")):
+            pal.setColor(role, QColor(color))
+        for role, color in ((QPalette.WindowText, "#777"), (QPalette.Text, "#777"), (QPalette.ButtonText, "#777")):
+            pal.setColor(QPalette.Disabled, role, QColor(color))
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(pal)
+        self.setPalette(pal)
         self.setStyleSheet("""
             QMainWindow, QWidget {
                 background-color: #1e1e1e;
@@ -2771,11 +2804,92 @@ class MainWindow(QMainWindow):
             QTreeWidget::item:hover {
                 background-color: #2a2d2e;
             }
+            QHeaderView {
+                background-color: #1e1e1e;
+                border: none;
+            }
             QHeaderView::section {
                 background-color: #2d2d2d;
                 color: #d4d4d4;
                 border: 1px solid #3d3d3d;
                 padding: 4px;
+            }
+            QTableCornerButton::section {
+                background-color: #2d2d2d;
+                border: 1px solid #3d3d3d;
+            }
+            QTableView, QTableWidget, QListView, QListWidget, QColumnView {
+                background-color: #252526;
+                alternate-background-color: #2a2a2a;
+                color: #d4d4d4;
+                border: 1px solid #3d3d3d;
+            }
+            QTableView::item:selected, QListView::item:selected {
+                background-color: #094771;
+                color: #ffffff;
+            }
+            QAbstractScrollArea::corner {
+                background-color: #1e1e1e;
+                border: none;
+            }
+            QScrollBar:vertical {
+                background: #1e1e1e;
+                width: 12px;
+                margin: 0;
+                border: none;
+            }
+            QScrollBar:horizontal {
+                background: #1e1e1e;
+                height: 12px;
+                margin: 0;
+                border: none;
+            }
+            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+                background: #4a4a4a;
+                border-radius: 6px;
+                min-height: 24px;
+                min-width: 24px;
+            }
+            QScrollBar::handle:hover {
+                background: #5c5c5c;
+            }
+            QScrollBar::add-line, QScrollBar::sub-line {
+                height: 0;
+                width: 0;
+                background: none;
+                border: none;
+            }
+            QScrollBar::add-page, QScrollBar::sub-page {
+                background: #1e1e1e;
+            }
+            QTabWidget::pane {
+                background-color: #1e1e1e;
+                border: 1px solid #3d3d3d;
+                top: -1px;
+            }
+            QTabWidget > QWidget {
+                background-color: #1e1e1e;
+            }
+            QTabBar {
+                background-color: #1e1e1e;
+                qproperty-drawBase: 0;
+            }
+            QTabBar::tab {
+                background: #2b2b2b;
+                color: #bbb;
+                padding: 5px 12px;
+                border: 1px solid #3d3d3d;
+                border-bottom: none;
+            }
+            QTabBar::tab:selected {
+                background: #333;
+                color: #fff;
+            }
+            QTabBar::tab:hover {
+                color: #ddd;
+            }
+            QSplitter::handle {
+                background-color: #2d2d2d;
             }
             QSlider::groove:horizontal {
                 height: 6px;
