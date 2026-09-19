@@ -296,7 +296,7 @@ class MainWindow(QMainWindow):
         self._library_panel.rename_requested.connect(self._rename_requested)
         self._library_panel.export_requested.connect(self._export_library)
         self._left_tabs.addTab(self._library_panel, "★ Library")
-        self._act_library_add = QAction("☆ Library", self)
+        self._act_library_add = QAction("☆ 현재 스터디를 Library에 추가", self)
         self._act_library_add.setShortcut(QKeySequence("Ctrl+D"))
         self._act_library_add.setToolTip("현재 스터디를 Library(즐겨찾기)에 추가 (Ctrl+D)")
         self._act_library_add.triggered.connect(self._add_current_study_to_library)
@@ -511,6 +511,7 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
         file_menu.addAction(self._act_save_ann)
+        file_menu.addAction(self._act_library_add)
         file_menu.addAction(self._act_load_ann)
         file_menu.addAction(self._act_export_keys)
         file_menu.addSeparator()
@@ -778,7 +779,11 @@ class MainWindow(QMainWindow):
         output_bar = QToolBar("Output")
         output_bar.setMovable(False)
         self.addToolBar(output_bar)
-        for action in (self._act_library_add, self._act_reading, self._act_capture,
+        self._act_library_panel = QAction("★ Library", self)
+        self._act_library_panel.setToolTip("Library 탭 열기 / 닫기 (Ctrl+Shift+L) · "
+                                           "현재 스터디 추가는 Ctrl+D")
+        self._act_library_panel.triggered.connect(lambda: self._toggle_left_tab(self._library_panel))
+        for action in (self._act_library_panel, self._act_reading, self._act_capture,
                        self._act_image_panel, self._act_anonymize, self._act_ai, self._act_send,
                        self._act_print, self._act_settings):
             output_bar.addAction(action)
@@ -1904,6 +1909,7 @@ class MainWindow(QMainWindow):
             ("★ Library에 추가" if created else "★ 이미 Library에 있음 — 정보 갱신")
             + f": {entry.get('patient_name', '')} {entry.get('study_date', '')} "
               f"{entry.get('description', '')}  (Library 탭에서 컬렉션·메모·태그)", 6000)
+        self._set_left_tab(self._library_panel, "★ Library", True)
         self._library_panel.select_study(series.study_uid)
 
     def _export_library(self, selected, collection):
@@ -1940,7 +1946,8 @@ class MainWindow(QMainWindow):
         series = self._current_series
         in_library = bool(series is not None and series.study_uid
                           and self._library.get(series.study_uid))
-        self._act_library_add.setText("★ Library" if in_library else "☆ Library")
+        self._act_library_add.setText("★ Library에 있음 (정보 갱신)" if in_library
+                                      else "☆ 현재 스터디를 Library에 추가")
 
     def _open_library_study(self, study_uid):
         """Library에서 열기: 이미 불러온 스터디면 바로 선택, 아니면 폴더를 불러옴"""
@@ -2511,7 +2518,7 @@ class MainWindow(QMainWindow):
         for label, page in self._left_pages:
             action = QAction(f"{label} 탭", self, checkable=True)
             action.setChecked(True)
-            action.toggled.connect(lambda on, pg=page, lb=label: self._set_left_tab(pg, lb, on))
+            action.triggered.connect(lambda _c=False, pg=page: self._toggle_left_tab(pg))
             menu.addAction(action)
             self._left_actions[id(page)] = action
         self._left_actions[id(self._library_panel)].setShortcut(QKeySequence("Ctrl+Shift+L"))
@@ -2549,13 +2556,37 @@ class MainWindow(QMainWindow):
         self._statusbar.showMessage(reopen_hint(action.text().strip() or dock.windowTitle(), action), 8000)
 
     def _close_left_tab(self, index):
+        """탭의 X"""
+        self._close_left_page(self._left_tabs.widget(index))
+
+    def _close_left_page(self, page):
+        """X · 툴바 버튼 · 메뉴 모두 이 길로 닫음 (흐려지며)"""
         from .panel_close import fade_out, reopen_hint
-        page = self._left_tabs.widget(index)
         action = self._left_actions.get(id(page))
-        if action is None:
+        label = dict((id(pg), lb) for lb, pg in self._left_pages).get(id(page))
+        if action is None or label is None:
             return
-        fade_out(page, lambda: action.setChecked(False))
+        fade_out(page, lambda: self._set_left_tab(page, label, False))
         self._statusbar.showMessage(reopen_hint(action.text(), action), 8000)
+
+    def _toggle_left_tab(self, page):
+        """버튼 · 메뉴: 보이고 있으면 닫고, 닫혀 있거나 가려져 있으면(다른 탭 · 접힌 패널) 열어서 보여 줌"""
+        label = dict((id(pg), lb) for lb, pg in self._left_pages)[id(page)]
+        shown = (self._left_tabs.indexOf(page) >= 0 and self._left_tabs.currentWidget() is page
+                 and self._panel_visible)
+        if shown:
+            self._close_left_page(page)
+        else:
+            self._set_left_tab(page, label, True)
+        self._sync_left_actions()
+
+    def _sync_left_actions(self):
+        for _label, page in self._left_pages:
+            action = self._left_actions.get(id(page))
+            if action is not None:
+                action.blockSignals(True)
+                action.setChecked(self._left_tabs.indexOf(page) >= 0)
+                action.blockSignals(False)
 
     def _set_left_tab(self, page, label, on):
         tabs = self._left_tabs
@@ -2572,6 +2603,7 @@ class MainWindow(QMainWindow):
             tabs.removeTab(index)
             if tabs.count() == 0:   # 탭이 다 닫히면 왼쪽 패널도 접음
                 self.set_series_panel_visible(False)
+        self._sync_left_actions()
 
     # ─── 오버레이 항목 (위상 방향 · 방향 문자 · 스캔 범위 선) ───
     OVERLAY_ITEMS = [("phase", "Phase Encoding 방향 표시"), ("orientation", "방향 문자 (A/P · R/L · S/I)"),
