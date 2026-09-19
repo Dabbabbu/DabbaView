@@ -39,6 +39,10 @@ def grid_for_count(n):
     return "4x4"
 
 
+
+# Reference Line 전체 커버리지 색 (Multi View 칸 순서: 파랑, 초록, 주황, 보라, 분홍, 청록 …)
+COVERAGE_COLORS = ["#4aa3ff", "#3ddc84", "#ff9f40", "#c78bff", "#ff6b9a", "#35d0d0", "#e6e6e6", "#b8b83a"]
+
 class MultiViewport(QWidget):
     """다중 뷰포트 관리 위젯"""
 
@@ -356,7 +360,7 @@ class MultiViewport(QWidget):
         if own is None:
             return []
         sources = []
-        for vp in self.visible_viewports:
+        for i, vp in enumerate(self.visible_viewports):
             if vp is viewport or vp.series is None:
                 continue
             geom = vp.sync_geometry()
@@ -364,7 +368,8 @@ class MultiViewport(QWidget):
                     or vp.series.patient_id != viewport.series.patient_id):
                 continue
             label = f"S{vp.series.series_number or ''}:{vp.current_slice + 1}"
-            sources.append((geom, vp.current_slice, label))
+            # 칸마다 다른 색 (전체 커버리지 점선) - 현재 슬라이스는 노란 실선
+            sources.append((geom, vp.current_slice, label, COVERAGE_COLORS[i % len(COVERAGE_COLORS)]))
         return sources
 
     def _refresh_reference_lines(self):
