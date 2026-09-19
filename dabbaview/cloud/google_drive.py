@@ -18,7 +18,8 @@ FOLDER = "application/vnd.google-apps.folder"
 SHORTCUT = "application/vnd.google-apps.shortcut"
 TOKEN_KEY = "google_drive_token"
 SECRET_KEY = "google_client_secret"
-FIELDS = "nextPageToken, files(id, name, mimeType, size, modifiedTime, shortcutDetails)"
+FIELDS = ("nextPageToken, files(id, name, mimeType, size, modifiedTime, md5Checksum, "
+          "shortcutDetails)")
 
 SETUP_HELP = (
     "Google Drive를 쓰려면 본인의 OAuth 클라이언트가 필요합니다 (앱에 내장된 키 없음).\n\n"
@@ -180,7 +181,10 @@ class GoogleDriveProvider:
         return CloudItem(file_id, f.get("name", ""), is_folder, int(f.get("size", 0) or 0),
                          (f.get("modifiedTime") or "")[:16].replace("T", " "),
                          downloadable=not native,
-                         extra={"mime": mime, "drive_id": drive_id})
+                         extra={"mime": mime, "drive_id": drive_id,
+                                # 캐시 버전: 수정 시각 + 내용 해시 (바뀌면 다시 받음)
+                                "version": f"{f.get('modifiedTime', '')}|"
+                                           f"{f.get('md5Checksum') or f.get('size', '')}"})
 
     # ─── 다운로드 ───
 
@@ -195,10 +199,14 @@ class GoogleDriveProvider:
                 if child.is_folder or child.downloadable:
                     self.download(child, target, progress, cancelled)
             return target
+        return self.download_file(item, os.path.join(dest_dir, safe_name(item.name)),
+                                  progress, cancelled)
+
+    def download_file(self, item, path, progress=None, cancelled=None):
+        """파일 하나를 path에 저장"""
         if not item.downloadable:
             raise CloudError(f"'{item.name}'은(는) Google 문서 형식이라 내려받을 수 없습니다.")
         from googleapiclient.http import MediaIoBaseDownload
-        path = os.path.join(dest_dir, safe_name(item.name))
         request = self._service().files().get_media(fileId=item.id, supportsAllDrives=True)
         with open(path, "wb") as fh:
             downloader = MediaIoBaseDownload(fh, request, chunksize=8 * 1024 * 1024)

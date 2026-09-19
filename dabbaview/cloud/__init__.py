@@ -7,10 +7,7 @@
 각 사용자가 자기 OAuth 클라이언트 키를 Settings → Cloud에 입력한다 (앱에 내장된 키 없음).
 로그인 토큰은 OS 키체인(macOS 키체인 / Windows 자격 증명 관리자)에 저장.
 """
-import os
 from dataclasses import dataclass, field
-
-from PyQt5.QtCore import QStandardPaths
 
 
 @dataclass
@@ -30,14 +27,6 @@ class CloudError(Exception):
 
 class NotConfigured(CloudError):
     """클라이언트 키가 없음 (Settings → Cloud에서 입력 필요)"""
-
-
-def download_root(provider):
-    """다운로드 위치: 앱 데이터 폴더/cloud/<provider> (이 사용자만 접근)"""
-    base = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
-    path = os.path.join(base or os.path.expanduser("~/.dabbaview"), "cloud", provider)
-    os.makedirs(path, exist_ok=True)
-    return path
 
 
 def safe_name(name):

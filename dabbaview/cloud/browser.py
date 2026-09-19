@@ -4,11 +4,9 @@
 """
 클라우드 폴더 브라우저 (Google Drive / OneDrive 공통)
 
-로그인 → 폴더 탐색 → 파일/폴더 선택 → 앱 데이터 폴더로 다운로드 → 불러오기
+로그인 → 폴더 탐색 → 파일/폴더 선택(폴더는 하위 폴더까지) → 캐시를 거쳐 내려받기 → 불러오기
 네트워크 작업은 모두 백그라운드 스레드에서.
 """
-import os
-import time
 import traceback
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -16,7 +14,8 @@ from PyQt5.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QHeaderVie
                              QLineEdit, QMessageBox, QProgressBar, QPushButton, QStyle,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
-from . import CloudError, NotConfigured, download_root
+from .. import cache
+from . import CloudError, NotConfigured, transfer
 
 LARGE_DOWNLOAD = 2 * 1024 ** 3   # 2 GB 넘으면 확인
 
@@ -30,7 +29,7 @@ def human_size(n):
 
 
 class _Worker(QThread):
-    progress = pyqtSignal(str)
+    progress = pyqtSignal(object)   # 문자열 또는 ("count", 완료, 전체, 문구)
     done = pyqtSignal(object)
     failed = pyqtSignal(str)
 
@@ -110,8 +109,9 @@ class CloudBrowserDialog(QDialog):
         layout.addWidget(self._tree, 1)
 
         hint = QLabel("폴더는 더블클릭으로 들어갑니다. 파일·폴더를 골라(여러 개 가능) '열기'를 누르면 "
-                      "내려받아 불러옵니다.\nDICOM 폴더는 폴더째 고르면 됩니다. "
-                      f"저장 위치: {download_root(self.provider.key)}")
+                      "내려받아 불러옵니다. 폴더를 고르면 하위 폴더까지 DICOM 파일을 모두 받습니다 "
+                      "(로컬 Open Folder와 같은 기준).\n"
+                      f"한 번 받은 파일은 캐시에 보관되어 다시 열 때 내려받지 않습니다: {cache.cache_root()}")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #999;")
         layout.addWidget(hint)
@@ -123,6 +123,10 @@ class CloudBrowserDialog(QDialog):
         layout.addWidget(self._status)
         buttons = QHBoxLayout()
         buttons.addStretch()
+        self._open_here = QPushButton("📂 현재 폴더 전체 열기")
+        self._open_here.setToolTip("지금 보고 있는 폴더를 하위 폴더까지 통째로 내려받아 엽니다")
+        self._open_here.clicked.connect(self._open_current_folder)
+        buttons.addWidget(self._open_here)
         self._open = QPushButton("열기 (내려받아 불러오기)")
         self._open.setDefault(True)
         self._open.clicked.connect(self._download_selected)
@@ -139,13 +143,23 @@ class CloudBrowserDialog(QDialog):
         if self._worker is not None:
             return
         worker = _Worker(fn)
-        worker.progress.connect(self._status.setText)
+        worker.progress.connect(self._on_progress)
         worker.done.connect(lambda r: (self._finish(), done(r)))
         worker.failed.connect(self._failed)
         self._worker = worker
         self._status.setText(text)
         self._set_busy(True)
         worker.start()
+
+    def _on_progress(self, value):
+        if isinstance(value, tuple) and value and value[0] == "count":
+            _tag, done, total, text = value
+            self._progress.setRange(0, max(total, 1))
+            self._progress.setValue(done)
+            self._progress.setFormat(f"{done}/{total} files")
+            self._status.setText(text)
+        else:
+            self._status.setText(str(value))
 
     def _finish(self):
         if self._worker is not None:
@@ -160,8 +174,12 @@ class CloudBrowserDialog(QDialog):
 
     def _set_busy(self, busy):
         self._progress.setVisible(busy)
+        if busy:
+            self._progress.setRange(0, 0)   # 파일 수를 알기 전에는 움직이는 막대
+            self._progress.setFormat("")
         for w in (self._up, self._home, self._refresh, self._open, self._sign_out, self._tree):
             w.setEnabled(not busy)
+        self._open_here.setEnabled(not busy and bool(self._stack))
         self._cancel.setText("취소" if busy else "닫기")
 
     # ─── 로그인 / 탐색 ───
@@ -202,6 +220,7 @@ class CloudBrowserDialog(QDialog):
                 row.setToolTip(0, "Google 문서 형식 - 내려받을 수 없음")
             self._tree.addTopLevelItem(row)
         self._up.setEnabled(bool(self._stack))
+        self._open_here.setEnabled(bool(self._stack))
         self._apply_filter(self._filter.text())
         folders = sum(1 for i in items if i.is_folder)
         self._status.setText(f"폴더 {folders}개 · 파일 {len(items) - folders}개")
@@ -266,31 +285,45 @@ class CloudBrowserDialog(QDialog):
         if not selected:
             QMessageBox.information(self, self.provider.name, "열 파일이나 폴더를 고르세요.")
             return
-        files_size = sum(i.size for i in selected if not i.is_folder)
-        if files_size > LARGE_DOWNLOAD and QMessageBox.question(
-                self, self.provider.name,
-                f"선택한 파일이 {human_size(files_size)}입니다. 내려받을까요?") != QMessageBox.Yes:
-            return
+        self._download(selected)
+
+    def _open_current_folder(self):
+        if self._stack:
+            self._download([self._stack[-1]])
+
+    def _download(self, items):
+        """1단계: 폴더를 훑어 파일 목록 → (크면 확인) → 2단계: 캐시를 거쳐 내려받기"""
         provider = self.provider
-        dest = os.path.join(download_root(provider.key), time.strftime("%Y%m%d-%H%M%S"))
-        os.makedirs(dest, exist_ok=True)
-        state = {"bytes": 0, "files": 0, "current": None}
 
-        def task(progress, cancelled):
-            def on_progress(name, done_bytes):
-                if state["current"] != name:
-                    state["current"] = name
-                    state["files"] += 1
-                    state["base"] = state["bytes"]
-                state["bytes"] = state.get("base", 0) + done_bytes
-                progress(f"내려받는 중: {name} · 파일 {state['files']}개 · "
-                         f"{human_size(state['bytes'])}")
-            return [provider.download(item, dest, on_progress, cancelled) for item in selected]
+        def plan_task(progress, cancelled):
+            return transfer.plan(provider, items, progress, cancelled)
 
-        def done(paths):
+        def planned(result):
+            files, skipped, tops = result
+            if not files:
+                QMessageBox.information(self, provider.name,
+                                        "불러올 DICOM 파일이 없습니다." +
+                                        (f" (다른 형식 {skipped}개는 건너뜀)" if skipped else ""))
+                return
+            to_fetch = [i for _rel, i in files if not transfer.cached_path(provider, i)]
+            size = sum(i.size for i in to_fetch)
+            if size > LARGE_DOWNLOAD and QMessageBox.question(
+                    self, provider.name,
+                    f"파일 {len(files)}개 중 {len(to_fetch)}개({human_size(size)})를 내려받아야 합니다. "
+                    "계속할까요?") != QMessageBox.Yes:
+                return
+            self._skipped = skipped
+            self._run(f"내려받는 중... 0/{len(files)} files",
+                      lambda progress, cancelled: transfer.fetch(provider, files, tops,
+                                                                 progress, cancelled),
+                      fetched)
+
+        def fetched(result):
+            paths, stats = result
             self.downloaded = paths
+            self.stats = dict(stats, skipped=getattr(self, "_skipped", 0))
             self.accept()
-        self._run("내려받는 중...", task, done)
+        self._run("폴더 확인 중...", plan_task, planned)
 
     def _close(self):
         if self._worker is not None:
@@ -327,4 +360,11 @@ def open_from_cloud(main_window, provider):
     except NotConfigured:
         return
     if dialog.exec_() == QDialog.Accepted and dialog.downloaded:
-        main_window.load_paths(dialog.downloaded)
+        stats = getattr(dialog, "stats", {})
+        main_window.statusBar().showMessage(
+            f"{provider.name}: 파일 {stats.get('total', 0)}개 (캐시 {stats.get('hits', 0)}개, "
+            f"내려받음 {cache.human_size(stats.get('bytes', 0))}"
+            + (f", 건너뜀 {stats['skipped']}개" if stats.get("skipped") else "") + ") 불러오는 중...",
+            10000)
+        # 로컬 Open Folder와 같은 방식으로 (세션 폴더는 최근 목록에 남기지 않음)
+        main_window.load_paths(dialog.downloaded, remember=False)

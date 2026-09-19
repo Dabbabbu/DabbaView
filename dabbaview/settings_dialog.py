@@ -61,7 +61,7 @@ def _append_row(table, values):
 
 class SettingsDialog(QDialog):
 
-    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud")
+    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache")
 
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
@@ -78,6 +78,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._reading_tab(), "Reading")
         self._tabs.addTab(self._ai_tab(), "AI")
         self._tabs.addTab(self._cloud_tab(), "Cloud")
+        self._tabs.addTab(self._cache_tab(), "Cache")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -346,6 +347,83 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return page
 
+    def _cache_tab(self):
+        from . import cache
+        from PyQt5.QtWidgets import QSlider
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+        path_row = QHBoxLayout()
+        path = QLineEdit(cache.cache_root())
+        path.setReadOnly(True)
+        open_btn = QPushButton("폴더 열기")
+        open_btn.clicked.connect(self._open_cache_folder)
+        path_row.addWidget(path, 1)
+        path_row.addWidget(open_btn)
+        form.addRow("캐시 위치:", path_row)
+        self._cache_usage = QLabel()
+        form.addRow("사용량:", self._cache_usage)
+        limit_row = QHBoxLayout()
+        self._cache_limit = QSlider(Qt.Horizontal)
+        self._cache_limit.setRange(cache.MIN_LIMIT_GB, cache.MAX_LIMIT_GB)
+        self._cache_limit.setValue(cache.limit_gb())
+        self._cache_limit.setTickPosition(QSlider.TicksBelow)
+        self._cache_limit.setTickInterval(5)
+        self._cache_limit_label = QLabel()
+        self._cache_limit.valueChanged.connect(
+            lambda v: self._cache_limit_label.setText(f"{v} GB"))
+        self._cache_limit_label.setText(f"{cache.limit_gb()} GB")
+        self._cache_limit_label.setMinimumWidth(50)
+        limit_row.addWidget(self._cache_limit, 1)
+        limit_row.addWidget(self._cache_limit_label)
+        form.addRow("최대 용량:", limit_row)
+        self._cache_enabled = QCheckBox("폴더 메타데이터·썸네일 캐시 사용 (다시 열 때 파싱 생략)")
+        self._cache_enabled.setChecked(cache.enabled())
+        form.addRow("", self._cache_enabled)
+        layout.addLayout(form)
+        row = QHBoxLayout()
+        refresh = QPushButton("새로 고침")
+        refresh.clicked.connect(self._refresh_cache_usage)
+        clear = QPushButton("Clear Cache")
+        clear.clicked.connect(self._clear_cache)
+        row.addWidget(refresh)
+        row.addWidget(clear)
+        row.addStretch()
+        layout.addLayout(row)
+        layout.addWidget(QLabel(
+            "• 폴더를 처음 열면 메타데이터(시리즈 분류·슬라이스 정렬)와 썸네일을 저장해 두고,\n"
+            "  파일 목록·수정일·크기가 같으면 다음에 파싱 없이 바로 엽니다. 바뀌면 자동으로 다시 읽습니다.\n"
+            "• Google Drive / OneDrive에서 받은 파일은 파일 ID + 수정 시각으로 보관해\n"
+            "  같은 파일을 다시 열면 내려받지 않습니다 (클라우드에서 바뀌면 다시 받음).\n"
+            "• 최대 용량을 넘으면 오래 안 쓴 것부터 자동으로 지웁니다 (LRU).\n"
+            "• 캐시에는 영상 메타데이터·파일이 들어 있습니다 (환자 정보 포함) - 공용 PC에서는 비우세요."))
+        layout.addStretch()
+        self._refresh_cache_usage()
+        return page
+
+    def _refresh_cache_usage(self):
+        from . import cache
+        u = cache.usage()
+        self._cache_usage.setText(
+            f"<b>{cache.human_size(u['total'])}</b> / {self._cache_limit.value()} GB  "
+            f"(메타데이터 {cache.human_size(u['metadata'])} · 썸네일 {cache.human_size(u['thumbnails'])} · "
+            f"클라우드 파일 {cache.human_size(u['cloud'])})")
+
+    def _clear_cache(self):
+        from . import cache
+        if QMessageBox.question(self, "Clear Cache",
+                                "캐시를 모두 지울까요?\n(지금 열려 있는 영상에는 영향이 없습니다)") \
+                != QMessageBox.Yes:
+            return
+        cache.clear()
+        self._refresh_cache_usage()
+
+    def _open_cache_folder(self):
+        from PyQt5.QtCore import QUrl
+        from PyQt5.QtGui import QDesktopServices
+        from . import cache
+        QDesktopServices.openUrl(QUrl.fromLocalFile(cache.cache_root()))
+
     def _sign_out_google(self):
         from .cloud import google_drive
         self._secure.delete(google_drive.TOKEN_KEY)
@@ -386,6 +464,9 @@ class SettingsDialog(QDialog):
         self._settings.set_monai_token(self._monai_token.text())
         self._settings.set_cloud_ids(self._google_id.text(), self._google_key.text(),
                                      self._onedrive_id.text())
+        from . import cache
+        cache.set_limit_gb(self._cache_limit.value())
+        self._settings._qs.setValue("cache_enabled", self._cache_enabled.isChecked())
         from .cloud import google_drive
         secret = self._google_secret.text().strip()
         if secret:

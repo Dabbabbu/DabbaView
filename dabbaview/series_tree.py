@@ -6,6 +6,7 @@
 - 시리즈마다 대표(중간) 슬라이스 썸네일 + 모달리티 배지
 - 툴팁에 시퀀스 파라미터 요약
 """
+import os
 import threading
 import time
 
@@ -110,6 +111,40 @@ def make_thumbnail(series, size=THUMB_SIZE):
     return qimg.copy()  # numpy 버퍼와 분리
 
 
+def _thumbnail_signature(series, size):
+    """디스크의 DICOM 시리즈만 (메모리 볼륨·처리 결과는 캐시 안 함)"""
+    if getattr(series, "source_format", None) or not series.slices:
+        return None
+    parts = [series.num_slices, size]
+    for ds in (series.slices[0], series.slices[-1]):
+        path = str(getattr(ds, "filename", "") or "")
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        parts.append(f"{path}:{st.st_mtime_ns}:{st.st_size}")
+    return "|".join(str(p) for p in parts)
+
+
+def _cached_thumbnail(series, size):
+    """썸네일 캐시 확인 → 없으면 만들어서 저장"""
+    from . import cache
+    signature = _thumbnail_signature(series, size) if cache.enabled() else None
+    path = cache.thumbnail_path(series.series_uid, signature) if signature else None
+    if path and os.path.exists(path):
+        image = QImage(path)
+        if not image.isNull():
+            cache.touch(path)
+            return image
+    try:
+        image = make_thumbnail(series, size)
+    except Exception:
+        return None
+    if path and image is not None and not image.isNull():
+        image.save(path, "PNG")
+    return image
+
+
 class ThumbnailWorker(QThread):
     """시리즈 썸네일을 백그라운드에서 생성 (UI 스레드 비차단)"""
 
@@ -128,10 +163,7 @@ class ThumbnailWorker(QThread):
         for series in self._series_list:
             if self._cancel.is_set():
                 return
-            try:
-                image = make_thumbnail(series, self._size)
-            except Exception:
-                image = None
+            image = _cached_thumbnail(series, self._size)
             if image is not None and not self._cancel.is_set():
                 self.thumbnail_ready.emit(series.series_uid, image)
 

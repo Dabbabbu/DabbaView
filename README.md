@@ -22,7 +22,7 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
   | 이미지 시퀀스 | .png, .jpg, .bmp, .tif | 폴더(또는 여러 파일)를 파일 이름 순서대로 한 시리즈로. `images/` 옆 `masks/`는 오버레이로 |
   | DICOM SEG | .dcm (SEG) | 참조 시리즈 위에 세그멘테이션 오버레이 (참조 시리즈를 나중에 열어도 자동 적용) |
   | STL | .stl | 3D Volume 탭에 메시로 표시 (LPS mm 좌표, 볼륨과 겹쳐 봄) |
-- **클라우드** (File → Open from Google Drive / Open from OneDrive): 브라우저로 로그인 → 폴더 탐색(내 드라이브·공유 문서함·공유 드라이브 / 내 OneDrive·공유 항목) → 파일·폴더를 내려받아 바로 불러오기. 읽기 전용 권한, **각자 자기 OAuth 키를 Settings → Cloud에 입력** (앱에 내장된 키 없음, 없으면 설정 방법 안내). 로그인 토큰·Client Secret은 OS 키체인(macOS 키체인 / Windows 자격 증명 관리자)에 저장
+- **클라우드** (File → Open from Google Drive / Open from OneDrive): 브라우저로 로그인 → 폴더 탐색(내 드라이브·공유 문서함·공유 드라이브 / 내 OneDrive·공유 항목) → 파일 또는 **폴더 단위**로 열기. 폴더는 하위 폴더까지 로컬 Open Folder와 같은 기준으로 DICOM(과 지원 형식)만 골라 병렬로 내려받고 진행률(X/Y files) 표시, '현재 폴더 전체 열기' 버튼. 한 번 받은 파일은 캐시(파일 ID + 수정 시각)에 보관해 다시 열 때 내려받지 않음. 읽기 전용 권한, **각자 자기 OAuth 키를 Settings → Cloud에 입력** (앱에 내장된 키 없음, 없으면 설정 방법 안내). 로그인 토큰·Client Secret은 OS 키체인(macOS 키체인 / Windows 자격 증명 관리자)에 저장
   - Google: Cloud Console에서 Drive API 사용 설정 + OAuth 클라이언트(유형 '데스크톱 앱') → Client ID·Client Secret (API Key는 선택)
   - OneDrive: Azure Portal 앱 등록(개인+조직 계정), 플랫폼 '모바일 및 데스크톱' 리디렉션 URI `http://localhost`, 위임 권한 Files.Read.All → Application (client) ID
 - **포맷 변환** (File → Convert / Export As): DICOM → NIfTI / NRRD / MetaImage / NumPy / PNG 시퀀스, NIfTI → DICOM / NumPy / NRRD, NumPy → NIfTI 등 모든 조합. 소스는 현재 시리즈 또는 파일·폴더, 옵션: voxel spacing 변경, 데이터 타입(int16/float32/uint8), 압축, AI 마스크 함께 저장(DICOM은 SEG로), PNG 8/16비트, DICOM Modality·환자 정보. 진행률 표시
@@ -164,6 +164,13 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 - **Deploy Web**(Help → Deploy Web): 저장소·워크플로·브랜치, GitHub 토큰
 - **AI**: MONAI Label 서버 주소, Access Token
 - **Cloud**: Google OAuth Client ID / Client Secret / API Key, OneDrive(Azure) Client ID, 로그아웃
+- **Cache**: 캐시 위치·사용량(메타데이터/썸네일/클라우드 파일), 최대 용량 1~50 GB(기본 5 GB, 넘으면 오래 안 쓴 것부터 자동 삭제), Clear Cache
+
+### 캐시
+- 위치: macOS `~/Library/Caches/DabbaView`, Windows `%LOCALAPPDATA%\DabbaView\cache`
+- **폴더 메타데이터**: 폴더를 처음 열 때 시리즈 분류·정렬에 쓰는 DICOM 헤더를 저장 → 파일 목록·수정일·크기가 같으면 다음에는 파싱 없이 바로 열기 (바뀌면 자동으로 다시 읽음). **썸네일**도 저장
+- **클라우드 파일**: Google Drive / OneDrive에서 받은 파일을 파일 ID + 버전으로 보관
+- 캐시에는 환자 정보가 든 영상 헤더·파일이 있으니 공용 PC에서는 Settings → Cache → Clear Cache
 
 설정은 QSettings로 저장됩니다 (macOS: `~/Library/Preferences/com.dabbaview.DabbaView.plist`).
 
@@ -236,7 +243,8 @@ DabbaView/
     ├── about_dialog.py      # Help → About
     ├── deploy_web.py        # Help → Deploy Web (GitHub Actions)
     ├── net_ssl.py           # HTTPS 인증서 (certifi)
-    ├── cloud/               # Google Drive / OneDrive (로그인, 탐색, 다운로드, 키체인 토큰)
+    ├── cloud/               # Google Drive / OneDrive (로그인, 탐색, 폴더 다운로드, 키체인 토큰)
+    ├── cache.py             # 폴더 메타데이터·썸네일·클라우드 파일 캐시 (LRU 용량 관리)
     ├── analysis/            # 3D Slicer · ImageJ 스타일 분석
     │   ├── processing.py    # 필터 (Gaussian, Median, Unsharp, Sobel, Canny, Morphology)
     │   ├── measure.py       # 히스토그램 통계, 라인 프로파일, 입자 분석
