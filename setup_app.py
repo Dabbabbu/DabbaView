@@ -81,9 +81,18 @@ OPTIONS = {
                  # 다중 포맷 불러오기/변환 (NIfTI, NRRD, MetaImage) + HTTPS 인증서
                  'nibabel', 'nrrd', 'SimpleITK', 'certifi',
                  # 분석: Python 콘솔·히스토그램 그래프, 입자 분석·Canny
-                 'matplotlib', 'skimage'],
+                 'matplotlib', 'skimage',
+                 # 클라우드: Google Drive (정적 API 문서·CA 파일 포함) / OneDrive / 키체인
+                 # (google.*, jaraco.*는 네임스페이스 패키지 → 아래 includes로 모듈 지정)
+                 'googleapiclient', 'google_auth_oauthlib', 'httplib2',
+                 'oauthlib', 'requests_oauthlib', 'uritemplate', 'msal', 'jwt',
+                 'requests', 'urllib3', 'keyring'],
     'includes': ['PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui',
-                 'PyQt5.QtPrintSupport', 'vtk'],
+                 'PyQt5.QtPrintSupport', 'vtk', 'google_auth_httplib2',
+                 'google.auth', 'google.auth.transport.requests', 'google.oauth2.credentials',
+                 'google.api_core.client_options', 'google.api_core.exceptions',
+                 'google.protobuf', 'jaraco.context', 'jaraco.functools',
+                 'jaraco.classes.properties', 'keyring.backends.macOS'],
     'excludes': ['tkinter', 'PySide2', 'PySide6', 'PyQt6'],
 }
 

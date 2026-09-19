@@ -61,7 +61,7 @@ def _append_row(table, values):
 
 class SettingsDialog(QDialog):
 
-    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai")
+    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud")
 
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
@@ -77,6 +77,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._nodes_tab(), "DICOM Nodes")
         self._tabs.addTab(self._reading_tab(), "Reading")
         self._tabs.addTab(self._ai_tab(), "AI")
+        self._tabs.addTab(self._cloud_tab(), "Cloud")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -300,6 +301,61 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return page
 
+    def _cloud_tab(self):
+        from .cloud import google_drive, onedrive
+        from .cloud.secure_store import SecureStore, backend_name
+        self._secure = SecureStore(self._settings._qs)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        google = QFormLayout()
+        google.addRow(QLabel("<b>Google Drive</b> (Google Cloud Console → OAuth 클라이언트 '데스크톱 앱')"))
+        self._google_id = QLineEdit(self._settings.google_client_id())
+        self._google_id.setPlaceholderText("xxxxxxxx.apps.googleusercontent.com")
+        google.addRow("OAuth Client ID:", self._google_id)
+        self._google_secret = QLineEdit(self._secure.get(google_drive.SECRET_KEY) or "")
+        self._google_secret.setEchoMode(QLineEdit.Password)
+        self._google_secret.setPlaceholderText("GOCSPX-... (데스크톱 앱 클라이언트와 함께 발급)")
+        google.addRow("Client Secret:", self._google_secret)
+        self._google_key = QLineEdit(self._settings.google_api_key())
+        self._google_key.setPlaceholderText("선택 - 할당량 추적용")
+        google.addRow("API Key:", self._google_key)
+        layout.addLayout(google)
+        ms = QFormLayout()
+        ms.addRow(QLabel("<b>OneDrive</b> (Azure Portal → 앱 등록, 리디렉션 URI http://localhost)"))
+        self._onedrive_id = QLineEdit(self._settings.onedrive_client_id())
+        self._onedrive_id.setPlaceholderText("00000000-0000-0000-0000-000000000000")
+        ms.addRow("Application (client) ID:", self._onedrive_id)
+        layout.addLayout(ms)
+        row = QHBoxLayout()
+        for text, fn in (("Google 로그아웃", self._sign_out_google),
+                         ("OneDrive 로그아웃", self._sign_out_onedrive)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        guide = QPushButton("설정 방법…")
+        guide.clicked.connect(lambda: QMessageBox.information(
+            self, "Cloud 설정 방법", google_drive.SETUP_HELP + "\n\n" + onedrive.SETUP_HELP))
+        row.addWidget(guide)
+        row.addStretch()
+        layout.addLayout(row)
+        layout.addWidget(QLabel(
+            f"앱에 내장된 키는 없습니다. 각자 만든 클라이언트 키를 입력하세요.\n"
+            f"로그인 토큰과 Client Secret은 {backend_name()}에 저장됩니다.\n"
+            "File → Open from Google Drive / OneDrive로 폴더를 탐색해 DICOM을 내려받아 엽니다.\n"
+            "권한은 읽기 전용입니다 (Drive: drive.readonly, OneDrive: Files.Read.All)."))
+        layout.addStretch()
+        return page
+
+    def _sign_out_google(self):
+        from .cloud import google_drive
+        self._secure.delete(google_drive.TOKEN_KEY)
+        QMessageBox.information(self, "Google Drive", "저장된 Google 로그인 토큰을 지웠습니다.")
+
+    def _sign_out_onedrive(self):
+        from .cloud import onedrive
+        self._secure.delete(onedrive.CACHE_KEY)
+        QMessageBox.information(self, "OneDrive", "저장된 Microsoft 로그인 토큰을 지웠습니다.")
+
     def _browse_report_folder(self):
         from PyQt5.QtWidgets import QFileDialog
         folder = QFileDialog.getExistingDirectory(self, "판독문 폴더", self._report_folder.text())
@@ -328,4 +384,12 @@ class SettingsDialog(QDialog):
         self._settings.set_report_creator(self._report_creator.text())
         self._settings.set_monai_url(self._monai_url.text())
         self._settings.set_monai_token(self._monai_token.text())
+        self._settings.set_cloud_ids(self._google_id.text(), self._google_key.text(),
+                                     self._onedrive_id.text())
+        from .cloud import google_drive
+        secret = self._google_secret.text().strip()
+        if secret:
+            self._secure.set(google_drive.SECRET_KEY, secret)
+        else:
+            self._secure.delete(google_drive.SECRET_KEY)
         self.accept()
