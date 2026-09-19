@@ -7,6 +7,15 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 
 > ⚠️ 진단용으로 인증된 의료기기가 아닙니다. 학습·연구·참고용으로 사용하세요.
 
+## 📖 문서
+
+| 문서 | Markdown | PDF |
+|---|---|---|
+| 사용자 매뉴얼 (설치 · 보기 · 측정 · ROI · Library · Settings · 단축키) | [docs/manual.md](docs/manual.md) | [manual.pdf](docs/manual.pdf) |
+| AI & Analysis Guide (Cardiac · Neuro · Oncology · Lung · Diffusion · Perfusion · 화질 평가 · ACR QC · AI · 세그멘테이션) | [docs/analysis_guide.md](docs/analysis_guide.md) | [analysis_guide.pdf](docs/analysis_guide.pdf) |
+
+화면은 실제 앱을 실행해서 찍었습니다 (합성 팬텀 데이터 + 실제 ACR 팬텀 영상). PDF는 `python docs/build_pdf.py`로 다시 만듭니다.
+
 ## 주요 기능
 
 ### 불러오기 / 시리즈 목록
@@ -396,6 +405,7 @@ DabbaView/
     ├── open_datasets.py     # Help → Open Datasets 링크
     ├── library.py           # 스터디 라이브러리 저장소 (즐겨찾기·컬렉션·메모·태그, library.json)
     ├── library_panel.py     # 왼쪽 Library 탭 (컬렉션 트리·목록·메모·검색)
+    ├── (docs/)              # 매뉴얼 · 분석 가이드 (Markdown · PDF · 스크린샷), build_pdf.py
     ├── library_export.py / library_export_dialog.py   # Library 내보내기 (PDF·Word·Excel·이미지·CSV·JSON·MD)
     ├── dicom_edit.py / rename_dialog.py               # 스터디·시리즈 이름, 환자 정보 변경 (원본 태그 수정·.bak)
     └── ai/                  # AI Research
