@@ -61,13 +61,36 @@ class HoverCloseTabs(QObject):
         return [b for b in (self.bar.tabButton(i, QTabBar.RightSide), self.bar.tabButton(i, QTabBar.LeftSide))
                 if b is not None]
 
+    def _own_button(self, i):
+        """기본 닫기 아이콘은 어두운 테마에서 거의 안 보임 → 밝은 ✕ 버튼으로 바꿈 (새 탭도)"""
+        for side in (QTabBar.RightSide, QTabBar.LeftSide):
+            b = self.bar.tabButton(i, side)
+            if b is None or b.property("dv_x"):
+                continue
+            x = QToolButton(self.bar)
+            x.setText("✕")
+            x.setProperty("dv_x", True)
+            x.setToolTip("닫기")
+            x.setAutoRaise(True)
+            x.setFixedSize(16, 16)
+            x.setStyleSheet("QToolButton { color: #cfd6df; border: none; font-size: 11px; padding: 0; } "
+                            "QToolButton:hover { color: #fff; background: #c0392b; border-radius: 3px; }")
+            x.clicked.connect(lambda _c=False, btn=x: self._clicked(btn))
+            self.bar.setTabButton(i, side, x)
+
+    def _clicked(self, btn):
+        for i in range(self.bar.count()):
+            if btn in self._buttons(i):
+                self._close(i)
+                return
+
     def refresh(self):
         for i in range(self.bar.count()):
+            self._own_button(i)
             show = i == self._hover and self.closable(i)
             for b in self._buttons(i):
                 if b.isVisible() != show:
                     b.setVisible(show)
-                    b.setToolTip("닫기")
 
     def eventFilter(self, obj, event):
         t = event.type()

@@ -1,8 +1,8 @@
 # DabbaView 사용자 매뉴얼
 
-버전 2.0.0 · macOS / Windows
+버전 2.2.2 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
-> 이 매뉴얼의 화면은 설치된 DabbaView 2.0.0을 실제로 실행해서 찍었습니다.
+> 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
 > - 모두 DabbaView 익명화 기능으로 환자 이름·ID·생년월일·기관·검사일·오더 정보를 지운 사본입니다 (`CMR^CASE-A`, 검사일 2026-01-01).
 > - 몇몇 대화상자 화면은 합성 팬텀(`DEMO^PHANTOM`)으로 찍었습니다.
@@ -32,6 +32,7 @@
 19. [Settings](#19-settings)
 20. [단축키 목록](#20-단축키-목록)
 21. [마우스 조작](#21-마우스-조작)
+22. [패널 · 탭 닫기와 다시 열기](#22-패널--탭-닫기와-다시-열기)
 
 분석·AI 기능은 [AI & Analysis Guide](analysis_guide.md)를 보세요.
 
@@ -71,9 +72,10 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 1. 앱을 실행하면 빈 작업 화면이 열립니다. 이전 파일을 자동으로 불러오지는 않습니다.
 2. 화면 구성:
-   - 위쪽: 도구 막대 세 줄 (도구 / 영상 조작 / 기능)
+   - 위쪽: 도구 막대 세 줄 (도구 / 영상 조작 / 기능). 셋째 줄의 **★ Library · ⓘ Image · 🧠 AI** 버튼은 누를 때마다 그 패널을 열고 닫습니다.
    - 왼쪽: **Series · ★ Library** 탭
    - 가운데: 영상 탭 (**2D View · Multi View · MPR · 3D Volume**)
+   - 오른쪽 · 아래: Analysis · ROI Manager · Image · AI · Histogram/Profile · Python Console 패널 (필요할 때 열림, 제목에 마우스를 올리면 ✕)
    - 아래: 상태 막대 (메시지 · RAM)
 3. 가운데 안내에 나온 형식(DICOM · NIfTI · NRRD · MHA · NumPy · PNG/JPEG)의 파일이나 폴더를 창으로 끌어다 놓으면 바로 열립니다.
 
@@ -87,7 +89,18 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 4. 클라우드 폴더는 **Open from Google Drive… / Open from OneDrive…** 로 엽니다. 각자의 OAuth 키를 Settings → Cloud에 먼저 넣어야 합니다.
 5. 최근에 연 파일은 **Recent Files**에 10개까지 남습니다.
 
-> 손상되었거나 지원하지 않는 파일은 건너뛰고 오른쪽 아래 **⚠ 로딩 실패** 버튼에 목록으로 남깁니다. OneDrive·Google Drive 동기화 폴더는 "로컬로 복사 후 열기 / 다운로드하며 열기" 중에서 고를 수 있습니다.
+> 손상되었거나 지원하지 않는 파일은 건너뛰고 오른쪽 아래 **⚠ 로딩 실패** 버튼에 목록으로 남깁니다.
+
+**OneDrive · Google Drive · iCloud 동기화 폴더**를 열면 경고창이 뜹니다:
+
+| 버튼 | 동작 |
+|---|---|
+| 로컬로 복사 후 열기 (권장) | 고른 로컬 폴더에 복사한 뒤 복사본을 엶 (아직 안 받은 파일도 받아서 복사) |
+| 계속 (다운로드하며 불러오기) | 원래 폴더에서 읽음. 안 받은 파일은 읽을 때 받음 (응답이 없으면 건너뜀) |
+| 다운로드된 N개만 불러오기 | 이미 이 Mac에 있는 파일만 |
+| 취소 · **Esc** | 불러오지 않고 원래 화면으로 |
+
+- 경고창이 떠 있는 동안에도 **⌘Q**로 앱을 끝낼 수 있습니다 (2.1.0에서 버튼 · Esc가 눌리지 않던 문제 수정).
 
 ![불러온 화면 — 심장 MRI SAX cine](images/m03_loaded.jpg)
 
@@ -102,6 +115,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 2. 카드를 클릭하면 그 시리즈가 2D View에 뜹니다. 선택된 카드는 노란 테두리로 표시됩니다.
 3. 카드를 **Multi View의 칸으로 끌어다 놓으면** 그 칸에 표시됩니다.
 4. **☰** 버튼으로 트리 보기로 바꿉니다. **F2** 또는 패널 옆 ◀ 버튼으로 패널을 접을 수 있습니다.
+   - **Series · ★ Library** 탭 이름에 마우스를 올리면 **✕ 버튼**이 나오고, 누르면 그 탭이 닫힙니다. 다시 여는 방법은 [22장](#22-패널--탭-닫기와-다시-열기).
 5. 카드에 마우스를 올리면 시퀀스 정보(TR/TE/TI, FA, 두께, Matrix, FoV 등)가 나옵니다.
 6. 우클릭하면 **Rename Study… (F2) / Rename Series… (⇧F2) / Edit Patient Name/ID…** 가 있습니다.
    - DICOM 원본까지 고칠 수 있고, 이때 `.bak` 백업을 만듭니다.
@@ -111,11 +125,19 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 ![2D View — 4CH cine](images/m06_2d_view.jpg)
 
 1. 영상 위에서 **휠**을 굴리면 슬라이스(cine은 위상)가 넘어갑니다. 위쪽 **Slice** 슬라이더를 끌어도 됩니다.
-   - cine은 **P**(또는 ▶ Play)로 재생하고 FPS를 조절합니다.
+   - cine은 **P**(또는 ▶ Play)로 재생하고 FPS를 조절합니다. 재생 중에는 버튼이 **■ Stop**(빨강)으로 바뀌고, 다시 누르면 멈추고 **▶ Play**(초록)로 돌아옵니다.
+
+     ![Play / Stop](images/m06c_cine_toggle.png)
 2. **우클릭 드래그**로 W/L을 바꿉니다 (좌우 = Width, 상하 = Level).
 3. **가운데 버튼 드래그**로 이동하고, **Ctrl(⌘)+휠**로 확대합니다.
 4. 네 모서리 오버레이에 환자·검사·시리즈·획득 정보가 나옵니다. **T** 키로 켜고 끕니다.
-5. **▦ Tile** (Shift+T)을 누르면 여러 영상을 격자로 봅니다. 아래 예는 SAX cine의 연속 위상입니다. 격자 크기는 옆의 `4x` 목록에서 고릅니다.
+5. 영상 가장자리 가운데에 **방향 문자**(L/R · A/P · S/I)가, 위쪽 가운데에 **위상 인코딩 방향**이 나옵니다.
+   - 방향 문자는 DICOM 위치 정보로 계산하고, 회전 · 반전하면 따라 바뀝니다. 비스듬한 면(4CH 등)은 두 글자로 씁니다 (예: `AI`, `PS`).
+   - 위상 방향은 (0018,1312) InPlanePhaseEncodingDirection 값입니다. `Phase: AR↔PL (ROW)`처럼 방향과 ↔/↕ 화살표로 보여 줍니다. 모션 · 접힘(wrap) 아티팩트가 이 방향으로 생깁니다. DICOM 표준 태그에는 +/− 극성이 없어 양쪽 화살표입니다.
+   - 켜고 끄기: **View ▸ 오버레이 항목** (항목별) 또는 **T** (전체). 기본값은 Settings ▸ Display.
+
+   ![방향 문자와 위상 방향 — 4CH cine](images/m06b_orientation_phase.jpg)
+6. **▦ Tile** (Shift+T)을 누르면 여러 영상을 격자로 봅니다. 아래 예는 SAX cine의 연속 위상입니다. 격자 크기는 옆의 `4x` 목록에서 고릅니다.
 
 ![Tile 모드](images/m07_tile.jpg)
 
@@ -129,6 +151,18 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 4. **Space**를 누르면 활성 칸만 크게 보고, 다시 누르면 돌아옵니다.
 5. 같은 좌표계의 시리즈끼리는 **Sync Scroll / Sync W/L / Crosslink(C) / Ref Lines**로 함께 움직일 수 있습니다.
 6. 레이아웃 `Default`는 Hanging Protocol로 자동 배치하고, `ALL`은 검사의 모든 시리즈를 띄웁니다.
+
+### Ref Lines — 스캔 커버리지
+
+![Ref Lines — 4CH · SAX · 2CH · LGE](images/m08b_reflines.jpg)
+
+1. 도구 막대 **Ref Lines**를 켭니다 (Multi View).
+2. 다른 칸 시리즈의 **전체 슬라이스 위치**가 가는 점선으로, **지금 보고 있는 슬라이스**는 노란 실선(2 px)으로 그려집니다.
+   - 예: 4CH · 2CH 칸에 SAX cine의 슬라이스 10개가 점선으로 나와, 단축 스택이 심장을 어디부터 어디까지 덮는지 한눈에 보입니다.
+   - SAX 칸을 휠로 넘기면 노란 선이 따라 움직입니다.
+3. 점선 색은 칸마다 다릅니다: 1번 칸 파랑, 2번 초록, 3번 주황, 4번 보라 …. 선 끝의 `S6:136`은 시리즈 번호 : 슬라이스입니다.
+4. cine처럼 한 위치에 위상이 여러 장이면 위치마다 한 번만 그립니다.
+5. 점선만 끄려면 **View ▸ 오버레이 항목 ▸ 스캔 커버리지 선** (T 키로 오버레이를 끄면 점선도 숨김, 노란 선은 남음).
 
 ## 7. MPR
 
@@ -243,6 +277,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 ![Reading](images/m21_reading.png)
 
 1. 검사를 열고 **R** 키 또는 도구 막대 **📝 Reading**을 누릅니다.
+   - 붙인 파일(이미지 · PDF · 텍스트) 탭은 이름에 마우스를 올리면 ✕로 닫을 수 있습니다 (Report · Series 탭은 닫히지 않음).
 2. Report 탭에 소견과 결론(Conclusion)을 씁니다. 작성자·승인자·검사일이 함께 저장됩니다. (화면은 CMR 기록 틀 예시)
 3. **Import…** 로 txt·rtf·이미지·PDF·DICOM SR 기록을 불러옵니다. 파일명에 다른 환자 ID가 있으면 경고합니다.
 4. **Save / Approve**로 저장하거나 승인하고, JSON으로 저장·열기, Copy, Print를 할 수 있습니다.
@@ -252,8 +287,9 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 ![Library](images/m22_library.jpg)
 
-1. 스터디를 연 상태에서 **Ctrl+D** 또는 **★ Library** 버튼을 누르면 즐겨찾기에 추가됩니다.
+1. 스터디를 연 상태에서 **Ctrl+D** (또는 File ▸ ☆ 현재 스터디를 Library에 추가)를 누르면 즐겨찾기에 추가되고 Library 탭이 열립니다.
 2. 왼쪽 **★ Library** 탭에서 컬렉션 트리, 스터디 목록, 메모, 태그를 봅니다.
+   - 도구 막대 **★ Library** 버튼(또는 **Ctrl+Shift+L**)은 Library 탭을 열고 닫습니다. 보이면 닫고, 닫혔거나 Series 탭에 가려져 있거나 왼쪽 패널이 접혀 있으면 열어서 보여 줍니다.
 3. **컬렉션**을 만들고 스터디를 끌어다 넣습니다. 한 스터디를 여러 컬렉션에 넣을 수 있습니다.
    - 예: `SCMR 인증 케이스`(케이스 로그북), `ACR 팬텀 QC (반기)`, `L-spine AI (SPIDER · MedGemma)`, 논문용 `CCTA vs CMR`
 4. **메모**는 굵게·목록을 지원하고 자동 저장됩니다. 본문에 `#태그`를 쓰면 태그가 됩니다 (예: `#scmr #lge #t1map`).
@@ -270,9 +306,9 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 |---|---|---|
 | ![Mouse](images/m23_settings_mouse.png) | ![Reading](images/m23_settings_reading.png) | ![AI](images/m23_settings_ai.png) |
 
-| ACR QC | Cache |
-|---|---|
-| ![ACR](images/m23_settings_acr.png) | ![Cache](images/m23_settings_cache.png) |
+| ACR QC | Cache | Display |
+|---|---|---|
+| ![ACR](images/m23_settings_acr.png) | ![Cache](images/m23_settings_cache.png) | ![Display](images/m23_settings_display.png) |
 
 | 탭 | 내용 |
 |---|---|
@@ -285,6 +321,7 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | Cloud | Google / OneDrive OAuth 키, 로그아웃 |
 | Cache | 캐시 위치·용량 (1–50 GB), Clear Cache |
 | ACR QC | 판정 기준(3T / 1.5T), 보고서 머리글, 이미지 FOV |
+| Display | 영상 위 표시 항목의 기본값: 위상 인코딩 방향 · 방향 문자 · 스캔 커버리지 선 |
 
 ## 20. 단축키 목록
 
@@ -304,7 +341,7 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | C | Crosslink | L | HU Lens |
 | K | Key Image 표시/해제 | Shift+K | Key Image 모아보기 |
 | Shift+T | Stack ↔ Tile | T / O | 오버레이 표시/숨김 |
-| Space | Multi View 칸 최대화 | P | 시네 재생/정지 |
+| Space | Multi View 칸 최대화 | P | 시네 재생/정지 (▶ Play ↔ ■ Stop) |
 | Esc | 그리기 취소 | | |
 | Ctrl+T | DICOM 태그 | Ctrl+I | Image 정보 패널 |
 | Ctrl+O | 파일 열기 | Ctrl+Shift+O | 폴더 열기 |
@@ -316,8 +353,9 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | Shift+E | 사각형 ROI | Shift+D | 경로 길이 |
 | Ctrl+C / Ctrl+V | ROI 복사 / 붙이기 | Ctrl+Shift+M | ROI Manager |
 | Ctrl+M | Measure | Delete | 선택 ROI 삭제 |
-| Ctrl+D | Library에 추가 | F | Landmark |
+| Ctrl+D | 현재 스터디를 Library에 추가 | F | Landmark |
 | Shift+L | Line Profile | F3 | Python 콘솔 |
+| Ctrl+Shift+L | ★ Library 탭 열기/닫기 | ⌘Q | 끝내기 (클라우드 경고창이 떠 있어도) |
 
 ## 21. 마우스 조작
 
@@ -337,3 +375,29 @@ PACS 표준 배치이며 Settings → Mouse에서 바꿀 수 있습니다.
 | 우측 더블클릭 | W/L을 DICOM 기본값으로 |
 
 macOS에서는 표의 `Ctrl` 자리에 ⌘(Command)와 Control 모두 쓸 수 있습니다.
+
+## 22. 패널 · 탭 닫기와 다시 열기
+
+| 탭 | 패널 제목 |
+|---|---|
+| ![탭 닫기](images/m18b_tab_close.png) | ![패널 닫기](images/m18c_dock_close.png) |
+
+1. 탭 이름이나 패널 제목에 **마우스를 올리면 ✕ 버튼**이 나옵니다 (평소에는 숨김). 누르면 잠깐 흐려지며 닫힙니다.
+   - 패널 제목의 □ 버튼(또는 제목 두 번 클릭)은 패널을 떼어 창으로 띄우거나 다시 붙입니다.
+2. 닫으면 상태 막대에 다시 여는 방법이 나옵니다 (예: `ROI Manager 닫힘 — 다시 열기: View ▸ 패널 ▸ ROI Manager`).
+3. **다시 열기**: **View ▸ 패널**에 모든 탭 · 패널이 있습니다. 도구 막대 버튼과 단축키도 같은 동작입니다 (누를 때마다 열기 ↔ 닫기).
+
+| 탭 · 패널 | 버튼 / 메뉴 | 단축키 |
+|---|---|---|
+| ★ Library 탭 | 도구 막대 ★ Library · View ▸ 패널 | Ctrl+Shift+L |
+| Series 탭 | View ▸ 패널 | — |
+| 시리즈 패널 전체 (접기) | 패널 옆 ◀ · View ▸ 패널 | F2 |
+| Image 정보 | 도구 막대 ⓘ Image | Ctrl+I |
+| AI | 도구 막대 🧠 AI · Tools | Ctrl+Shift+A |
+| Analysis | Analysis 메뉴에서 도구 선택 · View ▸ 패널 | — |
+| ROI Manager | Tools ▸ ROI Manager · View ▸ 패널 | Ctrl+Shift+M |
+| Histogram / Profile | View ▸ 패널 | Shift+L (Line Profile) |
+| Python Console | Tools · View ▸ 패널 | F3 |
+
+- ✕로 닫은 것과 버튼 · 메뉴로 닫은 것은 같습니다. 왼쪽 탭을 둘 다 닫으면 왼쪽 패널이 접히고, 다시 열면 원래 자리에 돌아옵니다.
+
