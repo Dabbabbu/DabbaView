@@ -149,6 +149,29 @@ class DirectoryLoadWorker(QThread):
         self.finished_loading.emit(loader, loaded)
 
 
+def _cine_icon(playing):
+    """시네 버튼 아이콘: 재생 = 초록 ▶, 재생 중 = 빨강 ■ (어두운·밝은 테마 모두 보이게 직접 그림)"""
+    from PyQt5.QtGui import QColor, QPainter, QPixmap, QPolygonF
+    from PyQt5.QtCore import QPointF, QRectF
+    icon = QIcon()
+    for size in (16, 32, 64):
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        m = size * 0.2
+        if playing:
+            p.setBrush(QColor("#ff5c5c"))
+            p.drawRoundedRect(QRectF(m, m, size - 2 * m, size - 2 * m), size * 0.08, size * 0.08)
+        else:
+            p.setBrush(QColor("#3ddc84"))
+            p.drawPolygon(QPolygonF([QPointF(m * 1.2, m), QPointF(size - m, size / 2), QPointF(m * 1.2, size - m)]))
+        p.end()
+        icon.addPixmap(pm)
+    return icon
+
+
 _ORPHAN_THREADS = []   # 종료할 때 끝나지 않은 로더 (지우면 Qt가 비정상 종료)
 
 
@@ -760,9 +783,14 @@ class MainWindow(QMainWindow):
         # 시네 재생
         cine_action = QAction("▶ Play", self)
         cine_action.setShortcut(QKeySequence("P"))
-        cine_action.setToolTip("시네 재생/정지 (P)")
         cine_action.triggered.connect(self._viewport.toggle_cine)
         output_bar.addAction(cine_action)
+        self._act_cine = cine_action
+        button = output_bar.widgetForAction(cine_action)
+        if button is not None:   # 아이콘 + 글자 (▶ Play / ■ Stop)
+            button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._set_cine_button(False)
+        self._viewport.cine_state_changed.connect(self._set_cine_button)
 
         # FPS 조절
         output_bar.addWidget(QLabel(" FPS: "))
@@ -785,6 +813,14 @@ class MainWindow(QMainWindow):
 
         self._slice_label = QLabel(" 0/0 ")
         output_bar.addWidget(self._slice_label)
+
+    def _set_cine_button(self, playing):
+        """재생 중: ■ Stop (정지 아이콘), 멈춤: ▶ Play (재생 아이콘)"""
+        action = self._act_cine
+        action.setText("■ Stop" if playing else "▶ Play")
+        action.setIconText("Stop" if playing else "Play")   # 툴바: 아이콘 옆 글자 (기호가 두 번 보이지 않게)
+        action.setIcon(_cine_icon(playing))
+        action.setToolTip("시네 정지 (P)" if playing else "시네 재생 (P)")
 
     def _create_image_actions(self):
         """이미지 조작 액션 (메뉴·툴바 공유). 대상 = 현재 탭의 뷰포트"""

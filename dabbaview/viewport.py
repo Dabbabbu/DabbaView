@@ -78,6 +78,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     cursor_info = pyqtSignal(str)  # 마우스 위치의 좌표/픽셀 값 (상태바용)
     status_message = pyqtSignal(str)  # 측정 결과 등
     scrolled = pyqtSignal(int)  # 사용자가 슬라이스를 넘김 (동기화 스크롤용)
+    cine_state_changed = pyqtSignal(bool)  # 시네 재생 중이면 True (Play/Stop 버튼 표시)
     window_adjusted = pyqtSignal(float, float)  # 사용자가 W/L 변경 (동기화 윈도잉용)
     profile_measured = pyqtSignal(object)  # 라인 프로파일 결과 dict (하단 패널 그래프)
     selection_changed = pyqtSignal(list)   # 선택한 주석 id 목록 (ROI Manager 동기화)
@@ -1064,10 +1065,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             return
         self._cine_playing = True
         self._cine_timer.start(int(1000 / self._cine_fps))
+        self.cine_state_changed.emit(True)
 
     def stop_cine(self):
+        was = self._cine_playing
         self._cine_playing = False
         self._cine_timer.stop()
+        if was:
+            self.cine_state_changed.emit(False)
 
     def set_cine_fps(self, fps):
         self._cine_fps = max(1, min(60, fps))
