@@ -739,6 +739,10 @@ class MainWindow(QMainWindow):
         self._load_errors = LoadErrorLog(self)
         dicom_loader.decode_error_listeners.append(self._load_errors.add_decode_error)
         self._statusbar.addPermanentWidget(LoadErrorButton(self._load_errors, self))
+        # 불러오는 동안 메모리 사용량 (시스템 메모리 80% 넘으면 빨간색 + 진행창 경고)
+        self._status_ram = QLabel()
+        self._status_ram.setVisible(False)
+        self._statusbar.addPermanentWidget(self._status_ram)
 
     def _connect_signals(self):
         """시그널 연결"""
@@ -889,7 +893,25 @@ class MainWindow(QMainWindow):
         self._load_watchdog = QTimer(self)
         self._load_watchdog.timeout.connect(self._check_load_stall)
         self._load_watchdog.start(1000)
+        self._memory_warned = False
+        self._update_ram()
+        self._status_ram.setVisible(True)
         worker.start()
+
+    def _update_ram(self):
+        """상태바 'RAM: X MB' 갱신. 시스템 메모리가 80%를 넘으면 경고 문구 반환"""
+        from .memory_monitor import SYSTEM_WARN_PERCENT, status
+        text, warn = status()
+        self._status_ram.setText(text)
+        self._status_ram.setStyleSheet("color: #ff6b6b; font-weight: bold;" if warn else "color: #9ab;")
+        if not warn:
+            return ""
+        message = (f"⚠ 시스템 메모리 사용이 {SYSTEM_WARN_PERCENT:.0f}%를 넘었습니다. "
+                   "다른 앱을 닫거나, 폴더를 나눠서 여세요.")
+        if not self._memory_warned:
+            self._memory_warned = True
+            self._statusbar.showMessage(message, 15000)
+        return message
 
     LOAD_STALL_S = 5
 
@@ -920,9 +942,10 @@ class MainWindow(QMainWindow):
         worker, progress = self._load_worker, self._load_progress
         if worker is None or progress is None:
             return
+        memory_warning = self._update_ram()
         idle = time.monotonic() - worker.last_progress
         if idle < self.LOAD_STALL_S or not worker.loader.slow_files(1):
-            progress.setLabelText(self._load_label)
+            progress.setLabelText(self._load_label + (f"\n\n{memory_warning}" if memory_warning else ""))
             return
         if not progress.isVisible():
             progress.show()
@@ -934,6 +957,8 @@ class MainWindow(QMainWindow):
         from .dicom_loader import FILE_TIMEOUT_S
         lines.append(f"{FILE_TIMEOUT_S:.0f}초가 지난 파일은 자동으로 건너뜁니다. "
                      "기다리기 싫으면 '취소'를 누르세요 — 지금까지 읽은 영상은 열립니다.")
+        if memory_warning:
+            lines += ["", memory_warning]
         progress.setLabelText("\n".join(lines))
 
     def _on_load_progress(self, current, total):
@@ -960,6 +985,8 @@ class MainWindow(QMainWindow):
         remember = self._load_worker.remember
         self._load_worker = None
         self._load_watchdog.stop()
+        self._update_ram()
+        QTimer.singleShot(8000, lambda: self._load_worker is None and self._status_ram.setVisible(False))
         if self._load_progress is not None:
             self._load_progress.close()
             self._load_progress = None
