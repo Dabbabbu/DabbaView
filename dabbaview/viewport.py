@@ -1532,6 +1532,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._draw_wl_roi(painter)
 
         if self._show_overlay:
+            self._draw_orientation(painter)
+            self._draw_phase(painter)
             self._draw_overlay(painter)
             self._draw_colorbars(painter)
             has_scale_bar = self._draw_scale_bar(painter)
@@ -1794,7 +1796,11 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             painter.drawLine(pts[0], pts[1])
 
     def _draw_reference_lines(self, painter):
-        """다른 뷰포트 슬라이스의 위치 (Scout / Reference Line)"""
+        """다른 뷰포트 시리즈의 위치 (Scout / Reference Line)
+
+        PACS처럼: 그 시리즈의 전체 슬라이스(스캔 커버리지)를 칸마다 다른 색의 가는 점선으로,
+        지금 보고 있는 슬라이스는 노란 실선(2 px)으로. 스크롤하면 노란 선이 따라 움직임.
+        """
         if self._reference_sources is None or self._series is None:
             return
         geom = self._series.geometry
@@ -1808,14 +1814,26 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         painter.setFont(font)
         line_h = painter.fontMetrics().height()
         label_spots = []  # 이미 쓴 라벨 위치 - 겹치는 선(같은 위치의 슬라이스)은 아래로 쌓음
-        for source_geom, index, label in self._reference_sources():
+        for source in self._reference_sources():
+            source_geom, index, label = source[:3]
+            color = QColor(source[3]) if len(source) > 3 else QColor(200, 200, 200)
+            # 전체 커버리지: 모든 슬라이스 (가는 점선)
+            dash = QPen(color, 1, Qt.CustomDashLine)
+            dash.setDashPattern([3, 4])
+            dash.setCosmetic(True)
+            painter.setPen(dash)
+            for seg in self._coverage_segments(source_geom, geom):
+                if seg[0] == index:
+                    continue
+                painter.drawLine(*seg[1:])
+            # 현재 슬라이스: 노란 실선
             seg = reference_line(source_geom, index, geom, self._current_slice)
             if seg is None:
                 continue
             (c1, r1), (c2, r2) = seg
             a = self._image_to_screen_f((c1 + 0.5, r1 + 0.5))
             b = self._image_to_screen_f((c2 + 0.5, r2 + 0.5))
-            painter.setPen(QPen(COLOR_REFLINE, 1))
+            painter.setPen(QPen(COLOR_REFLINE, 2))
             painter.drawLine(a, b)
             if label:
                 end = a if a.x() > b.x() else b
@@ -1824,7 +1842,150 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 while any(abs(x - px) < 50 and abs(y - py) < line_h for px, py in label_spots):
                     y += line_h
                 label_spots.append((x, y))
+                painter.setPen(QColor(0, 0, 0, 200))
+                painter.drawText(QPointF(x + 1, y + 1), label)
+                painter.setPen(color)
                 painter.drawText(QPointF(x, y), label)
+        painter.restore()
+
+    def _coverage_segments(self, source_geom, geom):
+        """source 시리즈 모든 슬라이스의 교선 → [(슬라이스 번호, 화면 점 a, 화면 점 b)]
+        (영상 좌표 교선은 슬라이스·시리즈가 바뀔 때만 다시 계산)"""
+        key = (id(source_geom), id(geom), self._current_slice)
+        cache = self.__dict__.setdefault("_coverage_cache", {})
+        pix = cache.get(key)
+        if pix is None:
+            if len(cache) > 64:
+                cache.clear()
+            pix, seen = [], set()
+            for i in range(source_geom.num_slices):
+                where = tuple(np.round(source_geom.origins[i], 1))   # 시네 · 다중 위상: 같은 위치는 한 번만
+                if where in seen:
+                    continue
+                seen.add(where)
+                seg = reference_line(source_geom, i, geom, self._current_slice)
+                if seg is not None:
+                    pix.append((i, seg))
+            cache[key] = pix
+        out = []
+        for i, ((c1, r1), (c2, r2)) in pix:
+            out.append((i, self._image_to_screen_f((c1 + 0.5, r1 + 0.5)),
+                        self._image_to_screen_f((c2 + 0.5, r2 + 0.5))))
+        return out
+
+    # ─── 방향 표시 (A/P · R/L · S/I) · 위상 인코딩 방향 ───
+    def _screen_axis_patient(self, screen_vec):
+        """화면 방향 (x, y) → 환자 좌표 방향 (LPS). 위치 정보가 없으면 None"""
+        geom = self._series.geometry if self._series is not None else None
+        if geom is None or not (0 <= self._current_slice < geom.num_slices):
+            return None
+        inv = np.linalg.inv(self._orient.astype(float))   # 화면 → 영상 (회전 · 반전)
+        dc, dr = inv @ np.asarray(screen_vec, float)
+        v = dc * geom.row_dirs[self._current_slice] + dr * geom.col_dirs[self._current_slice]
+        n = np.linalg.norm(v)
+        return v / n if n > 1e-9 else None
+
+    @staticmethod
+    def _direction_letters(v):
+        """LPS 방향 → 'L', 'PA'처럼 (주 방향 + 비스듬하면 둘째 방향)"""
+        names = (("L", "R"), ("P", "A"), ("S", "I"))
+        order = np.argsort(-np.abs(v))
+        out = ""
+        for k, axis in enumerate(order[:2]):
+            if k == 0 or abs(v[axis]) >= 0.35:
+                out += names[axis][0 if v[axis] > 0 else 1]
+        return out
+
+    def _draw_orientation(self, painter):
+        """영상 가장자리 가운데에 방향 문자 (GE 콘솔처럼)"""
+        if self._series is None or self._series.geometry is None:
+            return
+        right, down = self._screen_axis_patient((1, 0)), self._screen_axis_patient((0, 1))
+        if right is None or down is None:
+            return
+        rect = QRectF(self._image_screen_rect()).intersected(QRectF(self.rect()))
+        font = QFont(self._overlay_font())
+        font.setPointSizeF(font.pointSizeF() + 2)
+        font.setBold(True)
+        painter.save()
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        spots = {"right": (right, rect.right() - 6, rect.center().y(), "r"),
+                 "left": (-right, rect.left() + 6, rect.center().y(), "l"),
+                 "bottom": (down, rect.center().x(), rect.bottom() - 6, "b"),
+                 "top": (-down, rect.center().x(),
+                         max(rect.top() + 6, 10 + fm.height() if self._phase_direction() else 0) + fm.ascent(),
+                         "t")}   # 위상 표시(맨 위 가운데) 아래로
+        for _name, (vec, x, y, side) in spots.items():
+            text = self._direction_letters(vec)
+            w = fm.horizontalAdvance(text)
+            if side == "r":
+                x -= w
+            elif side in ("t", "b"):
+                x -= w / 2
+            if side in ("l", "r"):
+                y += fm.ascent() / 2
+            painter.setPen(QColor(0, 0, 0, 220))
+            painter.drawText(QPointF(x + 1, y + 1), text)
+            painter.setPen(QColor(255, 215, 90))
+            painter.drawText(QPointF(x, y), text)
+        painter.restore()
+
+    def _phase_direction(self):
+        """(0018,1312) InPlanePhaseEncodingDirection → ('ROW'|'COL', 화면에서 가로?, 'R↔L' 같은 글)"""
+        if self._series is None or not (0 <= self._current_slice < self._series.num_slices):
+            return None
+        ds = self._series.slices[self._current_slice]
+        value = str(getattr(ds, "InPlanePhaseEncodingDirection", "") or "").strip().upper()
+        if value not in ("ROW", "COL"):
+            return None
+        image_vec = np.array([1, 0] if value == "ROW" else [0, 1], float)   # ROW: 행을 따라 = 가로
+        screen = self._orient.astype(float) @ image_vec
+        horizontal = abs(screen[0]) > abs(screen[1])
+        v = self._screen_axis_patient((1, 0) if horizontal else (0, 1))
+        if v is None:
+            letters = "좌우" if horizontal else "상하"
+        else:
+            a, b = self._direction_letters(-v), self._direction_letters(v)
+            letters = f"{a}{'↔' if horizontal else '↕'}{b}"
+        return value, horizontal, letters
+
+    def _draw_phase(self, painter):
+        """영상 위쪽 가운데: [Phase] R↔L + 방향 화살표 (위상 인코딩 방향 - 모션 · 랩어라운드 아티팩트 방향)"""
+        info = self._phase_direction()
+        if info is None:
+            return
+        value, horizontal, letters = info
+        font = QFont(self._overlay_font())
+        font.setBold(True)
+        painter.save()
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        text = f"Phase: {letters}  ({value})"
+        arrow_len = 26
+        w = fm.horizontalAdvance(text) + arrow_len + 10
+        x = self.width() / 2 - w / 2
+        y = 6 + fm.ascent()
+        painter.setPen(QColor(0, 0, 0, 220))
+        painter.drawText(QPointF(x + 1, y + 1), text)
+        painter.setPen(QColor(120, 220, 255))
+        painter.drawText(QPointF(x, y), text)
+        # 양쪽 화살표 (위상 방향 - DICOM 표준 태그에는 +/- 극성이 없음)
+        cx = x + fm.horizontalAdvance(text) + 8 + arrow_len / 2
+        cy = y - fm.ascent() / 2 + 1
+        half = arrow_len / 2 if horizontal else fm.ascent() * 0.6
+        p0 = QPointF(cx - half, cy) if horizontal else QPointF(cx, cy - half)
+        p1 = QPointF(cx + half, cy) if horizontal else QPointF(cx, cy + half)
+        painter.setPen(QPen(QColor(120, 220, 255), 2))
+        painter.drawLine(p0, p1)
+        head = 5
+        for tip, sign in ((p0, -1), (p1, 1)):
+            if horizontal:
+                painter.drawLine(tip, QPointF(tip.x() - sign * head, tip.y() - head))
+                painter.drawLine(tip, QPointF(tip.x() - sign * head, tip.y() + head))
+            else:
+                painter.drawLine(tip, QPointF(tip.x() - head, tip.y() - sign * head))
+                painter.drawLine(tip, QPointF(tip.x() + head, tip.y() - sign * head))
         painter.restore()
 
     def _draw_key_marker(self, painter):
