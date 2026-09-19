@@ -10,6 +10,7 @@ DICOM 파일 로딩 및 시리즈 분류 엔진
   formats.readers가 메모리 시리즈(VolumeSeries)로 만들어 함께 목록에 넣음
 - DICOM SEG는 시리즈가 아니라 세그멘테이션 오버레이, STL은 3D 메시로 따로 모음
 """
+import gc
 import os
 import queue
 import threading
@@ -75,9 +76,15 @@ def is_candidate_file(filename):
     return ext[1:].isdigit()
 
 
+# 이보다 큰 태그 값(제조사 private 헤더, 큰 텍스트·바이너리)은 메모리에 두지 않고
+# 실제로 쓸 때 파일에서 읽음 (pydicom defer_size). 수천 장 폴더의 메모리·캐시 크기를 줄임
+METADATA_DEFER_SIZE = 2048
+
+
 def _read_metadata(filepath):
     """픽셀 데이터 이전까지만 읽기. 영상이 없는 파일이면 None 반환"""
-    ds = pydicom.dcmread(filepath, stop_before_pixels=True, force=True)
+    ds = pydicom.dcmread(filepath, stop_before_pixels=True, force=True,
+                         defer_size=METADATA_DEFER_SIZE)
     # stop_before_pixels라 PixelData 존재는 확인 불가 → 영상 필수 태그로 판별
     if 'Rows' not in ds or 'Columns' not in ds:
         return None
@@ -494,6 +501,7 @@ class DicomLoader:
         self._running = {}           # 워커 이름 → (파일, 시작 시각): 멈춘 파일 표시용
         self._running_lock = threading.Lock()
         self.phase = ""              # 진행 단계 설명 (파일 목록 확인 / 메타데이터 읽기)
+        self.cache_thread = None     # 메타데이터 캐시를 뒤에서 저장하는 스레드 (테스트에서 join)
         self.cached_count = 0  # 캐시에서 바로 읽은 파일 수 (상태 표시용)
         self._reset_extras()
 
@@ -640,25 +648,36 @@ class DicomLoader:
         cancelled = False
         results = (item for group, options in groups
                    for item in self._read_group(group, cancel_event, options))
-        for path, ds, error in results:
-            done += 1
-            if error is None:
-                parsed[path] = ds
-                if ds is not None:
-                    try:
-                        self._add_dataset(ds)
-                        loaded += 1
-                    except Exception as e:  # noqa: BLE001 - 이상한 태그 값 등: 이 파일만 건너뜀
-                        error = _short_error(e)
-            if error is not None:
-                failed[path] = error
-                self.load_errors.append((path, error))
-            if progress_callback:
-                progress_callback(done, total)
+        # 읽는 동안 순환 GC를 멈춤: Dataset이 수천 개 쌓일수록 전체 수집이 점점 오래 걸려
+        # 후반이 느려짐. 끝나면 한 번만 수집 (실측 7200개: GC 0.54초 → 0.27초)
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            for path, ds, error in results:
+                done += 1
+                if error is None:
+                    parsed[path] = ds
+                    if ds is not None:
+                        try:
+                            self._add_dataset(ds)
+                            loaded += 1
+                        except Exception as e:  # noqa: BLE001 - 이상한 태그 값 등: 이 파일만 건너뜀
+                            error = _short_error(e)
+                if error is not None:
+                    failed[path] = error
+                    self.load_errors.append((path, error))
+                if progress_callback:
+                    progress_callback(done, total)
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+            gc.collect()
         if cancel_event is not None and cancel_event.is_set():
             cancelled = True
 
-        # 다 읽은 폴더는 메타데이터를 캐시에 저장 (다음에 열 때 파싱 생략)
+        # 다 읽은 폴더는 메타데이터를 캐시에 저장 (다음에 열 때 파싱 생략).
+        # 수천 장이면 압축·기록에 몇 초 걸리므로 불러오기 완료를 기다리게 하지 않고 뒤에서 저장
+        to_save = []
         if not cancelled:
             for folder, (signature, dicom_files) in pending.items():
                 if not dicom_files:
@@ -668,8 +687,15 @@ class DicomLoader:
                 if any(e.startswith(("시간 초과", "클라우드")) for _f, e in errors):
                     continue   # 일시적인 멈춤일 수 있으니 다음에 다시 읽도록 캐시하지 않음
                 if datasets:
-                    cache.save_metadata(folder, recursive, signature, datasets, errors,
+                    to_save.append((folder, recursive, signature, datasets, errors))
+        if to_save:
+            def save():
+                for folder, rec, signature, datasets, errors in to_save:
+                    cache.save_metadata(folder, rec, signature, datasets, errors,
                                         extra={"pydicom": pydicom.__version__})
+            self.cache_thread = threading.Thread(target=save, daemon=True,
+                                                 name="dabbaview-metadata-cache")
+            self.cache_thread.start()
 
         # 모든 시리즈 정렬
         for series in self.series_dict.values():
@@ -746,14 +772,19 @@ class DicomLoader:
             while remaining:
                 if cancel_event is not None and cancel_event.is_set():
                     return
+                # 도착한 결과를 한 번에 최대 100개씩 모아 처리 (파일마다 깨어나지 않도록)
+                batch = []
                 try:
-                    path, ds, error = results.get(timeout=0.2)
+                    batch.append(results.get(timeout=0.2))
+                    while len(batch) < 100:
+                        batch.append(results.get_nowait())
                 except queue.Empty:
-                    path = None
+                    pass
                 finished = []
-                if path is not None and path not in skipped:
-                    remaining.discard(path)
-                    finished.append((path, ds, error))
+                for path, ds, error in batch:
+                    if path not in skipped:
+                        remaining.discard(path)
+                        finished.append((path, ds, error))
                 for slow_path, elapsed in self.slow_files(timeout):
                     if slow_path in remaining:
                         skipped.add(slow_path)

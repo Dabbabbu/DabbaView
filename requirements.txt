@@ -3,6 +3,7 @@ pylibjpeg>=2.0  # 압축 DICOM: JPEG Baseline/Extended/Lossless, JPEG-LS (libjpe
 pylibjpeg-libjpeg>=2.1
 pylibjpeg-openjpeg>=2.0
 python-gdcm>=3.0  # 압축 DICOM 보조 디코더 (pylibjpeg가 못 읽는 파일)
+psutil>=5.9  # 불러오는 동안 메모리 사용량 표시·경고
 numpy>=1.24.0
 Pillow>=10.0.0
 PyQt5>=5.15.0
