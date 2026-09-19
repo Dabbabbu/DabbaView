@@ -193,6 +193,9 @@ class ExportDialog(QDialog):
         self.snapshots = QCheckBox("ROI를 그린 영상 캡처 넣기 (PDF · Word)")
         self.snapshots.setChecked(True)
         form.addRow(self.snapshots)
+        self.procedure = QCheckBox("측정 과정 단계별 영상 넣기 (두께 · 균일도 · 고스팅, W/L 조절 화면)")
+        self.procedure.setChecked(True)
+        form.addRow(self.procedure)
         self.history = QCheckBox("추세 기록에도 저장")
         self.history.setChecked(True)
         form.addRow(self.history)
@@ -831,6 +834,20 @@ class ACRTool(Tool):
             out.append((title, path))
         return out
 
+    def _procedure(self, folder, images=True):
+        """콘솔 수동 절차와 같은 순서의 측정 과정 → [{"title", "images": [(설명, PNG)], "lines": [...]}]"""
+        roles = self._roles_now()
+        out = []
+        for seq in ("T1", "T2"):
+            for fn in (_thickness_steps, _uniformity_steps, _ghosting_steps):
+                try:
+                    step = fn(seq, roles, self.values, self.criteria(), folder if images else None)
+                except Exception:  # noqa: BLE001 - 과정 그림 하나가 실패해도 보고서는 만듦
+                    step = None
+                if step:
+                    out.append(step)
+        return out
+
     def export_report(self):
         if not self.rows:
             raise ValueError("먼저 Auto Analyze를 실행하세요.")
@@ -844,7 +861,8 @@ class ACRTool(Tool):
         fmt = dialog.format.currentData()
         with tempfile.TemporaryDirectory() as tmp:
             snaps = self._snapshots(tmp) if dialog.snapshots.isChecked() and fmt != "xlsx" else []
-            acr_report.write_report(fmt, path, info, self.rows, self._any_capture(), snaps)
+            steps = self._procedure(tmp, images=fmt != "xlsx") if dialog.procedure.isChecked() else []
+            acr_report.write_report(fmt, path, info, self.rows, self._any_capture(), snaps, steps)
         if dialog.history.isChecked():
             acr_report.save_record(acr_report.make_record(info, self.values, self.rows))
         self.ctx.status(f"ACR QC 보고서 저장: {path}")
@@ -917,6 +935,174 @@ def render_snapshot(arr, anns, markers, path, size=360):
             d.rectangle([x0, y0, x1, y1], outline=color)
     im.resize((size, size)).save(path)
     return path
+
+
+def render_step(arr, anns, path, window=None, crop=None, labels=(), width=420):
+    """측정 과정 한 장: window=(L, W) - W ≤ 1이면 콘솔 W 1처럼 L 기준 흑백. crop=(x0, y0, x1, y1)
+    labels=[(x, y, 글, 색)] (영상 좌표). → PNG 경로"""
+    from PIL import Image, ImageDraw, ImageFont
+    a = np.asarray(arr, dtype=float)
+    if window is None:
+        lo, hi = np.percentile(a, [1, 99.5])
+    else:
+        level, win = window
+        lo, hi = level - max(win, 1e-6) / 2, level + max(win, 1e-6) / 2
+    if window is not None and window[1] <= 1:
+        g = np.where(a > window[0], 255, 0).astype(np.uint8)
+    else:
+        g = np.clip((a - lo) / max(1e-6, hi - lo) * 255, 0, 255).astype(np.uint8)
+    x0, y0, x1, y1 = crop or (0, 0, a.shape[1], a.shape[0])
+    x0, y0 = max(0, int(x0)), max(0, int(y0))
+    x1, y1 = min(a.shape[1], int(x1)), min(a.shape[0], int(y1))
+    scale = width / (x1 - x0)
+    im = Image.fromarray(g[y0:y1, x0:x1]).convert("RGB").resize((width, max(1, int(round((y1 - y0) * scale)))))
+    d = ImageDraw.Draw(im)
+
+    def P(x, y):
+        return ((x - x0) * scale, (y - y0) * scale)
+    for ann in anns:
+        color = ann.get("color") or "#ffff00"
+        pts = [P(x - 0.5, y - 0.5) for x, y in ann["pts"]]
+        if ann["type"] == "distance":
+            d.line(pts[:2], fill=color, width=3)
+        elif ann["type"] in ("ellipse", "rect"):
+            (ax, ay), (bx, by) = pts[:2]
+            box = [min(ax, bx), min(ay, by), max(ax, bx), max(ay, by)]
+            (d.ellipse if ann["type"] == "ellipse" else d.rectangle)(box, outline=color, width=3)
+    font = None
+    from ..library_export import korean_font_path
+    fp = korean_font_path()
+    if fp:
+        try:
+            font = ImageFont.truetype(fp, 15)
+        except OSError:
+            font = None
+    for x, y, text, color in labels:
+        px_, py_ = P(x, y)
+        tw = d.textlength(text, font=font) if font else 7 * len(text)
+        px_ = min(max(2, px_ - tw / 2), im.width - tw - 2)
+        py_ = min(max(2, py_), im.height - 20)
+        d.rectangle([px_ - 3, py_ - 1, px_ + tw + 3, py_ + 18], fill=(0, 0, 0))
+        d.text((px_, py_), text, fill=color, font=font)
+    im.save(path)
+    return path
+
+
+def _centre(ann):
+    (x0, y0), (x1, y1) = ann["pts"][:2]
+    return (x0 + x1) / 2, (y0 + y1) / 2
+
+
+def _judge(ok):
+    return {True: "적합", False: "부적합", None: "-"}[ok]
+
+
+def _thickness_steps(seq, roles, values, c, folder):
+    v = values.get(("thickness", seq))
+    need = [f"{seq}|ACR ST {n}" for n in ("ROI top", "ROI bottom", "top", "bottom")]
+    if not v or "level" not in v or not all(n in roles for n in need):
+        return None
+    img, rt = roles[need[0]]
+    rb, lt, lb = (roles[n][1] for n in need[1:])
+    m_t, m_b, level = v["roi_top"], v["roi_bottom"], v["level"]
+    ok = abs(v["thickness"] - c["thk_nominal"]) <= c["thk_tol"]
+    lines = [f"① slice 1의 위·아래 경사판 가운데에 작은 ROI: 위 {v['roi_top_mm2']:.1f} mm² 평균 {m_t:.2f}, "
+             f"아래 {v['roi_bottom_mm2']:.1f} mm² 평균 {m_b:.2f}",
+             f"② 기준 레벨 = (위 평균 + 아래 평균) / 4 = ({m_t:.2f} + {m_b:.2f}) / 4 = {level:.2f}  "
+             f"(두 평균의 절반) → W 1 / L {level:.2f}",
+             f"③ 그 W/L에서 밝게 남은 경사판 길이: 위 {v['top']:.1f} mm, 아래 {v['bottom']:.1f} mm",
+             f"④ 두께 = 0.2 × 위 × 아래 / (위 + 아래) = 0.2 × {v['top']:.1f} × {v['bottom']:.1f} / "
+             f"({v['top']:.1f} + {v['bottom']:.1f}) = {v['thickness']:.2f} mm",
+             f"판정: 기준 {c['thk_nominal']:g} ± {c['thk_tol']:g} mm → {_judge(ok)}"]
+    images = []
+    if folder:
+        fit = img.fit()
+        ys = [p[1] for a in (rt, rb, lt, lb) for p in a["pts"]]
+        crop = (fit["cx"] - 0.8 * fit["r"], min(ys) - 0.32 * fit["r"],
+                fit["cx"] + 0.8 * fit["r"], max(ys) + 0.32 * fit["r"])
+        above, below = min(ys) - 0.24 * fit["r"], max(ys) + 0.1 * fit["r"]
+        mean2 = (m_t + m_b) / 2
+        win = (0.73 * mean2, 0.44 * mean2)   # 콘솔 동영상: 경사판이 보이게 좁힌 W/L (W 188 / L 315 ≈ 평균 430)
+        (tx, ty), (bx, by) = _centre(rt), _centre(rb)
+        images.append((f"① 경사판 ROI (W {win[1]:.0f} / L {win[0]:.0f})",
+                       render_step(img.a, [rt, rb], os.path.join(folder, f"st_{seq}_1.png"), win, crop,
+                                   [(tx, above, f"위 평균 {m_t:.1f}", "#ff5ad2"),
+                                    (bx, below, f"아래 평균 {m_b:.1f}", "#ff5ad2")])))
+        (l1, l2), (b1, b2) = lt["pts"][:2], lb["pts"][:2]
+        images.append((f"② W 1 / L {level:.1f} → 경사판 길이",
+                       render_step(img.a, [lt, lb], os.path.join(folder, f"st_{seq}_2.png"), (level, 1), crop,
+                                   [((l1[0] + l2[0]) / 2, above, f"위 {v['top']:.1f} mm", "#00e5ff"),
+                                    ((b1[0] + b2[0]) / 2, below, f"아래 {v['bottom']:.1f} mm", "#00e5ff")])))
+    return {"title": f"절편 두께 ({seq}) — {v['thickness']:.2f} mm, {_judge(ok)}", "images": images, "lines": lines}
+
+
+def _uniformity_steps(seq, roles, values, c, folder):
+    v = values.get(("uniformity", seq))
+    need = [f"{seq}|ACR PIU {n}" for n in ("large", "min", "max")]
+    if not v or not all(n in roles for n in need):
+        return None
+    img, big = roles[need[0]]
+    lo, hi = roles[need[1]][1], roles[need[2]][1]
+    m_lo, m_hi, m_big = v["min"], v["max"], v["large"]
+    ok = v["piu"] >= c["piu_min"]
+    (lx, ly), (hx, hy) = _centre(lo), _centre(hi)
+    area_big = acr.roi_area_mm2(img, big)
+    area_s = acr.roi_area_mm2(img, lo)
+    lines = [f"① slice 7 가운데에 큰 ROI {area_big / 100:.0f} cm² ({area_big:.0f} mm²), 평균 {m_big:.2f}",
+             "② W 1로 좁히고 L을 올려 큰 ROI 안에서 가장 어두운 곳만 남김 → 그곳에 1 cm² ROI "
+             f"({area_s:.0f} mm², 위치 x {lx:.0f}, y {ly:.0f}): Low = {m_lo:.2f}",
+             "③ L을 내려 가장 밝은 곳만 남김 → 그곳에 1 cm² ROI "
+             f"(위치 x {hx:.0f}, y {hy:.0f}): High = {m_hi:.2f}",
+             "   (자동: 큰 ROI 안 모든 위치의 1 cm² 평균을 계산해 가장 낮은·높은 곳을 고름)",
+             f"④ PIU = 100 × (1 - (High - Low) / (High + Low)) = 100 × (1 - ({m_hi:.2f} - {m_lo:.2f}) / "
+             f"({m_hi:.2f} + {m_lo:.2f})) = {v['piu']:.1f} %",
+             f"판정: 기준 ≥ {c['piu_min']:g} % → {_judge(ok)}"]
+    images = []
+    if folder:
+        fit = img.fit()
+        pad = 0.08 * fit["r"]
+        (bx0, by0), (bx1, by1) = big["pts"][:2]
+        crop = (min(bx0, bx1) - pad, min(by0, by1) - pad, max(bx0, bx1) + pad, max(by0, by1) + pad)
+        l_dark = m_lo + 0.3 * (m_big - m_lo)
+        l_bright = m_hi - 0.3 * (m_hi - m_big)
+        images.append(("① 큰 ROI (기본 W/L)",
+                       render_step(img.a, [big], os.path.join(folder, f"piu_{seq}_1.png"), None, crop,
+                                   [(_centre(big)[0], _centre(big)[1], f"평균 {m_big:.1f}", "#50ff78")], 300)))
+        images.append((f"② W 1 / L {l_dark:.1f}: 가장 어두운 곳",
+                       render_step(img.a, [big, lo], os.path.join(folder, f"piu_{seq}_2.png"), (l_dark, 1), crop,
+                                   [(lx, ly + 0.08 * fit["r"], f"Low {m_lo:.1f}", "#5aa0ff")], 300)))
+        images.append((f"③ W 1 / L {l_bright:.1f}: 가장 밝은 곳",
+                       render_step(img.a, [big, hi], os.path.join(folder, f"piu_{seq}_3.png"), (l_bright, 1), crop,
+                                   [(hx, hy + 0.08 * fit["r"], f"High {m_hi:.1f}", "#ff5050")], 300)))
+    return {"title": f"영상 균일도 PIU ({seq}) — {v['piu']:.1f} %, {_judge(ok)}", "images": images, "lines": lines}
+
+
+def _ghosting_steps(seq, roles, values, c, folder):
+    v = values.get(("ghosting", seq))
+    sides = ("top", "bottom", "left", "right")
+    names = [f"{seq}|ACR Ghost {s}" for s in sides]
+    big_name = f"{seq}|ACR Ghost large" if f"{seq}|ACR Ghost large" in roles else f"{seq}|ACR PIU large"
+    if not v or not all(n in roles for n in names) or big_name not in roles:
+        return None
+    img, big = roles[big_name]
+    anns = [roles[n][1] for n in names]
+    ok = v["ratio"] <= c["ghost_max"] if seq == "T1" else None
+    kor = {"top": "위", "bottom": "아래", "left": "왼쪽", "right": "오른쪽"}
+    area = acr.roi_area_mm2(img, anns[0])
+    lines = [f"① slice 7 큰 ROI 평균 {v['large']:.2f}",
+             f"② 팬텀 바깥 위·아래·왼쪽·오른쪽에 타원 ROI (≈{area:.0f} mm², 긴 축이 영상 가장자리와 나란히): "
+             + ", ".join(f"{kor[s]} {v[s]:.2f}" for s in sides),
+             f"③ 고스팅 = |(위 + 아래) - (왼쪽 + 오른쪽)| / (2 × 큰 ROI) × 100 = |({v['top']:.2f} + {v['bottom']:.2f}) - "
+             f"({v['left']:.2f} + {v['right']:.2f})| / (2 × {v['large']:.2f}) × 100 = {v['ratio']:.2f} %",
+             f"판정: 기준 ≤ {c['ghost_max']:g} %" + (f" → {_judge(ok)}" if seq == "T1" else " (ACR 판정은 T1만, T2는 참고)")]
+    images = []
+    if folder:
+        win = (0.025 * v["large"], 0.05 * v["large"])   # 배경의 고스트가 보이게 아주 좁게
+        labels = [(*_centre(a), f"{v[s]:.1f}", "#ffd200") for a, s in zip(anns, sides)]
+        images.append((f"배경 ROI (W {win[1]:.0f} / L {win[0]:.0f})",
+                       render_step(img.a, [big] + anns, os.path.join(folder, f"ghost_{seq}.png"), win, None, labels, 360)))
+    return {"title": f"고스팅 ({seq}) — {v['ratio']:.2f} %" + (f", {_judge(ok)}" if seq == "T1" else ""),
+            "images": images, "lines": lines}
 
 
 # ═══ 뷰포트 표시 (원판 · 구멍 배열) ═══

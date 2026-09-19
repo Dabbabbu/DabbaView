@@ -239,6 +239,11 @@ def roi_values(img, ann):
     return img.a[m]
 
 
+def roi_area_mm2(img, ann):
+    from ..roi_tools import mask_of
+    return float((mask_of(ann, img.shape) & img.valid).sum() * img.px[0] * img.px[1])
+
+
 def roi_mean(img, ann):
     v = roi_values(img, ann)
     return float(v.mean()) if v.size else float("nan")
@@ -355,8 +360,9 @@ def place_thickness(img):
     bot = [rows[i] for i in range(split + 1, len(rows)) if prof[i] > 0.5 * prof[i_bot]]
     if not top or not bot:
         raise ValueError("두께 경사판 두 개를 구분하지 못했습니다.")
-    # ACR: 경사판 가운데에 작은 ROI → 평균의 절반이 기준. 띠 전체(가장자리 행 포함)로 잡으면 평균이
-    # 낮아져 경사판이 길게 재짐 (수동 측정 대비 +0.2~0.3 mm) → 가운데 행·가운데 ±3 mm만
+    # 콘솔 수동 절차와 같은 순서: ① 각 경사판의 가장 밝은 가운데에 작은 ROI → ② 두 평균의 합 / 4
+    # (= 평균의 절반) 을 L로, W 1 → ③ 그 L보다 밝은 경사판 길이 → ④ 0.2 × 위 × 아래 / (위 + 아래).
+    # 띠 전체(가장자리 행 포함)로 잡으면 평균이 낮아져 경사판이 길게 재짐 → 최대의 85 % 이상인 행·가운데 ±3 mm만
     half_w = max(3, int(round(3.0 / img.px[1])))
     ca, cb = int(cx) - half_w, int(cx) + half_w + 1
 
@@ -365,11 +371,11 @@ def place_thickness(img):
         keep = [strip[i] for i in range(len(strip)) if pr[i] >= 0.85 * pr.max()]
         return keep or strip
     ct, cbt = core(top), core(bot)
-    out = [ann_rect("ACR ST ROI top", ca, ct[0], cb, ct[-1] + 1, "thickness"),
-           ann_rect("ACR ST ROI bottom", ca, cbt[0], cb, cbt[-1] + 1, "thickness")]
+    out = [ann_rect("ACR ST ROI top", ca, int(ct[0]), cb, int(ct[-1]) + 1, "thickness"),
+           ann_rect("ACR ST ROI bottom", ca, int(cbt[0]), cb, int(cbt[-1]) + 1, "thickness")]
     m_top = roi_mean(img, out[0])
     m_bot = roi_mean(img, out[1])
-    thr = (m_top + m_bot) / 4          # ACR: 두 경사판 평균의 절반을 기준
+    thr = (m_top + m_bot) / 4          # ACR: 두 경사판 평균의 절반을 기준 (W 1 / L thr)
     for name, strip in (("top", top), ("bottom", bot)):
         y = (strip[0] + strip[-1]) / 2
         p = img.a[strip[0]:strip[-1] + 1].mean(0)
@@ -905,6 +911,12 @@ def compute(roles, images, lc_counts, res_values):
             lt, lb = line_mm(*t), line_mm(*b)
             thk = 0.2 * lt * lb / (lt + lb) if lt + lb > 0 else float("nan")
             out[("thickness", seq)] = {"top": lt, "bottom": lb, "thickness": thk}
+            rt, rb = get(f"{seq}|ACR ST ROI top"), get(f"{seq}|ACR ST ROI bottom")
+            if rt and rb:   # 측정 과정 (보고서): ROI 평균 → 기준 L = 합 / 4
+                m_t, m_b = roi_mean(*rt), roi_mean(*rb)
+                out[("thickness", seq)].update(
+                    roi_top=m_t, roi_bottom=m_b, level=(m_t + m_b) / 4,
+                    roi_top_mm2=roi_area_mm2(*rt), roi_bottom_mm2=roi_area_mm2(*rb))
         # 4. 위치
         pos = {}
         for s in ("S1", "S11"):
