@@ -23,3 +23,6 @@ dabbaview/resources/logo.png
 # OS / 로컬 도구 설정
 .DS_Store
 .claude/
+
+# 병원 내부 QC 기록 (공개 저장소에 올리지 않음)
+docs/acr_comparison_report.pdf
