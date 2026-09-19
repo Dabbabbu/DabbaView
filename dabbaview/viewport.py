@@ -473,6 +473,12 @@ class DicomViewport(QWidget):
                 return ellipse_mask(ann["pts"][0], ann["pts"][1], arr.shape[:2])
         return None
 
+    _overlay_painters = []   # fn(viewport, painter) - 전문 분석 윤곽 등 (모든 뷰포트 공유)
+
+    @classmethod
+    def add_overlay_painter(cls, fn):
+        cls._overlay_painters.append(fn)
+
     def _draw_analysis(self, painter):
         """랜드마크 + 라인 프로파일 선"""
         color = QColor(120, 255, 120)
@@ -1359,6 +1365,8 @@ class DicomViewport(QWidget):
             self._draw_draft(painter)
             self._draw_key_marker(painter)
             self._draw_analysis(painter)
+            for fn in self._overlay_painters:
+                fn(self, painter)
         self._draw_reference_cursor(painter)
         self._draw_wl_roi(painter)
 
