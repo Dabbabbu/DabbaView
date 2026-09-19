@@ -25,3 +25,6 @@ google-auth-oauthlib>=1.2
 msal>=1.28  # Open from OneDrive
 requests>=2.31
 keyring>=24  # 클라우드 로그인 토큰을 OS 키체인에 저장
+reportlab>=4.0  # Library 내보내기: PDF (한글 글꼴 포함)
+python-docx>=1.1  # Library 내보내기: Word (.docx)
+openpyxl>=3.1  # Library 내보내기: Excel (.xlsx)

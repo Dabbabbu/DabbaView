@@ -92,6 +92,7 @@ class StudyList(QTreeWidget):
 
 class LibraryPanel(QWidget):
     open_requested = pyqtSignal(str)   # StudyInstanceUID
+    export_requested = pyqtSignal(list, object)   # 선택 UID들, 현재 컬렉션 id
     rename_requested = pyqtSignal(str, str)   # ("study"|"patient", StudyInstanceUID)
 
     def __init__(self, store, parent=None):
@@ -119,6 +120,8 @@ class LibraryPanel(QWidget):
         more.setText("⋯")
         more.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(self)
+        menu.addAction("📤 Export… (PDF·Word·Excel·이미지·CSV)", self.request_export)
+        menu.addSeparator()
         menu.addAction("선택 스터디 메모 내보내기 (Markdown)…", lambda: self.export_notes("md", True))
         menu.addAction("선택 스터디 메모 내보내기 (TXT)…", lambda: self.export_notes("txt", True))
         menu.addAction("전체 메모 내보내기 (Markdown)…", lambda: self.export_notes("md", False))
@@ -521,6 +524,7 @@ class LibraryPanel(QWidget):
                 if other["id"] not in self.store.descendants(cid):
                     move.addAction(other["name"], lambda _=False, o=other["id"]: self.store.set_parent(cid, o))
             menu.addSeparator()
+            menu.addAction("📤 이 컬렉션 Export…", lambda: self.export_requested.emit([], cid))
             menu.addAction("컬렉션 메모 내보내기 (Markdown)…",
                            lambda: self.export_notes("md", False, self.store.search("", cid)))
             menu.addAction(f"'{c['name']}' 삭제 (스터디는 라이브러리에 남음)", lambda: self._delete(cid))
@@ -565,6 +569,7 @@ class LibraryPanel(QWidget):
             tags.addAction(f"#{tag}", lambda _=False, t=tag: self.store.toggle_tag(uids, t))
         tags.addAction("새 태그…", lambda: self._new_tag(uids))
         menu.addAction("메모 내보내기 (Markdown)…", lambda: self.export_notes("md", True))
+        menu.addAction("📤 Export…", self.request_export)
         menu.addSeparator()
         menu.addAction(f"라이브러리에서 삭제 ({len(uids)}개)", self.remove_selected)
         menu.exec_(self.studies.viewport().mapToGlobal(pos))
@@ -573,6 +578,11 @@ class LibraryPanel(QWidget):
         tag, ok = QInputDialog.getText(self, "새 태그", "태그 이름 (예: interesting):")
         if ok and normalize_tag(tag):
             self.store.toggle_tag(uids, tag)
+
+    def request_export(self):
+        self.flush()
+        collection = self._collection if self._collection not in (ALL, UNFILED) else None
+        self.export_requested.emit(self.selected_uids(), collection)
 
     def remove_selected(self):
         uids = self.selected_uids()
