@@ -15,3 +15,8 @@ SimpleITK>=2.3  # MetaImage(.mha/.mhd) 불러오기/변환
 certifi  # HTTPS 인증서 (Deploy Web, MONAI Label)
 matplotlib>=3.7  # 히스토그램·프로파일 그래프, Python 콘솔 plt
 scikit-image>=0.22  # 입자 분석, Canny, 콘솔 분석
+google-api-python-client>=2.100  # Open from Google Drive
+google-auth-oauthlib>=1.2
+msal>=1.28  # Open from OneDrive
+requests>=2.31
+keyring>=24  # 클라우드 로그인 토큰을 OS 키체인에 저장

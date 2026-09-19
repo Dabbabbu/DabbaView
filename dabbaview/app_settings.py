@@ -265,6 +265,21 @@ class AppSettings:
     def set_deploy_sync_version(self, enabled):
         self._qs.setValue("deploy_sync_version", bool(enabled))
 
+    # 클라우드 (Google Drive / OneDrive) - 비밀값·토큰은 cloud.secure_store(키체인)
+    def google_client_id(self):
+        return self._qs.value("google_client_id", "", type=str).strip()
+
+    def google_api_key(self):
+        return self._qs.value("google_api_key", "", type=str).strip()
+
+    def onedrive_client_id(self):
+        return self._qs.value("onedrive_client_id", "", type=str).strip()
+
+    def set_cloud_ids(self, google_client_id, google_api_key, onedrive_client_id):
+        self._qs.setValue("google_client_id", (google_client_id or "").strip())
+        self._qs.setValue("google_api_key", (google_api_key or "").strip())
+        self._qs.setValue("onedrive_client_id", (onedrive_client_id or "").strip())
+
     # DICOM 노드
     def dicom_nodes(self):
         return self._load_json("dicom_nodes", [])

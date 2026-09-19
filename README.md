@@ -22,6 +22,9 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
   | 이미지 시퀀스 | .png, .jpg, .bmp, .tif | 폴더(또는 여러 파일)를 파일 이름 순서대로 한 시리즈로. `images/` 옆 `masks/`는 오버레이로 |
   | DICOM SEG | .dcm (SEG) | 참조 시리즈 위에 세그멘테이션 오버레이 (참조 시리즈를 나중에 열어도 자동 적용) |
   | STL | .stl | 3D Volume 탭에 메시로 표시 (LPS mm 좌표, 볼륨과 겹쳐 봄) |
+- **클라우드** (File → Open from Google Drive / Open from OneDrive): 브라우저로 로그인 → 폴더 탐색(내 드라이브·공유 문서함·공유 드라이브 / 내 OneDrive·공유 항목) → 파일·폴더를 내려받아 바로 불러오기. 읽기 전용 권한, **각자 자기 OAuth 키를 Settings → Cloud에 입력** (앱에 내장된 키 없음, 없으면 설정 방법 안내). 로그인 토큰·Client Secret은 OS 키체인(macOS 키체인 / Windows 자격 증명 관리자)에 저장
+  - Google: Cloud Console에서 Drive API 사용 설정 + OAuth 클라이언트(유형 '데스크톱 앱') → Client ID·Client Secret (API Key는 선택)
+  - OneDrive: Azure Portal 앱 등록(개인+조직 계정), 플랫폼 '모바일 및 데스크톱' 리디렉션 URI `http://localhost`, 위임 권한 Files.Read.All → Application (client) ID
 - **포맷 변환** (File → Convert / Export As): DICOM → NIfTI / NRRD / MetaImage / NumPy / PNG 시퀀스, NIfTI → DICOM / NumPy / NRRD, NumPy → NIfTI 등 모든 조합. 소스는 현재 시리즈 또는 파일·폴더, 옵션: voxel spacing 변경, 데이터 타입(int16/float32/uint8), 압축, AI 마스크 함께 저장(DICOM은 SEG로), PNG 8/16비트, DICOM Modality·환자 정보. 진행률 표시
 - **빠른 로딩**: 메타데이터만 병렬로 먼저 읽고 픽셀은 필요할 때 읽음 (확장자 사전 필터링)
 - **시리즈 패널 (INFINITT 스타일)**: 중간 슬라이스 썸네일, `시리즈번호/총 장수`, 시퀀스 이름, 선택 시 노란 테두리, 검사별 묶음
@@ -160,6 +163,7 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 - **Reading**: 기록 폴더(감시), 기본 Creator
 - **Deploy Web**(Help → Deploy Web): 저장소·워크플로·브랜치, GitHub 토큰
 - **AI**: MONAI Label 서버 주소, Access Token
+- **Cloud**: Google OAuth Client ID / Client Secret / API Key, OneDrive(Azure) Client ID, 로그아웃
 
 설정은 QSettings로 저장됩니다 (macOS: `~/Library/Preferences/com.dabbaview.DabbaView.plist`).
 
@@ -232,6 +236,7 @@ DabbaView/
     ├── about_dialog.py      # Help → About
     ├── deploy_web.py        # Help → Deploy Web (GitHub Actions)
     ├── net_ssl.py           # HTTPS 인증서 (certifi)
+    ├── cloud/               # Google Drive / OneDrive (로그인, 탐색, 다운로드, 키체인 토큰)
     ├── analysis/            # 3D Slicer · ImageJ 스타일 분석
     │   ├── processing.py    # 필터 (Gaussian, Median, Unsharp, Sobel, Canny, Morphology)
     │   ├── measure.py       # 히스토그램 통계, 라인 프로파일, 입자 분석

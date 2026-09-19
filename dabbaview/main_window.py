@@ -323,10 +323,19 @@ class MainWindow(QMainWindow):
         open_file.triggered.connect(self._open_file)
         file_menu.addAction(open_file)
 
+        cloud_actions = []
+        for text, key in (("Open from Google Drive...", "google"), ("Open from OneDrive...", "onedrive")):
+            action = QAction(text, self)
+            action.triggered.connect(lambda _=False, k=key: self._open_cloud(k))
+            cloud_actions.append(action)
+
         open_dir = QAction("Open DICOM Folder...", self)
         open_dir.setShortcut(QKeySequence("Ctrl+Shift+O"))
         open_dir.triggered.connect(self._open_directory)
         file_menu.addAction(open_dir)
+        file_menu.addSeparator()
+        for action in cloud_actions:
+            file_menu.addAction(action)
 
         # 최근 연 파일/폴더 (열 때마다 목록을 새로 구성)
         self._recent_menu = QMenu("Recent Files", self)
@@ -1131,6 +1140,20 @@ class MainWindow(QMainWindow):
         if dock.isVisible() and dock.tabs.currentIndex() == 0 and \
                 dock._source.currentIndex() in (0, 2):
             dock.refresh_histogram()
+
+    def _open_cloud(self, key):
+        """File → Open from Google Drive / OneDrive"""
+        from .cloud.browser import open_from_cloud
+        from .cloud.secure_store import SecureStore
+        providers = getattr(self, "_cloud_providers", None)
+        if providers is None:
+            from .cloud.google_drive import GoogleDriveProvider
+            from .cloud.onedrive import OneDriveProvider
+            store = SecureStore(self._settings)
+            providers = self._cloud_providers = {
+                "google": GoogleDriveProvider(self._app_settings, store),
+                "onedrive": OneDriveProvider(self._app_settings, store)}
+        open_from_cloud(self, providers[key])
 
     def _open_deploy_web(self):
         from .deploy_web import DeployWebDialog
