@@ -189,11 +189,21 @@ def notes_for(approximate):
 TITLE = "MRI 팬텀 영상 정도관리 결과 (ACR 대형 팬텀)"
 
 
-def write_report(fmt, path, info, rows, approximate=False, snapshots=()):
-    """fmt: 'pdf' | 'docx' | 'xlsx'. snapshots: [(제목, PNG 경로)] (PDF·Word에 붙임)"""
+def write_report(fmt, path, info, rows, approximate=False, snapshots=(), steps=()):
+    """fmt: 'pdf' | 'docx' | 'xlsx'. snapshots: [(제목, PNG 경로)] (PDF·Word에 붙임)
+    steps: 측정 과정 [{"title", "images": [(설명, PNG)], "lines": [계산 단계]}] (Excel은 글만)"""
     writer = {"pdf": _write_pdf, "docx": _write_docx, "xlsx": _write_xlsx}[fmt]
-    writer(path, info, rows, approximate, list(snapshots))
+    writer(path, info, rows, approximate, list(snapshots), list(steps))
     return path
+
+
+STEPS_TITLE = "측정 과정 (콘솔 수동 절차와 같은 순서: ROI → W/L 조절 → 측정 → 계산 → 판정)"
+
+
+def _image_size(p):
+    from PIL import Image as PILImage
+    with PILImage.open(p) as im:
+        return im.size
 
 
 def _overall_text(rows):
@@ -201,15 +211,15 @@ def _overall_text(rows):
     return {True: "적합 (모든 항목 기준 만족)", False: "부적합 (기준 미달 항목 있음)", None: "-"}[ok]
 
 
-def _write_pdf(path, info, rows, approximate, snapshots):
+def _write_pdf(path, info, rows, approximate, snapshots, steps=()):
     from xml.sax.saxutils import escape
 
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import (Image, Paragraph, SimpleDocTemplate, Spacer, Table,
-                                    TableStyle)
+    from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate,
+                                    Spacer, Table, TableStyle)
 
     from ..library_export import _pdf_font
     font = _pdf_font()
@@ -253,11 +263,32 @@ def _write_pdf(path, info, rows, approximate, snapshots):
             rows_.append([c[0] for c in chunk] + [""] * (4 - len(chunk)))
             rows_.append([c[1] for c in chunk] + [""] * (4 - len(chunk)))
         story += [Spacer(1, 4 * mm), Table(rows_, colWidths=[44 * mm] * 4)]
+    if steps:
+        h2 = ParagraphStyle("h2", parent=base, fontSize=12, leading=16, spaceBefore=2, spaceAfter=3)
+        h3 = ParagraphStyle("h3", parent=base, fontSize=10.5, leading=14, textColor=colors.HexColor("#1f3a5f"))
+        story += [PageBreak(), para(STEPS_TITLE, h2)]
+        full = 180 * mm
+        for step in steps:
+            block = [Spacer(1, 3 * mm), para(step["title"], h3), Spacer(1, 1.5 * mm)]
+            imgs = step.get("images") or []
+            if imgs:
+                col = (full - 4 * mm * (len(imgs) - 1)) / len(imgs)
+                cells, caps = [], []
+                for caption, p in imgs:
+                    w, h = _image_size(p)
+                    iw = min(col, 90 * mm)
+                    cells.append(Image(p, width=iw, height=iw * h / w))
+                    caps.append(para(caption, small))
+                t = Table([cells, caps], colWidths=[col + 4 * mm] * len(imgs))
+                t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+                block.append(t)
+            block += [para(line) for line in step.get("lines", [])]
+            story.append(KeepTogether(block))
     SimpleDocTemplate(path, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=14 * mm,
                       bottomMargin=14 * mm, title=TITLE).build(story)
 
 
-def _write_docx(path, info, rows, approximate, snapshots):
+def _write_docx(path, info, rows, approximate, snapshots, steps=()):
     import docx
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml import OxmlElement
@@ -314,10 +345,24 @@ def _write_docx(path, info, rows, approximate, snapshots):
     for title_text, p in snapshots:
         doc.add_paragraph(title_text).runs[0].font.size = Pt(8)
         doc.add_picture(p, width=Mm(70))
+    if steps:
+        doc.add_page_break()
+        doc.add_heading(STEPS_TITLE, level=2)
+        for step in steps:
+            doc.add_heading(step["title"], level=3)
+            imgs = step.get("images") or []
+            if imgs:
+                t = doc.add_table(rows=2, cols=len(imgs))
+                width = Mm(min(85, 175 / len(imgs)))
+                for i, (caption, p) in enumerate(imgs):
+                    t.rows[0].cells[i].paragraphs[0].add_run().add_picture(p, width=width)
+                    t.rows[1].cells[i].text = caption
+            for line in step.get("lines", []):
+                doc.add_paragraph(line).runs[0].font.size = Pt(9)
     doc.save(path)
 
 
-def _write_xlsx(path, info, rows, approximate, snapshots):
+def _write_xlsx(path, info, rows, approximate, snapshots, steps=()):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     wb = Workbook()
@@ -359,6 +404,17 @@ def _write_xlsx(path, info, rows, approximate, snapshots):
         r += 1
     for col, width in zip("ABCDE", (26, 40, 40, 26, 10)):
         ws.column_dimensions[col].width = width
+    if steps:
+        ws2 = wb.create_sheet("측정 과정")
+        ws2.append([STEPS_TITLE])
+        ws2["A1"].font = Font(bold=True)
+        for step in steps:
+            ws2.append([])
+            ws2.append([step["title"]])
+            ws2.cell(ws2.max_row, 1).font = Font(bold=True)
+            for line in step.get("lines", []):
+                ws2.append([line])
+        ws2.column_dimensions["A"].width = 140
     raw = wb.create_sheet("측정값")
     raw.append(["검사", "시퀀스", "측정값", "기준", "판정"])
     for test, seq, measured, criterion, ok in rows:
