@@ -112,6 +112,18 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 | Python Console (F3) | `app.current_array`, `app.current_image`, `app.mask`, `app.add_series(배열, "이름")`, `np`, `ndi`, `plt`, `skimage` — plt 그래프는 콘솔 오른쪽에 표시, 구문 강조, 스크립트 열기/저장 |
 | Macros | 콘솔 스크립트를 매크로로 저장 → 원클릭 실행 (Process → Macros). 예제: Otsu → 입자 분석, Gaussian → 새 시리즈, 볼륨 통계, 라벨별 부피, MIP |
 
+### 스터디 라이브러리 (Zotero 스타일, 왼쪽 패널 **★ Library** 탭)
+
+| 기능 | 내용 |
+|---|---|
+| 즐겨찾기 | **★ Library** 버튼 / File → Add to Library / **⌘D**: 현재 스터디(환자명·검사일·설명·모달리티·폴더)를 저장. 툴바 별이 ★이면 이미 들어 있는 스터디 |
+| 열기 | 더블클릭·Enter·📂 열기: 이미 불러온 스터디면 바로 선택, 아니면 그 스터디가 있는 폴더들만 불러와 첫 시리즈 표시. 폴더를 옮겼으면 새 위치 지정 |
+| 컬렉션 | 사용자 폴더(예: Cardiac Cases, Teaching Cases) + 하위 컬렉션 트리. 스터디를 컬렉션으로 끌어다 놓기, 한 스터디가 여러 컬렉션에 (태그 방식). 이름 변경·삭제·위/아래·다른 컬렉션 안으로 이동. '컬렉션 없음'으로 정리 안 된 스터디 확인 |
+| 메모 | StudyInstanceUID 기준, 굵게·기울임·글머리/번호 목록, 자동 저장. 본문의 `#태그`는 자동으로 스터디 태그. Markdown / TXT 내보내기 (선택·컬렉션·전체) |
+| 태그 | 컬러 태그 칩으로 거르기(여러 개 = 모두 포함), 우클릭으로 색 변경, 빠른 태그 버튼(#interesting #teaching #followup, 편집 가능) |
+| 검색 | 환자명·ID·설명·검사일·메모·폴더, `#태그` — 현재 컬렉션 안에서 (전체 스터디 선택 시 전체) |
+| 저장 | `~/Library/Application Support/DabbaView/library.json` (앱 시작 시 자동 로드), JSON 내보내기 / 가져오기(병합) |
+
 ### 오픈소스 AI 모델 (AI 메뉴 → Open Source Models, AI 패널 → 🧩 Models 탭)
 
 | 모델 | 방식 | 내용 |
@@ -209,6 +221,7 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 | W / G / M | Magic Wand / Threshold / MedSAM (클릭 한 번) | Ctrl+Z / Ctrl+Y | 되돌리기 / 다시 하기 (ROI·측정·세그멘테이션, 가장 최근 편집부터) |
 | Shift+E | 사각형 ROI (Shift: 정사각형) | Shift+D | 다중 점 경로 길이 (더블클릭/Enter로 끝) |
 | Ctrl+C / Ctrl+V | ROI 복사 / 현재 슬라이스에 붙이기 | Ctrl+Shift+M | ROI Manager |
+| Ctrl+D | 현재 스터디를 Library(즐겨찾기)에 추가 | ⌘B / ⌘I (메모 입력 중) | 굵게 / 기울임 |
 | Ctrl+M | Measure (선택 ROI 통계 표) | Delete | 선택한 ROI/측정 삭제 (선택 없으면 마지막 것) |
 | F | Landmark (점 찍기) | Shift+L | Line Profile |
 | F3 | Python 콘솔 | | |
@@ -331,6 +344,8 @@ DabbaView/
     │   ├── writers.py       # 변환 (NIfTI/NRRD/MHA/NumPy/PNG/DICOM)
     │   └── convert_dialog.py
     ├── open_datasets.py     # Help → Open Datasets 링크
+    ├── library.py           # 스터디 라이브러리 저장소 (즐겨찾기·컬렉션·메모·태그, library.json)
+    ├── library_panel.py     # 왼쪽 Library 탭 (컬렉션 트리·목록·메모·검색)
     └── ai/                  # AI Research
         ├── panel.py         # 사이드 패널 UI
         ├── segmentation.py  # 마스크 편집 (Brush/Eraser/Wand/Threshold/보간)
