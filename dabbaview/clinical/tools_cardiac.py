@@ -45,10 +45,23 @@ def frames_at_current_position(ctx, series, kind="phase", filter_fn=None):
         items.append((slice_param(ds, kind), int(getattr(ds, "InstanceNumber", i) or i), i))
     if len(items) < 2:
         raise ValueError("현재 위치에 시간(위상)별 영상이 2장 이상 있는 시리즈가 필요합니다.")
+    if kind == "time" and len({t[0] for t in items}) < len(items):
+        # GE 동적 영상: AcquisitionTime이 시리즈 전체에 하나(또는 몇 개)뿐 → 시작부터의 TriggerTime(ms) 사용
+        by_inst = sorted(items, key=lambda t: t[1])
+        trig = [_trigger_s(series.slices[i]) for _v, _n, i in by_inst]
+        if all(v is not None for v in trig) and all(b > a for a, b in zip(trig, trig[1:])):
+            items = [(tv, n, i) for tv, (_v, n, i) in zip(trig, by_inst)]
+        else:
+            items = [(None, n, i) for _v, n, i in by_inst]
     items.sort(key=lambda t: (t[0] if t[0] is not None else 0, t[1]))
     values = [t[0] if t[0] is not None else n for n, t in enumerate(items)]
     frames = np.stack([series.get_pixel_array(i) for _v, _n, i in items]).astype(np.float64)
     return frames, np.asarray(values, dtype=float), [i for *_x, i in items]
+
+
+def _trigger_s(ds):
+    v = slice_param(ds, "phase")
+    return None if v is None else v / 1000.0
 
 
 # ═══ 윤곽 & 기능 ═══
@@ -88,7 +101,7 @@ class ContoursTool(Tool):
         counts = {}
         for c in items:
             counts[c["kind"]] = counts.get(c["kind"], 0) + 1
-        phases = len({round(c["phase"] or 0, 1) for c in items})
+        phases = len({C.phase_key(c) for c in items})
         text = ", ".join(f"{C.CONTOUR_TYPES[k][0]} {v}" for k, v in counts.items()) or "없음"
         self.info.setText(f"현재 시리즈 윤곽: {text} · 위상 {phases}개")
 
@@ -160,7 +173,7 @@ class BullseyeTool(Tool):
         if not phases:
             raise ValueError("LV Endo 윤곽이 없습니다 (윤곽 & 기능 도구).")
         ed = max(phases, key=phases.get)
-        at_ed = [c for c in contours if round(c["phase"] or 0, 1) == ed]
+        at_ed = [c for c in contours if C.phase_key(c) == ed]
         per_pos = {}
         for c in at_ed:
             per_pos.setdefault(round(c["position"], 1), {})[c["kind"]] = c

@@ -70,6 +70,7 @@ class ContourStore(QObject):
                 "pts": [tuple(map(float, p)) for p in pts],
                 "position": position_key(ds, 0.1) / 10.0,
                 "phase": slice_param(ds, "phase"),
+                "phase_index": _phase_index(series, index),
                 "spacing": spacing, "area_mm2": polygon_area_mm2(pts, spacing)}
         self._items = [c for c in self._items
                        if not (c["sop"] == item["sop"] and c["kind"] == kind)]
@@ -94,6 +95,30 @@ class ContourStore(QObject):
         return [c for c in self._items if c["series_uid"] == series_uid]
 
 
+def _phase_index(series, index):
+    """같은 위치 영상들 중 이 영상의 심장 위상 순번 (0 = 첫 위상).
+    슬라이스마다 TriggerTime이 몇 ms씩 달라도 같은 위상끼리 묶이게 함"""
+    ds = series.slices[index]
+    key = position_key(ds)
+    times = sorted({round(slice_param(d, "phase") or 0.0, 1) for d in series.slices
+                    if position_key(d) == key})
+    t = round(slice_param(ds, "phase") or 0.0, 1)
+    return times.index(t) if t in times else None
+
+
+def phase_key(c):
+    """윤곽의 위상 키: 위상 순번이 있으면 그것, 없으면 TriggerTime(ms)"""
+    if c.get("phase_index") is not None:
+        return int(c["phase_index"])
+    return round(c["phase"], 1) if c.get("phase") is not None else 0.0
+
+
+def phase_ms(contours, key):
+    """위상 키 → 대표 TriggerTime (ms, 중앙값)"""
+    vals = [c["phase"] for c in contours if phase_key(c) == key and c.get("phase") is not None]
+    return float(np.median(vals)) if vals else float(key)
+
+
 # ═══ 용적 ═══
 
 def _slice_gap(positions, fallback):
@@ -109,8 +134,7 @@ def volumes_by_phase(contours, slice_spacing=None):
     gap = slice_spacing or _slice_gap(positions, 8.0)
     result = {}
     for c in contours:
-        phase = round(c["phase"], 1) if c["phase"] is not None else 0.0
-        by_kind = result.setdefault(phase, {})
+        by_kind = result.setdefault(phase_key(c), {})
         vol, n = by_kind.get(c["kind"], (0.0, 0))
         by_kind[c["kind"]] = (vol + c["area_mm2"] * gap / 1000.0, n + 1)
     return result, gap
@@ -128,7 +152,8 @@ def ventricular_function(contours, slice_spacing=None, heart_rate=None):
         es = min(phases, key=phases.get)
         edv, esv = phases[ed], phases[es]
         sv = edv - esv
-        res = {"ED phase (ms)": ed, "ES phase (ms)": es, "EDV (mL)": edv, "ESV (mL)": esv,
+        res = {"ED phase (ms)": phase_ms(contours, ed), "ES phase (ms)": phase_ms(contours, es),
+               "EDV (mL)": edv, "ESV (mL)": esv,
                "SV (mL)": sv, "EF (%)": sv / edv * 100 if edv > 0 else 0.0}
         if heart_rate:
             res["CO (L/min)"] = sv * heart_rate / 1000.0
