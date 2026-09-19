@@ -1049,7 +1049,16 @@ class MainWindow(QMainWindow):
             return
         count, total = info["placeholders"], info["total"]
         provider = info["provider"] or "클라우드"
+        # 창 모달 진행창(macOS에서는 메인 창 시트)이 떠 있으면 이 경고창의 버튼·ESC 입력까지 막힘
+        # → 묻는 동안 진행창과 멈춤 감시를 내리고, 경고창을 앱 모달로 맨 앞에 띄움
+        progress, watchdog = self._load_progress, getattr(self, "_load_watchdog", None)
+        if watchdog is not None:
+            watchdog.stop()
+        if progress is not None:
+            progress.hide()
+            progress.setWindowModality(Qt.NonModal)   # 내부 자동 표시 타이머가 다시 띄워도 입력을 막지 않게
         box = QMessageBox(self)
+        box.setWindowModality(Qt.ApplicationModal)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle("클라우드 동기화 폴더")
         box.setText(f"클라우드 동기화 폴더입니다 ({provider}). 로딩이 느릴 수 있습니다.\n"
@@ -1067,19 +1076,30 @@ class MainWindow(QMainWindow):
                            QMessageBox.ActionRole)
         skip = (box.addButton(f"다운로드된 {total - count:,}개만 불러오기", QMessageBox.ActionRole)
                 if count else None)
-        box.addButton("취소", QMessageBox.RejectRole)
+        cancel = box.addButton("취소", QMessageBox.RejectRole)
         box.setDefaultButton(copy if count else go)
+        box.setEscapeButton(cancel)
+        box.show()
+        box.raise_()
+        box.activateWindow()
         box.exec_()
         clicked = box.clickedButton()
+        answer = "cancel"
         if clicked is copy:
             dest = self._choose_copy_destination(info)
-            worker.answer_placeholders(("copy", dest) if dest else "cancel")
+            answer = ("copy", dest) if dest else "cancel"
         elif clicked is go:
-            worker.answer_placeholders("download")
+            answer = "download"
         elif skip is not None and clicked is skip:
-            worker.answer_placeholders("skip")
-        else:
-            worker.answer_placeholders("cancel")
+            answer = "skip"
+        if answer == "cancel":
+            worker.cancel()   # 취소 → 로더가 바로 끝나고 _on_load_finished가 진행창을 정리
+        elif self._load_worker is worker and self._load_progress is progress and progress is not None:
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+            if watchdog is not None:
+                watchdog.start(1000)
+        worker.answer_placeholders(answer)
 
     def _choose_copy_destination(self, info):
         """복사할 로컬 폴더 선택 (여유 공간 확인). 취소하면 None"""
