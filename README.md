@@ -112,6 +112,22 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 | Python Console (F3) | `app.current_array`, `app.current_image`, `app.mask`, `app.add_series(배열, "이름")`, `np`, `ndi`, `plt`, `skimage` — plt 그래프는 콘솔 오른쪽에 표시, 구문 강조, 스크립트 열기/저장 |
 | Macros | 콘솔 스크립트를 매크로로 저장 → 원클릭 실행 (Process → Macros). 예제: Otsu → 입자 분석, Gaussian → 새 시리즈, 볼륨 통계, 라벨별 부피, MIP |
 
+### ROI · 측정 (연구용)
+
+| 기능 | 내용 |
+|---|---|
+| 정량 ROI | ROI Manager의 **＋원 / ＋타원 / ＋사각형**: 중심 좌표(px) + 반지름·장축/단축·가로/세로(mm)로 정확한 크기. 자유곡선은 기존대로(8) |
+| 편집 | Select 도구로 클릭 = 선택(Shift/⌘로 여러 개), 몸통 끌기 = 이동, 끝점·모서리 핸들 끌기 = 수정 (그리기 도구에서도 핸들은 바로 잡힘). **Properties**에서 이름·색·중심·크기를 숫자로 |
+| ROI Manager (Ctrl+Shift+M) | 현재 영상/시리즈의 ROI·측정 목록: ☑ 표시/숨김, 이름(더블클릭), 색(색 칸 더블클릭), 🔒 잠금, Select All / Deselect All |
+| 분석 | **Measure**: ROI Name · Area(mm²) · Perimeter · Mean · StdDev · Min · Max · Median · Pixels 표 → CSV / 클립보드. **측정값 표**: 거리·경로·각도·면적 모두. **Volume**: 같은 이름 ROI의 여러 슬라이스 부피 (Σ면적 × 슬라이스 간격) |
+| 복사 | Ctrl+C → 다른 슬라이스·시리즈에서 Ctrl+V, **슬라이스 복제**(예: 1-20), **Mirror**(좌우 대칭 위치) |
+| 저장/불러오기 | `.roi.json`: 종류·좌표(환자 좌표 mm + 영상 상대 위치)·크기(mm)·이름·색·슬라이스. 같은 좌표계(T1 → T2)는 mm로 같은 위치, 다른 환자는 상대 위치로 적용. **템플릿**으로 자주 쓰는 ROI 세트 저장 |
+| Compare | 다른 검사(이전 검사)의 ROI를 현재 영상에 점선으로 겹쳐 보기 (이전 평균값 표시) |
+| Batch | AI 패널 Worklist의 모든 검사에 같은 ROI 적용 → 결과 CSV 일괄 |
+| 빠른 측정 | 거리: 클릭→클릭 또는 끌기, Shift = 0/45/90° 스냅, 커서 옆 실시간 거리(측정 전에는 마지막 점에서의 거리), Select 도구 더블클릭 → 클릭 = 도구 바꾸지 않고 거리 측정. 다중 점 경로(Shift+D) 총 길이, 면적+둘레 동시 표시 |
+| 표시 설정 | Tools → 측정 표시 설정: 글자 크기, 단위 (mm / cm / px) |
+| 되돌리기 | Ctrl+Z / Ctrl+Y: ROI·측정 추가·이동·수정·삭제 (세그멘테이션과 편집 순서대로) |
+
 ### 전문 분석 도구 (Analysis 메뉴)
 
 메뉴바 **Analysis ▸ Cardiac | Neuro | Oncology | Lung | MSK | Vascular | Diffusion | Perfusion | Spectroscopy** 에서 도구를 고르면 오른쪽 **Analysis** 패널에 입력 화면과 결과(표 + matplotlib 그래프, 복사·CSV·PNG)가 나옵니다. 맵은 **새 시리즈**로 만들어집니다 (원본 보존). 피팅은 `scipy.optimize`, 계산은 `numpy`.
@@ -166,14 +182,17 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 | K | Key Image 표시/해제 | Shift+K | Key Image 모아보기 |
 | Shift+T | Stack ↔ Tile | T / O | 환자 정보 + 측정/주석 표시/숨김 |
 | Space | Multi View: 선택한 칸만 크게 ↔ 복귀 | P | 시네 재생/정지 |
-| R | Reading(판독) 창 | Delete | 현재 영상의 마지막 주석 삭제 |
+| R | Reading(판독) 창 | Shift (그리는 중) | 직선 0/45/90° 스냅 |
 | Esc | 그리던 측정 취소 / 3D Cursor 지우기 / 세그멘테이션 도구 해제 | Ctrl+T | DICOM 태그 |
 | Ctrl+I | Image 정보 패널 | Ctrl+Shift+S | Capture |
 | Ctrl+O | 파일 열기 | Ctrl+Shift+O | 폴더 열기 |
 | Ctrl+S | 이미지 내보내기 | Ctrl+Shift+E | 동영상 내보내기 |
 | F2 | 시리즈 패널 접기/펼치기 | ⌘, (macOS) | Settings (Windows는 File → Settings) |
 | Ctrl+Shift+A | AI Research 패널 | D / X | 세그멘테이션 Brush / Eraser |
-| W / G | Magic Wand / Threshold | Ctrl+Z | 세그멘테이션 되돌리기 |
+| W / G | Magic Wand / Threshold | Ctrl+Z / Ctrl+Y | 되돌리기 / 다시 하기 (ROI·측정·세그멘테이션, 가장 최근 편집부터) |
+| Shift+E | 사각형 ROI (Shift: 정사각형) | Shift+D | 다중 점 경로 길이 (더블클릭/Enter로 끝) |
+| Ctrl+C / Ctrl+V | ROI 복사 / 현재 슬라이스에 붙이기 | Ctrl+Shift+M | ROI Manager |
+| Ctrl+M | Measure (선택 ROI 통계 표) | Delete | 선택한 ROI/측정 삭제 (선택 없으면 마지막 것) |
 | F | Landmark (점 찍기) | Shift+L | Line Profile |
 | F3 | Python 콘솔 | | |
 
@@ -247,6 +266,9 @@ DabbaView/
     ├── series_tree.py       # 환자/검사/시리즈 트리, 썸네일 생성
     ├── hanging.py           # Hanging Protocol 매칭/배치
     ├── annotations.py       # 주석·Key Image 저장소 (JSON)
+    ├── roi_tools.py         # ROI 모양·통계·환자 좌표 변환·.roi.json·부피
+    ├── roi_manager.py       # ROI Manager 도크 (정량 ROI, Measure, 복사, 템플릿, Compare, Batch)
+    ├── annotation_edit.py   # 주석 선택·이동·핸들 편집·스냅·실시간 거리
     ├── roi.py               # ROI/타원/Cobb 계산
     ├── cursor_sync.py       # Crosslink 컨트롤러
     ├── mpr_viewer.py        # MPR

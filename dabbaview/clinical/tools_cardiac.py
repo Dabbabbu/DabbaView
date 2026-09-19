@@ -28,9 +28,8 @@ def last_roi_polygon(ctx, remove=False):
                    for a in np.linspace(0, 2 * math.pi, 64, endpoint=False)]
         else:
             continue
-        if remove:
-            items.remove(ann)   # 이 ROI만 (다른 주석은 그대로)
-            ctx.main._annotation_store.changed.emit()
+        if remove:   # 이 ROI만 지움 (다른 주석은 그대로, 되돌리기 가능)
+            ctx.main._annotation_store.remove(ctx.vp()._image_key(), ann.get("id"))
         return pts
     raise ValueError("현재 영상에 ROI가 없습니다. Freehand ROI(8) 또는 타원(E)으로 윤곽을 그리세요.")
 

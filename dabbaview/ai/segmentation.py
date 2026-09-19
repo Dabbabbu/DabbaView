@@ -198,6 +198,7 @@ class SegmentationController(QObject):
     """뷰포트 ↔ 마스크 편집 연결. 모든 뷰포트가 하나를 공유"""
 
     changed = pyqtSignal(str)          # 변경된 시리즈 UID (오버레이 다시 그리기)
+    edited = pyqtSignal()              # 사용자가 마스크를 고침 (되돌리기 순서 판단용)
     tool_changed = pyqtSignal(object)  # 현재 도구 (None = 세그멘테이션 끔)
     status = pyqtSignal(str)
 
@@ -239,6 +240,7 @@ class SegmentationController(QObject):
     def _edited(self, case):
         case.touch()
         self.changed.emit(case.uid)
+        self.edited.emit()
         self._save_timer.start()
 
     def save_all(self):

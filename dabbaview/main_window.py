@@ -486,6 +486,7 @@ class MainWindow(QMainWindow):
         clear_meas.triggered.connect(
             lambda: self._target_viewport().clear_measurements())
         tools_menu.addAction(clear_meas)
+        self._init_roi_actions(tools_menu)
 
         tools_menu.addSeparator()
         apply_hp = QAction("Apply Hanging Protocol", self)
@@ -505,6 +506,12 @@ class MainWindow(QMainWindow):
         self._init_process_menu(menubar)
         from .clinical.menu import install as install_clinical
         self._clinical_menu = install_clinical(self, menubar)
+        # ROI Manager: Analysis 패널과 같은 오른쪽 자리 (탭)
+        from .roi_manager import RoiManagerDock
+        self._roi_manager = RoiManagerDock(self)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._roi_manager)
+        self.tabifyDockWidget(self._analysis_dock, self._roi_manager)
+        self._roi_manager.hide()
         self._preset_menu = menubar.addMenu("&Presets")
         self._help_menu = menubar.addMenu("&Help")
         about = QAction(f"About {APP_NAME}", self)
@@ -541,7 +548,11 @@ class MainWindow(QMainWindow):
             ("Pan", V.TOOL_PAN, "2", "팬 (좌클릭 드래그)"),
             ("Zoom", V.TOOL_ZOOM, "3", "줌 (좌클릭 드래그)"),
             None,
-            ("Dist", V.TOOL_MEASURE, "4", "거리 측정 (클릭→클릭, Shift+클릭: 끝점만 다시 지정)"),
+            ("Dist", V.TOOL_MEASURE, "4",
+             "거리 측정: 클릭→클릭 또는 끌기 (Shift: 0/45/90° 스냅)\n"
+             "끝점 핸들을 끌면 수정, Select 도구에서 더블클릭 = 빠른 측정"),
+            ("Path", V.TOOL_PATH, "Shift+D",
+             "다중 점 경로: 클릭마다 점 추가 → 더블클릭/Enter로 끝, 총 길이 (Shift: 스냅)"),
             ("Angle", V.TOOL_ANGLE, "5", "각도 측정 (3점 클릭)"),
             ("Cobb", V.TOOL_COBB, "B", "Cobb 각: 첫 번째 선 드래그 → 두 번째 선 드래그"),
             None,
@@ -550,7 +561,8 @@ class MainWindow(QMainWindow):
             ("Magnify", V.TOOL_MAGNIFY, "7", "돋보기: 누르고 있는 동안 확대 (휠로 2x/3x/4x)"),
             None,
             ("ROI", V.TOOL_ROI, "8", "Freehand ROI: 면적·Mean·SD·Min·Max"),
-            ("Ellipse", V.TOOL_ELLIPSE, "E", "타원 ROI (Shift: 원): 면적·Mean·SD·Min·Max"),
+            ("Ellipse", V.TOOL_ELLIPSE, "E", "타원 ROI (Shift: 원): 면적·둘레·Mean·SD·Min·Max·Median"),
+            ("Rect", V.TOOL_RECT, "Shift+E", "사각형 ROI (Shift: 정사각형): 면적·둘레·통계"),
             ("Area", V.TOOL_AREA, "9", "Freehand 면적 측정: 면적(mm²)·둘레"),
             None,
             ("Arrow", V.TOOL_ARROW, "0", "2D 화살표: 가리킬 곳에서 누르고 드래그 → 라벨"),
@@ -1815,6 +1827,85 @@ class MainWindow(QMainWindow):
 
     def _all_viewports(self):
         return [self._viewport] + self._multi_viewport.viewports
+
+    # ─── ROI / 측정: 되돌리기·복사·설정 ───
+
+    def _init_roi_actions(self, menu):
+        """ROI Manager, Measure, 되돌리기/다시하기, ROI 복사/붙여넣기, 측정 표시 설정"""
+        from .annotation_edit import MeasureSettings
+        MeasureSettings.font_pt = self._settings.value("measure_font_pt", 10, type=int)
+        MeasureSettings.unit = self._settings.value("measure_unit", "mm", type=str) or "mm"
+        self._last_seg_edit = 0.0
+        self._seg.edited.connect(lambda: setattr(self, "_last_seg_edit", time.monotonic()))
+        menu.addSeparator()
+        entries = [
+            ("ROI Manager", "Ctrl+Shift+M", self._show_roi_manager, False),
+            ("Measure (선택 ROI 통계)", "Ctrl+M", lambda: (self._show_roi_manager(),
+                                                         self._roi_manager.measure()), False),
+            ("측정 표시 설정 (글자 크기·단위)...", "", self._measure_settings, False),
+            (None, None, None, None),
+            ("Undo (ROI·측정·세그멘테이션)", "Ctrl+Z", self._undo, True),
+            ("Redo", "Ctrl+Y", self._redo, True),
+            ("Copy ROI", "Ctrl+C", lambda: self._roi_manager.copy(), True),
+            ("Paste ROI", "Ctrl+V", lambda: self._roi_manager.paste(), True),
+        ]
+        for text, key, slot, scoped in entries:
+            if text is None:
+                menu.addSeparator()
+                continue
+            action = QAction(text, self)
+            if key:
+                keys = [QKeySequence(key)]
+                if key == "Ctrl+Y":
+                    keys.append(QKeySequence("Ctrl+Shift+Z"))
+                action.setShortcuts(keys)
+            if scoped:
+                # 영상 영역에 포커스가 있을 때만 (Python 콘솔·입력칸의 Ctrl+C/Z는 그대로)
+                action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+                self._tab_widget.addAction(action)
+            action.triggered.connect(slot)
+            menu.addAction(action)
+        # 세그멘테이션 되돌리기는 위 Undo가 순서를 보고 나눠서 처리
+        self._ai_panel.undo_action.setShortcut(QKeySequence())
+
+    def _show_roi_manager(self):
+        self._roi_manager.show()
+        self._roi_manager.raise_()
+        self._roi_manager.refresh()
+
+    def _undo(self):
+        """마지막 편집부터: ROI·측정(주석 저장소)과 세그멘테이션 중 더 최근 것"""
+        store = self._annotation_store
+        seg_newer = self._last_seg_edit > store.last_edit_time
+        if seg_newer or not store.can_undo():
+            series, _, _ = self._ai_panel.target()
+            if series is not None and self._seg.undo(series):
+                self.statusBar().showMessage("세그멘테이션 되돌리기", 2000)
+                return
+        if store.undo():
+            self.statusBar().showMessage("ROI/측정 되돌리기 (다시 하기: Ctrl+Y)", 2000)
+        else:
+            self.statusBar().showMessage("되돌릴 편집이 없습니다.", 2000)
+
+    def _redo(self):
+        if self._annotation_store.redo():
+            self.statusBar().showMessage("ROI/측정 다시 하기", 2000)
+        else:
+            self.statusBar().showMessage("다시 할 편집이 없습니다.", 2000)
+
+    def _measure_settings(self):
+        from .annotation_edit import MeasureSettings
+        from .roi_manager import MeasureSettingsDialog
+        dialog = MeasureSettingsDialog(self)
+        if dialog.exec_() != dialog.Accepted:
+            return
+        MeasureSettings.font_pt = dialog.font.value()
+        MeasureSettings.unit = dialog.unit.currentText()
+        self._settings.setValue("measure_font_pt", MeasureSettings.font_pt)
+        self._settings.setValue("measure_unit", MeasureSettings.unit)
+        for vp in self._all_viewports():
+            vp.update()
+        self._roi_manager.refresh()
 
     def _target_viewport(self):
         """이미지 조작 대상: Multi View 탭이면 활성 칸, 그 외에는 2D 뷰포트 (Stack)"""

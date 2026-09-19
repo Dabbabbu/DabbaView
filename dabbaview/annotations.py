@@ -8,9 +8,19 @@
 뷰포트들이 하나의 저장소를 공유하므로 시리즈를 바꿨다 돌아와도 주석이 남고,
 JSON 파일로 저장/불러오기 할 수 있다.
 """
+import copy
 import json
+import time
+import uuid
+from contextlib import contextmanager
 
 from PyQt5.QtCore import QObject, pyqtSignal
+
+UNDO_LIMIT = 200
+
+# 측정·ROI 종류 (ROI Manager·결과 표에서 구분)
+ROI_TYPES = ("roi", "ellipse", "rect")              # 픽셀 통계가 있는 ROI
+MEASURE_TYPES = ("distance", "path", "angle", "cobb", "area")
 
 
 FILE_FORMAT = "dabbaview-annotations"
@@ -50,6 +60,19 @@ def _from_json_annotation(ann):
     return ann
 
 
+def new_id():
+    return uuid.uuid4().hex[:12]
+
+
+def ensure_fields(ann):
+    """ROI Manager용 공통 필드: id, name, visible, locked (color는 없으면 종류 기본색)"""
+    ann.setdefault("id", new_id())
+    ann.setdefault("visible", True)
+    ann.setdefault("locked", False)
+    ann.setdefault("name", "")
+    return ann
+
+
 class AnnotationStore(QObject):
     """영상별 주석 목록 + Key Image 집합"""
 
@@ -59,36 +82,153 @@ class AnnotationStore(QObject):
         super().__init__(parent)
         self._items = {}        # key → [annotation dict]
         self._key_images = {}   # key → {"series_uid", "index", "description"}
+        self._init_history()
 
     # 주석
     def items(self, key):
         return self._items.get(key, []) if key else []
 
+    def all_items(self):
+        """[(영상 키, 주석)] 모든 영상"""
+        return [(key, ann) for key, anns in self._items.items() for ann in anns]
+
+    def find(self, ann_id):
+        """id로 (영상 키, 주석) 찾기. 없으면 (None, None)"""
+        for key, anns in self._items.items():
+            for ann in anns:
+                if ann.get("id") == ann_id:
+                    return key, ann
+        return None, None
+
     def add(self, key, ann):
         if key:
-            self._items.setdefault(key, []).append(ann)
-            self.changed.emit()
+            ensure_fields(ann)
+            with self.edit(key):
+                self._items.setdefault(key, []).append(ann)
 
-    def remove_last(self, key):
+    def update(self, ann_id, **changes):
+        """주석 필드 변경 (이름·색·표시·잠금·좌표·측정값). 바뀌었으면 True"""
+        key, ann = self.find(ann_id)
+        if ann is None:
+            return False
+        if all(ann.get(k) == v for k, v in changes.items()):
+            return False
+        with self.edit(key):
+            ann.update(changes)
+        return True
+
+    def remove(self, key, ann_id):
+        items = self._items.get(key) or []
+        for ann in items:
+            if ann.get("id") == ann_id:
+                with self.edit(key):
+                    items.remove(ann)
+                    if not items:
+                        del self._items[key]
+                return True
+        return False
+
+    def remove_last(self, key, skip_locked=True):
         items = self._items.get(key)
-        if items:
-            items.pop()
-            if not items:
-                del self._items[key]
-            self.changed.emit()
-            return True
+        if not items:
+            return False
+        for ann in reversed(items):
+            if skip_locked and ann.get("locked"):
+                continue
+            return self.remove(key, ann["id"] if "id" in ann else ensure_fields(ann)["id"])
         return False
 
     def clear_image(self, key):
-        if self._items.pop(key, None) is not None:
-            self.changed.emit()
+        if key in self._items:
+            with self.edit(key):
+                self._items.pop(key, None)
 
     def clear(self):
-        self._items.clear()
-        self.changed.emit()
+        with self.edit(*list(self._items)):
+            self._items.clear()
 
     def count(self):
         return sum(len(v) for v in self._items.values())
+
+    # 되돌리기 / 다시 하기 (영상 키 단위 스냅샷)
+    def _init_history(self):
+        if not hasattr(self, "_undo"):
+            self._undo, self._redo = [], []
+            self._group = None
+            self.last_edit_time = 0.0
+
+    @contextmanager
+    def edit(self, *keys):
+        """이 블록 안의 변경을 되돌리기 한 단계로 기록 (group() 안이면 합침)"""
+        self._init_history()
+        before = {k: copy.deepcopy(self._items.get(k)) for k in keys}
+        yield
+        after = {k: copy.deepcopy(self._items.get(k)) for k in keys}
+        if before == after:
+            return
+        if self._group is not None:
+            for k in keys:
+                self._group[0].setdefault(k, before[k])
+                self._group[1][k] = after[k]
+        else:
+            self._push(before, after)
+        self.changed.emit()
+
+    @contextmanager
+    def group(self):
+        """여러 영상에 걸친 작업(다른 슬라이스에 붙이기, 템플릿 적용 등)을 되돌리기 한 번으로"""
+        self._init_history()
+        if self._group is not None:
+            yield
+            return
+        self._group = ({}, {})
+        try:
+            yield
+        finally:
+            before, after = self._group
+            self._group = None
+            if before:
+                self._push(before, after)
+
+    def _push(self, before, after):
+        self._undo.append((before, after))
+        del self._undo[:-UNDO_LIMIT]
+        self._redo.clear()
+        self.last_edit_time = time.monotonic()
+
+    def _restore(self, state):
+        for key, anns in state.items():
+            if anns:
+                self._items[key] = copy.deepcopy(anns)
+            else:
+                self._items.pop(key, None)
+        self.changed.emit()
+
+    def can_undo(self):
+        self._init_history()
+        return bool(self._undo)
+
+    def can_redo(self):
+        self._init_history()
+        return bool(self._redo)
+
+    def undo(self):
+        self._init_history()
+        if not self._undo:
+            return False
+        before, after = self._undo.pop()
+        self._redo.append((before, after))
+        self._restore(before)
+        return True
+
+    def redo(self):
+        self._init_history()
+        if not self._redo:
+            return False
+        before, after = self._redo.pop()
+        self._undo.append((before, after))
+        self._restore(after)
+        return True
 
     # Key Image
     def is_key_image(self, key):
@@ -142,7 +282,7 @@ class AnnotationStore(QObject):
         count = 0
         for key, anns in data.get("annotations", {}).items():
             for ann in anns:
-                self._items.setdefault(key, []).append(_from_json_annotation(ann))
+                self._items.setdefault(key, []).append(ensure_fields(_from_json_annotation(ann)))
                 count += 1
         for key, info in data.get("key_images", {}).items():
             self._key_images[key] = info
