@@ -13,9 +13,9 @@ from PyQt5.QtWidgets import (
     QAction, QActionGroup, QFileDialog, QStatusBar,
     QSlider, QLabel, QProgressDialog, QMessageBox,
     QSpinBox, QApplication, QMenuBar, QTabWidget, QMenu, QStackedWidget,
-    QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy
+    QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy, QShortcut
 )
-from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings,
+from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings, QObject, QEvent,
                           QVariantAnimation, QEasingCurve, QTimer, QUrl)
 from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices
 
@@ -147,6 +147,27 @@ class DirectoryLoadWorker(QThread):
             self._paths, progress_callback=self._on_progress,
             cancel_event=self._cancel_event, placeholder_policy=self._ask_placeholders)
         self.finished_loading.emit(loader, loaded)
+
+
+_ORPHAN_THREADS = []   # 종료할 때 끝나지 않은 로더 (지우면 Qt가 비정상 종료)
+
+
+class _QuitWatcher(QObject):
+    """경고창이 떠 있는 동안 앱 종료(macOS ⌘Q · Dock 종료 = 앱에 Close 이벤트)를 가로채
+    경고창을 먼저 닫음 - 모달 창이 떠 있으면 Qt가 창을 닫지 못해 종료가 막힘"""
+
+    def __init__(self, on_quit):
+        super().__init__()
+        self._on_quit = on_quit
+
+    def eventFilter(self, obj, event):
+        if obj is QApplication.instance() and event.type() == QEvent.Close:
+            self._on_quit()
+        elif (event.type() in (QEvent.KeyPress, QEvent.ShortcutOverride) and event.key() == Qt.Key_Q
+              and event.modifiers() & Qt.ControlModifier):   # 경고창에서 ⌘Q (Qt: ⌘ = Ctrl)
+            self._on_quit()
+            return True
+        return False
 
 
 class MainWindow(QMainWindow):
@@ -477,6 +498,7 @@ class MainWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence("Ctrl+Q"))
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+        self._quit_action = quit_action
 
         # View 메뉴
         view_menu = menubar.addMenu("&View")
@@ -1078,11 +1100,33 @@ class MainWindow(QMainWindow):
                 if count else None)
         cancel = box.addButton("취소", QMessageBox.RejectRole)
         box.setDefaultButton(copy if count else go)
-        box.setEscapeButton(cancel)
+        box.setEscapeButton(cancel)   # ESC · 창 닫기 · ⌘Q(앱 종료)로 닫혀도 '취소'로 처리
+        self._cloud_box = box
+        quitting = []
+
+        def quit_now():   # ⌘Q: 경고창을 '취소'로 닫고, 경고창이 닫힌 뒤 앱 종료
+            if not quitting:
+                quitting.append(True)
+                box.reject()
+        # 메인 창의 Quit(⌘Q)과 겹치면 Qt가 둘 다 무시 → 경고창이 떠 있는 동안은 경고창의 ⌘Q만
+        main_quit = getattr(self, "_quit_action", None)
+        if main_quit is not None:
+            main_quit.setShortcut(QKeySequence())
+        QShortcut(QKeySequence("Ctrl+Q"), box, activated=quit_now)
+        watcher = _QuitWatcher(lambda: (quitting.append(True), box.reject()) if not quitting else None)
+        QApplication.instance().installEventFilter(watcher)
+        for w in [box] + box.findChildren(QWidget):
+            w.installEventFilter(watcher)
         box.show()
         box.raise_()
         box.activateWindow()
-        box.exec_()
+        try:
+            box.exec_()
+        finally:
+            QApplication.instance().removeEventFilter(watcher)
+            if main_quit is not None:
+                main_quit.setShortcut(QKeySequence("Ctrl+Q"))
+            self._cloud_box = None
         clicked = box.clickedButton()
         answer = "cancel"
         if clicked is copy:
@@ -1092,6 +1136,8 @@ class MainWindow(QMainWindow):
             answer = "download"
         elif skip is not None and clicked is skip:
             answer = "skip"
+        if quitting:
+            answer = "cancel"
         if answer == "cancel":
             worker.cancel()   # 취소 → 로더가 바로 끝나고 _on_load_finished가 진행창을 정리
         elif self._load_worker is worker and self._load_progress is progress and progress is not None:
@@ -1100,6 +1146,8 @@ class MainWindow(QMainWindow):
             if watchdog is not None:
                 watchdog.start(1000)
         worker.answer_placeholders(answer)
+        if quitting:
+            QTimer.singleShot(0, QApplication.instance().closeAllWindows)
 
     def _choose_copy_destination(self, info):
         """복사할 로컬 폴더 선택 (여유 공간 확인). 취소하면 None"""
@@ -2333,6 +2381,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Capture", f"저장하지 못했습니다:\n{filepath}")
 
     def closeEvent(self, event):
+        # 불러오는 중에 종료(⌘Q 포함): 로더를 취소하고 끝날 때까지 잠시 기다림 - 클라우드 경고창에
+        # 답을 기다리던 로더도 풀어 줌. 돌고 있는 QThread를 지우면 앱이 비정상 종료됨
+        box = getattr(self, "_cloud_box", None)
+        if box is not None:
+            box.reject()
+        worker = self._load_worker
+        if worker is not None:
+            worker.cancel()
+            worker.answer_placeholders("cancel")
+            if not worker.wait(5000):   # 클라우드 파일 읽기가 안 끝나면 창과 함께 지우지 않고 남김
+                worker.setParent(None)
+                _ORPHAN_THREADS.append(worker)
         self._library_panel.flush()  # 입력 중인 메모 저장
         self._ai_panel.shutdown()  # 편집한 마스크 저장
         self._series_tree.shutdown()
