@@ -32,6 +32,13 @@ from .ai.worklist import Worklist
 from .formats import OPEN_FILTERS
 from . import APP_NAME, GITHUB_URL, __version__
 from .about_dialog import AboutDialog
+from .analysis import colormaps
+from .analysis.console import PythonConsoleDock
+from .analysis.landmarks import LandmarkStore
+from .analysis.macros import MacroStore
+from .analysis.plots import AnalysisPlotDock
+from .analysis.processing import FILTERS
+from .analysis.tab import AnalysisTab
 from .formats.convert_dialog import ConvertDialog
 from .video_exporter import VideoExportDialog
 from .series_tree import SeriesTreeWidget
@@ -156,6 +163,19 @@ class MainWindow(QMainWindow):
         self._ai_panel = AIResearchPanel(self, self._seg, self._worklist)
         self.addDockWidget(Qt.RightDockWidgetArea, self._ai_panel)
         self._ai_panel.hide()
+        # 분석 (3D Slicer / ImageJ 스타일): 랜드마크·매크로 공유, 하단 도크 두 개(탭)
+        self._landmarks = LandmarkStore(self)
+        self._macros = MacroStore(parent=self)
+        self._plot_dock = AnalysisPlotDock(self)
+        self._console = PythonConsoleDock(self)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self._plot_dock)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self._console)
+        self.tabifyDockWidget(self._plot_dock, self._console)
+        self._plot_dock.hide()
+        self._console.hide()
+        self._analysis_tab = AnalysisTab(self, self._ai_panel)
+        self._ai_panel.tabs.addTab(self._analysis_tab, "📊 Analysis")
+        self._labels.changed.connect(self._analysis_tab._fill_labels)
         self._create_image_actions()
         self._init_menubar()
         self._init_toolbar()
@@ -408,6 +428,7 @@ class MainWindow(QMainWindow):
 
         tools_menu.addAction(self._act_anonymize)
         tools_menu.addAction(self._act_ai)
+        tools_menu.addAction(self._act_console)
 
         tools_menu.addSeparator()
 
@@ -431,6 +452,7 @@ class MainWindow(QMainWindow):
         file_menu.insertAction(export_video_action, self._act_capture)
 
         # Window presets 메뉴 (설정에서 추가/편집/삭제, 열 때마다 새로 구성)
+        self._init_process_menu(menubar)
         self._preset_menu = menubar.addMenu("&Presets")
         self._help_menu = menubar.addMenu("&Help")
         about = QAction(f"About {APP_NAME}", self)
@@ -481,6 +503,12 @@ class MainWindow(QMainWindow):
             None,
             ("Arrow", V.TOOL_ARROW, "0", "2D 화살표: 가리킬 곳에서 누르고 드래그 → 라벨"),
             ("Text", V.TOOL_TEXT, "A", "텍스트 메모: 클릭 → 내용·크기·색상"),
+            None,
+            ("📍 Landmark", V.TOOL_LANDMARK, "F",
+             "랜드마크/Fiducial: 클릭한 위치(환자 좌표 mm)에 점 추가\n"
+             "AI 패널 → Analysis → Landmarks에서 이름·내보내기(CSV/JSON)"),
+            ("Profile", V.TOOL_PROFILE, "Shift+L",
+             "라인 프로파일: 드래그한 선을 따라 픽셀 값 그래프 (하단 패널)"),
         ]
         self._tool_actions = {}
         for entry in tools:
@@ -640,6 +668,13 @@ class MainWindow(QMainWindow):
         self._act_maximize = make("Maximize Viewport", "Space",
                                   "Multi View: 선택한 칸만 크게 ↔ 원래 배치",
                                   self._toggle_maximize)
+        self._act_console = self._console.toggleViewAction()
+        self._act_console.setText("🐍 Python Console")
+        self._act_console.setShortcut(QKeySequence("F3"))
+        self._act_console.setToolTip("Python 콘솔 (F3): app.current_array 등으로 분석")
+        self._act_plots = self._plot_dock.toggleViewAction()
+        self._act_plots.setText("📊 Histogram / Profile")
+        self._act_plots.setToolTip("히스토그램 · 라인 프로파일 패널")
         self._act_ai = self._ai_panel.toggleViewAction()
         self._act_ai.setText("🧠 AI")
         self._act_ai.setShortcut(QKeySequence("Ctrl+Shift+A"))
@@ -984,6 +1019,119 @@ class MainWindow(QMainWindow):
         self._tab_widget.setCurrentWidget(self._volume_widget)
         return notes
 
+    # ─── Process 메뉴 / 분석 ───
+
+    def _init_process_menu(self, menubar):
+        menu = menubar.addMenu("P&rocess")
+        groups = (("gaussian", "median", "unsharp"), ("sobel", "canny"),
+                  ("erosion", "dilation", "opening", "closing"))
+        filters = menu.addMenu("Filters (→ 새 시리즈)")
+        for i, group in enumerate(groups):
+            if i:
+                filters.addSeparator()
+            for key in group:
+                action = filters.addAction(FILTERS[key][0] + "...")
+                action.triggered.connect(lambda _=False, k=key: self._open_filter(k))
+        menu.addSeparator()
+        menu.addAction(self._act_plots)
+        hist = menu.addAction("Histogram")
+        hist.triggered.connect(lambda: (self._plot_dock.show(), self._plot_dock.raise_(),
+                                        self._plot_dock.tabs.setCurrentIndex(0),
+                                        self._plot_dock.refresh_histogram()))
+        profile = menu.addAction("Line Profile 도구 (Shift+L)")
+        profile.triggered.connect(lambda: self.select_tool_by_id("profile"))
+        menu.addSeparator()
+        for text, key in (("Analyze Particles...", "particles"),
+                          ("Surface Model (Marching Cubes)...", "surface"),
+                          ("Image Registration...", "registration"),
+                          ("Image Fusion...", "fusion"),
+                          ("Landmarks / Fiducials...", "landmarks")):
+            action = menu.addAction(text)
+            action.triggered.connect(lambda _=False, k=key: self.show_analysis(k))
+        menu.addSeparator()
+        self._colormap_menu = menu.addMenu("Color Map (LUT)")
+        self.rebuild_colormap_menu()
+        menu.addSeparator()
+        menu.addAction(self._act_console)
+        self._macro_menu = menu.addMenu("Macros")
+        self._macros.changed.connect(self._rebuild_macro_menu)
+        self._rebuild_macro_menu()
+
+    def _open_filter(self, key):
+        from .analysis.process_dialog import FilterDialog
+        vp = self._target_viewport()
+        if vp.series is None:
+            QMessageBox.information(self, "Process", "시리즈를 먼저 여세요.")
+            return
+        if any(a is not None and a.ndim != 2 for a in [vp.series.get_pixel_array(0)]):
+            QMessageBox.information(self, "Process", "흑백 영상에만 적용할 수 있습니다.")
+            return
+        FilterDialog(self, key).exec_()
+
+    def show_analysis(self, section):
+        self._ai_panel.show()
+        self._ai_panel.raise_()
+        self._ai_panel.tabs.setCurrentWidget(self._analysis_tab)
+        self._analysis_tab.show_section(section)
+
+    def select_tool_by_id(self, name):
+        V = DicomViewport
+        tool = {"landmark": V.TOOL_LANDMARK, "profile": V.TOOL_PROFILE}[name]
+        action = self._tool_actions.get(tool)
+        if action is not None:
+            action.trigger()
+
+    def rebuild_colormap_menu(self):
+        menu = self._colormap_menu
+        menu.clear()
+        current = self._target_viewport().colormap_name
+        for name in colormaps.names():
+            action = menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name == current)
+            action.triggered.connect(lambda _=False, n=name: self.apply_colormap(n))
+        menu.addSeparator()
+        load = menu.addAction("LUT 파일 불러오기...")
+        load.triggered.connect(lambda: self.show_analysis("colormap")
+                               or self._analysis_tab._load_lut())
+
+    def apply_colormap(self, name):
+        try:
+            lut = colormaps.get_lut(name)
+        except (KeyError, ValueError):
+            return
+        self._target_viewport().set_colormap(name, lut)
+        self._analysis_tab.sync_colormap(name)
+        self.rebuild_colormap_menu()
+        self._statusbar.showMessage(f"Color Map: {name}", 3000)
+
+    def _rebuild_macro_menu(self):
+        menu = self._macro_menu
+        menu.clear()
+        for name in self._macros.names():
+            action = menu.addAction(name)
+            action.triggered.connect(lambda _=False, n=name: (
+                self._console.show(),
+                self._console.execute(self._macros.load(n), label=f"[매크로] {n}")))
+        menu.addSeparator()
+        manage = menu.addAction("매크로 관리...")
+        manage.triggered.connect(lambda: self.show_analysis("macros"))
+
+    def add_derived_series(self, series, select=True):
+        """처리·정합·콘솔 결과 시리즈를 목록에 추가"""
+        self._loader.series_dict[series.series_uid] = series
+        current = self._current_series
+        keep = current.series_uid if current is not None else None
+        self._update_series_list(select_uid=series.series_uid if select else keep)
+        self._analysis_tab.refresh_series()
+        self._statusbar.showMessage(f"새 시리즈: {series.description}", 6000)
+
+    def _on_any_slice_changed(self, *_):
+        dock = self._plot_dock
+        if dock.isVisible() and dock.tabs.currentIndex() == 0 and \
+                dock._source.currentIndex() in (0, 2):
+            dock.refresh_histogram()
+
     def _open_deploy_web(self):
         from .deploy_web import DeployWebDialog
         DeployWebDialog(self._app_settings, self).exec_()
@@ -1018,6 +1166,7 @@ class MainWindow(QMainWindow):
         if series is not None:
             self._select_series(series)
         self._ai_panel._rebuild_worklist()  # 불러온 케이스 표시 갱신
+        self._analysis_tab.refresh_series()
 
     def _on_series_highlighted(self, uid):
         """패널/트리에서 누름·방향키: 선택 표시만 (로드는 클릭을 뗄 때)"""
@@ -1157,6 +1306,9 @@ class MainWindow(QMainWindow):
             vp.set_mouse_bindings(self._app_settings.mouse)
             vp.set_annotation_store(self._annotation_store)
             vp.set_segmentation(self._seg)
+            vp.set_landmark_store(self._landmarks)
+            vp.profile_measured.connect(self._plot_dock.show_profile)
+            vp.slice_changed.connect(self._on_any_slice_changed)
         self._tile_view.set_annotation_store(self._annotation_store)
 
     # ─── 레이아웃 / Hanging Protocol ───

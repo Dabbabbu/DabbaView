@@ -88,6 +88,23 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 
 > NIfTI/NumPy/PNG/COCO/VOC에는 환자 정보가 들어가지 않습니다. DICOM SEG는 원본 검사를 참조하므로 환자 정보가 포함됩니다.
 
+### 분석 (3D Slicer · ImageJ/Fiji 스타일)
+AI Research 패널의 **📊 Analysis** 탭, **Process** 메뉴, 하단 **Histogram / Profile** · **Python Console(F3)** 패널.
+
+| 기능 | 내용 |
+|---|---|
+| Image Registration | 두 시리즈 선택 → Rigid / Affine (SimpleITK, Mutual Information · Mean Squares · Correlation, 다해상도). 결과는 기준 격자에 맞춘 새 시리즈 + 자동 융합 표시. 변환 `.tfm` 저장/불러오기 |
+| Image Fusion | 기준 시리즈 위에 다른 시리즈를 컬러로 (예: CT 흑백 + PET Hot). 환자 좌표로 다시 샘플링하므로 해상도·방향이 달라도 겹침. 투명도, Overlay / Add / Multiply / Checkerboard, 컬러바 |
+| Landmarks | Landmark 도구(**F**)로 점 찍기 → 이름·라벨 편집, 환자 좌표(mm) CSV / 3D Slicer `.mrk.json` 내보내기·불러오기, 같은 좌표계의 모든 시리즈와 3D 뷰에 표시 |
+| Surface Model | AI 세그멘테이션 라벨 → Marching Cubes → 스무딩·데시메이션 → 3D 뷰, STL/OBJ/PLY 내보내기, 표면적·부피 |
+| Filters (Process) | Gaussian, Median, Unsharp Mask, Sobel, Canny, Erosion/Dilation/Opening/Closing — 2D(슬라이스별) 또는 3D, 미리보기, **결과는 새 시리즈** (원본 보존) |
+| Histogram | 현재 슬라이스 / 전체 볼륨 / ROI / AI 라벨 영역, Mean·StdDev·Min·Max·Median·Mode, log, CSV |
+| Line Profile | Profile 도구(**Shift+L**)로 선을 그으면 거리(mm)별 값 그래프, CSV |
+| Particle Analysis | 임계값 범위 또는 AI 라벨 → 객체별 면적·둘레·원형도·중심 좌표, 결과 표 + CSV |
+| Color Map | Gray, Hot, Cool, Jet, Viridis, Magma, Inferno, Plasma, Bone, Rainbow, Fire + ImageJ `.lut`/텍스트 LUT, 컬러바 |
+| Python Console (F3) | `app.current_array`, `app.current_image`, `app.mask`, `app.add_series(배열, "이름")`, `np`, `ndi`, `plt`, `skimage` — plt 그래프는 콘솔 오른쪽에 표시, 구문 강조, 스크립트 열기/저장 |
+| Macros | 콘솔 스크립트를 매크로로 저장 → 원클릭 실행 (Process → Macros). 예제: Otsu → 입자 분석, Gaussian → 새 시리즈, 볼륨 통계, 라벨별 부피, MIP |
+
 ## 마우스 조작 (PACS 표준, Settings에서 변경 가능)
 
 | 조작 | 기능 |
@@ -132,6 +149,8 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 | F2 | 시리즈 패널 접기/펼치기 | ⌘, (macOS) | Settings (Windows는 File → Settings) |
 | Ctrl+Shift+A | AI Research 패널 | D / X | 세그멘테이션 Brush / Eraser |
 | W / G | Magic Wand / Threshold | Ctrl+Z | 세그멘테이션 되돌리기 |
+| F | Landmark (점 찍기) | Shift+L | Line Profile |
+| F3 | Python 콘솔 | | |
 
 ## 설정 (File → Settings, macOS ⌘,)
 - **Mouse**: 버튼·휠·더블클릭 동작 매핑
@@ -213,6 +232,19 @@ DabbaView/
     ├── about_dialog.py      # Help → About
     ├── deploy_web.py        # Help → Deploy Web (GitHub Actions)
     ├── net_ssl.py           # HTTPS 인증서 (certifi)
+    ├── analysis/            # 3D Slicer · ImageJ 스타일 분석
+    │   ├── processing.py    # 필터 (Gaussian, Median, Unsharp, Sobel, Canny, Morphology)
+    │   ├── measure.py       # 히스토그램 통계, 라인 프로파일, 입자 분석
+    │   ├── registration.py  # SimpleITK 정합
+    │   ├── fusion.py        # 영상 융합
+    │   ├── surface.py       # Marching Cubes 표면 모델
+    │   ├── landmarks.py     # 랜드마크 (Slicer Markups JSON)
+    │   ├── colormaps.py     # 컬러맵 / LUT
+    │   ├── console.py       # Python 콘솔
+    │   ├── macros.py        # 매크로
+    │   ├── plots.py         # Histogram / Profile 패널
+    │   ├── process_dialog.py
+    │   └── tab.py           # AI 패널 Analysis 탭
     ├── formats/             # DICOM 외 포맷
     │   ├── readers.py       # NIfTI/NRRD/MetaImage/NumPy/이미지 → 시리즈
     │   ├── volume_series.py # 메모리 볼륨을 DICOM 시리즈처럼
