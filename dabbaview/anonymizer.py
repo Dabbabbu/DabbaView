@@ -44,7 +44,8 @@ CATEGORIES = [
           ("OtherPatientIDsSequence", DELETE), ("PatientBirthName", DELETE),
           ("MedicalRecordLocator", DELETE), ("PatientInsurancePlanCodeSequence", DELETE),
           ("MilitaryRank", DELETE), ("PatientComments", DELETE),
-          ("IssuerOfPatientID", DELETE)]),
+          ("IssuerOfPatientID", DELETE), ("AdmissionID", DELETE),
+          ("IssuerOfAdmissionID", DELETE), ("PatientAccountNumber", DELETE)]),
     ]),
     ("institution", "기관정보", [
         ("institution", "병원명 (InstitutionName/Address)",
@@ -56,7 +57,11 @@ CATEGORIES = [
           ("NameOfPhysiciansReadingStudy", DELETE), ("RequestingPhysician", DELETE),
           ("ReferringPhysicianAddress", DELETE),
           ("ReferringPhysicianTelephoneNumbers", DELETE)]),
-        ("accession", "Accession Number", [("AccessionNumber", EMPTY)]),
+        ("accession", "Accession Number · 오더 정보",
+         [("AccessionNumber", EMPTY), ("StudyID", EMPTY), ("RequestedProcedureID", DELETE),
+          ("PerformedProcedureStepID", DELETE), ("ScheduledProcedureStepID", DELETE),
+          ("RequestAttributesSequence", DELETE), ("ReferencedStudySequence", DELETE),
+          ("ReferencedPatientSequence", DELETE)]),
     ]),
     ("study", "검사정보", [
         ("study_desc", "Study Description",
@@ -93,6 +98,9 @@ _ITEM_TAGS = {item: tags for _, _, items in CATEGORIES for item, _, tags in item
 
 UID_TAGS = ("StudyInstanceUID", "SeriesInstanceUID", "SOPInstanceUID",
             "FrameOfReferenceUID")
+# 시퀀스 안에서 원본 영상·검사를 가리키는 UID (새 UID로 바꿀 때 함께 바꿔 연결 유지)
+REFERENCE_UID_TAGS = UID_TAGS + ("ReferencedSOPInstanceUID", "ReferencedFrameOfReferenceUID",
+                                 "RelatedFrameOfReferenceUID")
 
 
 def _items_of(*categories):
@@ -166,21 +174,14 @@ def anonymize_dataset(ds, options=None, uid_mapper=None, **kwargs):
     if options is None:
         options = AnonymizeOptions(**kwargs)
     ds_anon = copy.deepcopy(ds)
-
-    for _, keyword, action, _, new in options.planned_changes(ds_anon):
-        if action == DELETE:
-            del ds_anon[keyword]
-        else:
-            setattr(ds_anon, keyword, new)
+    _apply(ds_anon, options)       # 최상위 + 시퀀스 안 (오더·참조 정보에 환자 식별자가 들어 있을 수 있음)
 
     if options.remove_private:
         ds_anon.remove_private_tags()
 
     if options.new_uids:
         mapper = uid_mapper or UIDMapper()
-        for keyword in UID_TAGS:
-            if keyword in ds_anon:
-                setattr(ds_anon, keyword, mapper(getattr(ds_anon, keyword)))
+        _map_uids(ds_anon, mapper)
         meta = getattr(ds_anon, "file_meta", None)
         if meta is not None and "MediaStorageSOPInstanceUID" in meta \
                 and "SOPInstanceUID" in ds_anon:
@@ -189,6 +190,34 @@ def anonymize_dataset(ds, options=None, uid_mapper=None, **kwargs):
     if options.items or options.remove_private:
         ds_anon.PatientIdentityRemoved = "YES"
     return ds_anon
+
+
+def _apply(dataset, options, depth=0):
+    for _, keyword, action, _, new in options.planned_changes(dataset):
+        if action == DELETE:
+            del dataset[keyword]
+        else:
+            setattr(dataset, keyword, new)
+    if depth > 8:
+        return
+    for elem in list(dataset):
+        if elem.VR == "SQ" and elem.tag in dataset:
+            for item in elem.value:
+                _apply(item, options, depth + 1)
+                if options.remove_private:
+                    item.remove_private_tags()
+
+
+def _map_uids(dataset, mapper, depth=0):
+    for keyword in REFERENCE_UID_TAGS:
+        if keyword in dataset and getattr(dataset, keyword):
+            setattr(dataset, keyword, mapper(getattr(dataset, keyword)))
+    if depth > 8:
+        return
+    for elem in dataset:
+        if elem.VR == "SQ":
+            for item in elem.value:
+                _map_uids(item, mapper, depth + 1)
 
 
 def anonymize_file(input_path, output_path, **kwargs):

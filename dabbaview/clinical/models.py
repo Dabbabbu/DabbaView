@@ -197,7 +197,10 @@ def upslope(t, curve, window=3):
     half = window // 2
     padded = np.pad(c, (half, window - 1 - half), mode="edge")   # 0으로 채우면 끝에서 가짜 기울기
     y = np.convolve(padded, np.ones(window) / window, mode="valid")
-    return float(np.max(np.gradient(y, np.asarray(t, dtype=np.float64))))
+    t = np.asarray(t, dtype=np.float64)
+    if len(t) < 2 or np.any(np.diff(t) <= 0):     # 시간이 같거나 거꾸로면 프레임 번호 기준
+        t = np.arange(len(y), dtype=np.float64)
+    return float(np.max(np.gradient(y, t)))
 
 
 def signal_to_delta_r2(signals, te_ms, baseline_frames):

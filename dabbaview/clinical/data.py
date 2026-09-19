@@ -123,6 +123,12 @@ def build_stack(series_list, kind, values_override=None, relative_time=True):
                  int(getattr(ds, "InstanceNumber", i) or i)))
     if not groups:
         raise ValueError("영상이 없습니다.")
+    if kind == "b" and values_override is None:
+        # GE 등: b0 영상에는 b-value 태그가 없고 나머지에만 있는 경우 → 위치마다 하나뿐인 빈 값 = b0
+        if all(sum(v is None for v, *_ in items) == 1 and any(v is not None for v, *_ in items)
+               for items in groups.values()):
+            groups = {pos: [(0.0 if v is None else v, *rest) for v, *rest in items]
+                      for pos, items in groups.items()}
     positions = sorted(groups)
     counts = {len(v) for v in groups.values()}
     if len(counts) != 1:
@@ -167,6 +173,8 @@ def build_stack(series_list, kind, values_override=None, relative_time=True):
 def detect(series, kind):
     """시리즈에서 kind 파라미터 값 목록 (중복 제거·정렬), 없으면 []"""
     values = {slice_param(ds, kind) for ds in series.slices}
+    if kind == "b" and None in values and len(values) > 1:
+        values.add(0.0)      # b0 영상에 태그가 없는 경우 (build_stack과 같은 규칙)
     values.discard(None)
     return sorted(values)
 
