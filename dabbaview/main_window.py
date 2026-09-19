@@ -223,15 +223,39 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         self._splitter = splitter
 
-        # ─── 왼쪽 패널: 시리즈 목록 ───
+        # ─── 왼쪽 패널: Series | Library 탭 ───
         left_panel = QWidget()
         self._left_panel = left_panel
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(4, 4, 4, 4)
+        outer_layout = QVBoxLayout(left_panel)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        self._left_tabs = QTabWidget()
+        self._left_tabs.setDocumentMode(True)
+        self._left_tabs.setStyleSheet(
+            "QTabBar::tab { background: #232323; color: #aaa; padding: 5px 16px; border: none; }"
+            "QTabBar::tab:selected { background: #333; color: #fff;"
+            " border-bottom: 2px solid #3d8bfd; }"
+            "QTabBar::tab:hover { color: #ddd; }")
+        outer_layout.addWidget(self._left_tabs)
+        series_page = QWidget()
+        left_layout = QVBoxLayout(series_page)
+        left_layout.setContentsMargins(0, 4, 0, 0)
+        self._left_tabs.addTab(series_page, "Series")
+        # 스터디 라이브러리 (즐겨찾기·컬렉션·메모·태그, library.json)
+        from .library import LibraryStore
+        from .library_panel import LibraryPanel
+        self._library = LibraryStore(parent=self)
+        self._library_panel = LibraryPanel(self._library)
+        self._library_panel.open_requested.connect(self._open_library_study)
+        self._left_tabs.addTab(self._library_panel, "★ Library")
+        self._act_library_add = QAction("☆ Library", self)
+        self._act_library_add.setShortcut(QKeySequence("Ctrl+D"))
+        self._act_library_add.setToolTip("현재 스터디를 Library(즐겨찾기)에 추가 (Ctrl+D)")
+        self._act_library_add.triggered.connect(self._add_current_study_to_library)
+        self.addAction(self._act_library_add)
+        self._library.changed.connect(self._update_library_star)
 
         # 상단: 레이아웃 선택 (INFINITT 방식) + 보기 전환
         header = QHBoxLayout()
-        header.addWidget(QLabel("Series"))
         header.addStretch()
         self._layout_combo = QComboBox()
         self._layout_combo.addItems(["2D", "1X1", "1X2", "2X2", "3X3", "Default", "ALL"])
@@ -374,6 +398,15 @@ class MainWindow(QMainWindow):
         open_dir.setShortcut(QKeySequence("Ctrl+Shift+O"))
         open_dir.triggered.connect(self._open_directory)
         file_menu.addAction(open_dir)
+        file_menu.addSeparator()
+        library_add = QAction("★ Add to Library (현재 스터디)", self)
+        library_add.setShortcut(QKeySequence("Ctrl+D"))
+        library_add.setShortcutContext(Qt.WidgetShortcut)   # 실제 단축키는 창 액션이 처리 (중복 방지)
+        library_add.triggered.connect(self._add_current_study_to_library)
+        file_menu.addAction(library_add)
+        show_library = QAction("Library 보기", self)
+        show_library.triggered.connect(lambda: self._left_tabs.setCurrentWidget(self._library_panel))
+        file_menu.addAction(show_library)
         file_menu.addSeparator()
         for action in cloud_actions:
             file_menu.addAction(action)
@@ -688,9 +721,9 @@ class MainWindow(QMainWindow):
         output_bar = QToolBar("Output")
         output_bar.setMovable(False)
         self.addToolBar(output_bar)
-        for action in (self._act_reading, self._act_capture, self._act_image_panel,
-                       self._act_anonymize, self._act_ai, self._act_send, self._act_print,
-                       self._act_settings):
+        for action in (self._act_library_add, self._act_reading, self._act_capture,
+                       self._act_image_panel, self._act_anonymize, self._act_ai, self._act_send,
+                       self._act_print, self._act_settings):
             output_bar.addAction(action)
         output_bar.addSeparator()
 
@@ -1571,8 +1604,67 @@ class MainWindow(QMainWindow):
         self._series_stack.setCurrentWidget(self._series_tree if tree else self._series_panel)
         self._view_toggle.setText("▦" if tree else "☰")
 
+    # ─── 스터디 라이브러리 ───
+
+    def _add_current_study_to_library(self):
+        """현재 스터디를 Library에 추가 (이미 있으면 폴더·정보만 갱신)"""
+        from .library import study_info
+        series = self._current_series
+        if series is None:
+            self._statusbar.showMessage("먼저 영상을 여세요.", 4000)
+            return
+        if not series.study_uid:
+            self._statusbar.showMessage("이 시리즈에는 StudyInstanceUID가 없어 Library에 넣을 수 없습니다.", 5000)
+            return
+        info = study_info(self._loader.get_series_list(), series.study_uid)
+        entry, created = self._library.add_study(info)
+        self._statusbar.showMessage(
+            ("★ Library에 추가" if created else "★ 이미 Library에 있음 — 정보 갱신")
+            + f": {entry.get('patient_name', '')} {entry.get('study_date', '')} "
+              f"{entry.get('description', '')}  (Library 탭에서 컬렉션·메모·태그)", 6000)
+        self._library_panel.select_study(series.study_uid)
+
+    def _update_library_star(self, *_args):
+        series = self._current_series
+        in_library = bool(series is not None and series.study_uid
+                          and self._library.get(series.study_uid))
+        self._act_library_add.setText("★ Library" if in_library else "☆ Library")
+
+    def _open_library_study(self, study_uid):
+        """Library에서 열기: 이미 불러온 스터디면 바로 선택, 아니면 폴더를 불러옴"""
+        entry = self._library.get(study_uid)
+        if entry is None:
+            return
+        loaded = [s for s in self._loader.get_series_list() if s.study_uid == study_uid]
+        if loaded:
+            loaded.sort(key=lambda s: (s.series_number is None, s.series_number or 0))
+            first = next((s for s in loaded if s.series_uid == entry.get("first_series_uid")), loaded[0])
+            self._select_series(first)
+            self._left_tabs.setCurrentIndex(0)
+            return
+        folder = entry.get("folder", "")
+        paths = [p for p in entry.get("paths") or [] if os.path.isdir(p)]
+        if paths:   # 이 스터디가 있는 폴더들만 (공통 상위 폴더의 다른 검사는 불러오지 않음)
+            self._pending_select_uid = entry.get("first_series_uid")
+            self._left_tabs.setCurrentIndex(0)
+            self.load_paths(paths)
+            return
+        if not folder or not os.path.isdir(folder):
+            if QMessageBox.question(
+                    self, "Library", f"폴더를 찾을 수 없습니다 (옮겼거나 지웠을 수 있음):\n{folder}\n\n"
+                    "새 위치를 지정할까요?") != QMessageBox.Yes:
+                return
+            folder = QFileDialog.getExistingDirectory(self, "스터디 폴더 위치")
+            if not folder:
+                return
+            self._library.add_study({"study_uid": study_uid, "folder": folder, "paths": [folder]})
+        self._pending_select_uid = entry.get("first_series_uid")
+        self._left_tabs.setCurrentIndex(0)
+        self.load_paths([folder])
+
     def _select_series(self, series):
         self._current_series = series
+        self._update_library_star()
         # 썸네일 패널과 트리의 선택 표시를 맞춤 (시그널 없이)
         self._series_panel.select_uid(series.series_uid)
         self._series_tree.select_uid(series.series_uid)
@@ -2017,6 +2109,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Capture", f"저장하지 못했습니다:\n{filepath}")
 
     def closeEvent(self, event):
+        self._library_panel.flush()  # 입력 중인 메모 저장
         self._ai_panel.shutdown()  # 편집한 마스크 저장
         self._series_tree.shutdown()
         self._series_panel.shutdown()
