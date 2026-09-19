@@ -17,14 +17,7 @@ from collections import OrderedDict
 
 import numpy as np
 
-try:
-    import onnxruntime as ort
-    try:
-        ort.disable_telemetry_events()
-    except Exception:  # noqa: BLE001
-        pass
-except ImportError:  # pragma: no cover
-    ort = None
+from .onnx_infer import ONNX_AVAILABLE, load_ort
 
 SIZE = 1024
 _MEAN = np.array([123.675, 116.28, 103.53], dtype=np.float32)
@@ -44,8 +37,9 @@ def _resize(img, shape, linear=True):
 
 class SamSegmenter:
     def __init__(self, encoder_path, decoder_path, mode="medsam"):
-        if ort is None:
+        if not ONNX_AVAILABLE:
             raise SamError("onnxruntime이 없습니다.")
+        ort = load_ort()
         try:
             self.encoder = ort.InferenceSession(encoder_path, providers=["CPUExecutionProvider"])
             self.decoder = ort.InferenceSession(decoder_path, providers=["CPUExecutionProvider"])
