@@ -59,7 +59,7 @@ macOS(.app)와 Windows(.exe)로 빌드됩니다.
 
 ### Reading (기록) — R
 - INFINITT 기록 창 형태: 제목(모달리티, 환자명, ID, 성별, 검사일시, Study Description, Body Part, 임상정보), 기록 편집기(`====== [Conclusion] =======`로 결론 구분), Creator / Approver / Approver2 / My Comment, Study Comment · Exam Date(상태) · Report Date
-- 버튼: Edit, Import, Copy, Print, Save, Approve, Close — 저장하면 StudyInstanceUID별 JSON (이 컴퓨터의 앱 데이터 폴더), 다시 열면 불러옴
+- 버튼: Edit, Import, **JSON 열기 / JSON 저장**, Copy, Print, Save, Approve, Close — Save하면 StudyInstanceUID별 JSON (이 컴퓨터의 앱 데이터 폴더), 다시 열면 불러옴. JSON 저장/열기로 원하는 위치의 파일과 주고받기 (다른 환자·검사의 JSON이면 확인)
 - **Import**: .txt(UTF-8/CP949) · .rtf → 본문에 삽입, .jpg/.png/.bmp/.tiff/.pdf → 이미지 탭(확대/축소), DICOM SR(.dcm) → 텍스트 추출. 파일명에 다른 환자 ID가 있으면 경고
 - **기록 폴더 감시** (Settings → Reading): 새 파일을 파일명·폴더명의 PatientID + 검사일(YYYYMMDD)로 자동 연결, DICOM SR은 StudyInstanceUID로 연결. 예: `1234567_20260917_report.txt`
 - Series 탭: 검사의 시리즈 목록과 시퀀스 파라미터 요약
@@ -112,7 +112,7 @@ AI Research 패널의 **📊 Analysis** 탭, **Process** 메뉴, 하단 **Histog
 | 좌클릭 드래그 | 선택한 도구 (기본: Selector = 선택만) |
 | **우클릭 드래그** | **항상 W/L** (좌우 = Width, 상하 = Level) |
 | **가운데 버튼 드래그** | **항상 Pan** |
-| Ctrl(⌘) + 좌클릭 드래그 | **ROI 자동 W/L**: 사각형을 그리면 그 영역으로 W/L 설정 (Min–Max 또는 Mean±2SD, Settings에서 선택) |
+| Ctrl(⌘) + 좌클릭 드래그 | **ROI 자동 W/L**: 사각형을 그리면 그 영역으로 W/L 설정 (기본 Mean±2SD, Settings에서 Min–Max로 변경 가능) |
 | Alt(⌥) + 좌클릭 드래그 | Pan (도구 무관) |
 | 휠 | 슬라이스 이동 (위 = 이전, 아래 = 다음) |
 | Shift + 휠 | 5장씩 빠르게 이동 |
