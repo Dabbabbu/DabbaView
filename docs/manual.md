@@ -2,7 +2,10 @@
 
 버전 2.0.0 · macOS / Windows
 
-> 이 매뉴얼의 화면은 설치된 DabbaView 2.0.0을 실제로 실행해서 찍었습니다. 예시 영상은 합성 CT 팬텀(`DEMO^PHANTOM`)과 합성 MR 데이터라 개인정보가 없습니다.
+> 이 매뉴얼의 화면은 설치된 DabbaView 2.0.0을 실제로 실행해서 찍었습니다.
+> - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
+> - 모두 DabbaView 익명화 기능으로 환자 이름·ID·생년월일·기관·검사일·오더 정보를 지운 사본입니다 (`CMR^CASE-A`, 검사일 2026-01-01).
+> - 몇몇 대화상자 화면은 합성 팬텀(`DEMO^PHANTOM`)으로 찍었습니다.
 >
 > ⚠️ DabbaView는 진단용으로 인증된 의료기기가 아닙니다. 학습·연구·참고용으로 사용하세요.
 
@@ -86,7 +89,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 > 손상되었거나 지원하지 않는 파일은 건너뛰고 오른쪽 아래 **⚠ 로딩 실패** 버튼에 목록으로 남깁니다. OneDrive·Google Drive 동기화 폴더는 "로컬로 복사 후 열기 / 다운로드하며 열기" 중에서 고를 수 있습니다.
 
-![불러온 화면](images/m03_loaded.jpg)
+![불러온 화면 — 심장 MRI SAX cine](images/m03_loaded.jpg)
 
 ## 4. 시리즈 패널
 
@@ -95,6 +98,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 | ![시리즈 패널](images/m04_series_panel.png) | ![트리](images/m05_series_tree.png) |
 
 1. 불러온 영상은 **환자 → 검사 → 시리즈** 순으로 묶여 보입니다. 카드에는 중간 슬라이스 썸네일과 `시리즈번호/총장수`가 나옵니다.
+   - 예: 심장 MRI 한 검사 = SAX CINE (270장), SAx T2 DIR, T1 Map, T2Map, Perfusion, 4CH/2CH CINE, PSMDE (LGE)
 2. 카드를 클릭하면 그 시리즈가 2D View에 뜹니다. 선택된 카드는 노란 테두리로 표시됩니다.
 3. 카드를 **Multi View의 칸으로 끌어다 놓으면** 그 칸에 표시됩니다.
 4. **☰** 버튼으로 트리 보기로 바꿉니다. **F2** 또는 패널 옆 ◀ 버튼으로 패널을 접을 수 있습니다.
@@ -104,22 +108,23 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 ## 5. 2D View
 
-![2D View (폐 창)](images/m06_2d_lung.jpg)
+![2D View — 4CH cine](images/m06_2d_view.jpg)
 
-1. 영상 위에서 **휠**을 굴리면 슬라이스가 넘어갑니다. 위쪽 **Slice** 슬라이더를 끌어도 됩니다.
+1. 영상 위에서 **휠**을 굴리면 슬라이스(cine은 위상)가 넘어갑니다. 위쪽 **Slice** 슬라이더를 끌어도 됩니다.
+   - cine은 **P**(또는 ▶ Play)로 재생하고 FPS를 조절합니다.
 2. **우클릭 드래그**로 W/L을 바꿉니다 (좌우 = Width, 상하 = Level).
 3. **가운데 버튼 드래그**로 이동하고, **Ctrl(⌘)+휠**로 확대합니다.
 4. 네 모서리 오버레이에 환자·검사·시리즈·획득 정보가 나옵니다. **T** 키로 켜고 끕니다.
-5. **▦ Tile** (Shift+T)을 누르면 여러 슬라이스를 격자로 봅니다. 격자 크기는 옆의 `4x` 목록에서 고릅니다.
+5. **▦ Tile** (Shift+T)을 누르면 여러 영상을 격자로 봅니다. 아래 예는 SAX cine의 연속 위상입니다. 격자 크기는 옆의 `4x` 목록에서 고릅니다.
 
 ![Tile 모드](images/m07_tile.jpg)
 
 ## 6. Multi View
 
-![Multi View 2x2](images/m08_multiview.jpg)
+![Multi View 2x2 — SAX cine · 4CH · 2CH · LGE](images/m08_multiview.jpg)
 
 1. 위쪽 **Multi View** 탭을 누르거나 레이아웃 목록에서 `1X1` ~ `4X4`를 고릅니다.
-2. 왼쪽 시리즈 카드를 원하는 칸으로 끌어다 놓습니다.
+2. 왼쪽 시리즈 카드를 원하는 칸으로 끌어다 놓습니다 (예: SAX cine · 4CH · 2CH · LGE를 한 화면에 두고 기록).
 3. 칸을 클릭하면 그 칸이 활성(노란 테두리)이 되고, 도구와 W/L은 활성 칸에 적용됩니다.
 4. **Space**를 누르면 활성 칸만 크게 보고, 다시 누르면 돌아옵니다.
 5. 같은 좌표계의 시리즈끼리는 **Sync Scroll / Sync W/L / Crosslink(C) / Ref Lines**로 함께 움직일 수 있습니다.
@@ -127,7 +132,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 ## 7. MPR
 
-![MPR](images/m09_mpr.jpg)
+![MPR — 복부 CT](images/m09_mpr.jpg)
 
 1. 볼륨(여러 슬라이스) 시리즈를 선택한 뒤 **MPR** 탭을 누릅니다.
 2. Axial / Sagittal / Coronal 세 평면이 mm 기준 실제 비율로 나옵니다.
@@ -136,7 +141,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 ## 8. 3D Volume
 
-![3D Volume Rendering](images/m10_3d.jpg)
+![3D Volume Rendering — 복부 CT, CT Bone](images/m10_3d.jpg)
 
 1. 볼륨 시리즈를 선택하고 **3D Volume** 탭을 누릅니다.
 2. **Preset**에서 CT Bone / Skin / Soft Tissue / Lung / Angiography 중 하나를 고릅니다.
@@ -145,7 +150,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 ## 9. 측정 도구
 
-![측정](images/m11_measure.jpg)
+![측정 — LV 내경(LVIDd), 중격 두께(IVS), 심근·혈액풀 ROI](images/m11_measure.jpg)
 
 | 도구 | 키 | 결과 |
 |---|---|---|
@@ -165,6 +170,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 2. 영상 위에서 끌어 그립니다. 그리는 중에 **Shift**를 누르면 0/45/90°로 맞춰집니다.
 3. 그린 측정은 선택한 뒤 끝점이나 몸체를 끌어 고칩니다. **Delete**로 지우고, **Ctrl+Z / Ctrl+Y**로 되돌립니다.
 4. 선택 도구 상태에서 두 점을 더블클릭하면 빠르게 거리를 잽니다.
+5. 예: SAX 중간 슬라이스에서 LV 내경(LVIDd)과 중격 두께(IVS)를 거리로 재고, 중격 심근과 LV 혈액풀에 타원 ROI를 놓아 신호를 비교합니다.
 
 ## 10. ROI Manager
 
@@ -187,7 +193,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 ## 12. 영상 조작
 
-![영상 조작 (좌우 반전 + Hot 컬러맵)](images/m15_image_ops.jpg)
+![영상 조작 — Hot 컬러맵](images/m15_image_ops.jpg)
 
 1. **V / H**: 상하 / 좌우 반전
 2. **[ / ]**: 왼쪽 / 오른쪽 90° 회전
@@ -219,6 +225,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 1. **Ctrl+Shift+E** 또는 File → Export as Video… 를 누릅니다.
 2. 형식(MP4 / GIF 등), 길이 또는 FPS, 해상도를 고릅니다. **현재 W/L 적용**을 체크하면 보고 있는 창 그대로 저장합니다.
 3. **Export…** 로 저장합니다. 시네 영상은 도구 막대 **▶ Play (P)** 와 FPS로 미리 볼 수 있습니다.
+4. 예: 학회 발표·교육 자료용으로 4CH·SAX cine을 MP4로 저장합니다.
 
 ## 16. DICOM Send / Print
 
@@ -236,7 +243,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 ![Reading](images/m21_reading.png)
 
 1. 검사를 열고 **R** 키 또는 도구 막대 **📝 Reading**을 누릅니다.
-2. Report 탭에 소견과 결론(Conclusion)을 씁니다. 작성자·승인자·검사일이 함께 저장됩니다.
+2. Report 탭에 소견과 결론(Conclusion)을 씁니다. 작성자·승인자·검사일이 함께 저장됩니다. (화면은 CMR 기록 틀 예시)
 3. **Import…** 로 txt·rtf·이미지·PDF·DICOM SR 기록을 불러옵니다. 파일명에 다른 환자 ID가 있으면 경고합니다.
 4. **Save / Approve**로 저장하거나 승인하고, JSON으로 저장·열기, Copy, Print를 할 수 있습니다.
 5. Settings에서 기록 폴더를 지정하면 새 파일을 PatientID와 검사일로 자동 연결합니다.
@@ -248,7 +255,8 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 1. 스터디를 연 상태에서 **Ctrl+D** 또는 **★ Library** 버튼을 누르면 즐겨찾기에 추가됩니다.
 2. 왼쪽 **★ Library** 탭에서 컬렉션 트리, 스터디 목록, 메모, 태그를 봅니다.
 3. **컬렉션**을 만들고 스터디를 끌어다 넣습니다. 한 스터디를 여러 컬렉션에 넣을 수 있습니다.
-4. **메모**는 굵게·목록을 지원하고 자동 저장됩니다. 본문에 `#태그`를 쓰면 태그가 됩니다.
+   - 예: `SCMR 인증 케이스`(케이스 로그북), `ACR 팬텀 QC (반기)`, `L-spine AI (SPIDER · MedGemma)`, 논문용 `CCTA vs CMR`
+4. **메모**는 굵게·목록을 지원하고 자동 저장됩니다. 본문에 `#태그`를 쓰면 태그가 됩니다 (예: `#scmr #lge #t1map`).
 5. 검색 칸에서 환자·설명·메모·`#태그`로 찾습니다. 더블클릭하면 그 스터디가 열립니다.
 6. **Export…** (우클릭 또는 File → Export Library…)
    - 형식: PDF / Word / Excel / PNG·JPEG / CSV / JSON / Markdown
