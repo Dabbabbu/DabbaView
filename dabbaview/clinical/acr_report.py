@@ -189,12 +189,20 @@ def notes_for(approximate):
 TITLE = "MRI 팬텀 영상 정도관리 결과 (ACR 대형 팬텀)"
 
 
-def write_report(fmt, path, info, rows, approximate=False, snapshots=(), steps=()):
+def write_report(fmt, path, info, rows, approximate=False, snapshots=(), steps=(), evidence=()):
     """fmt: 'pdf' | 'docx' | 'xlsx'. snapshots: [(제목, PNG 경로)] (PDF·Word에 붙임)
-    steps: 측정 과정 [{"title", "images": [(설명, PNG)], "lines": [계산 단계]}] (Excel은 글만)"""
+    steps: 측정 과정 [{"title", "images": [(설명, PNG)], "lines": [계산 단계]}] (Excel은 글만)
+    evidence: 증빙 영상 [(번호, 검사, 내용, 비고, 경로)] - 콘솔 수동 캡처 44장과 1:1 (Excel은 목록만)"""
     writer = {"pdf": _write_pdf, "docx": _write_docx, "xlsx": _write_xlsx}[fmt]
-    writer(path, info, rows, approximate, list(snapshots), list(steps))
+    writer(path, info, rows, approximate, list(snapshots), list(steps), list(evidence))
     return path
+
+
+EVIDENCE_TITLE = "증빙 영상 (콘솔 수동 캡처 44장과 같은 순서 · 같은 내용)"
+
+
+def _evidence_label(number):
+    return f"증빙 {number}" if isinstance(number, str) else f"증빙 {number:02d}"
 
 
 STEPS_TITLE = "측정 과정 (콘솔 수동 절차와 같은 순서: ROI → W/L 조절 → 측정 → 계산 → 판정)"
@@ -211,7 +219,7 @@ def _overall_text(rows):
     return {True: "적합 (모든 항목 기준 만족)", False: "부적합 (기준 미달 항목 있음)", None: "-"}[ok]
 
 
-def _write_pdf(path, info, rows, approximate, snapshots, steps=()):
+def _write_pdf(path, info, rows, approximate, snapshots, steps=(), evidence=()):
     from xml.sax.saxutils import escape
 
     from reportlab.lib import colors
@@ -284,11 +292,36 @@ def _write_pdf(path, info, rows, approximate, snapshots, steps=()):
                 block.append(t)
             block += [para(line) for line in step.get("lines", [])]
             story.append(KeepTogether(block))
+    if evidence:
+        h2e = ParagraphStyle("h2e", parent=base, fontSize=12, leading=16, spaceAfter=3)
+        story += [PageBreak(), para(EVIDENCE_TITLE, h2e),
+                  para("각 장 위: 증빙 번호 · 검사 · 내용 · W/L, 아래: 검사일 · 장비 · 검사자 · 생성 시각. "
+                       "A1·A2는 콘솔 세트에 없는 추가 증빙(분해능).", small), Spacer(1, 2 * mm)]
+        col = 88 * mm
+        cells = []
+        for number, _test, _desc, _note, p in evidence:
+            w, h = _image_size(p)
+            cells.append(Image(p, width=col, height=col * h / w))
+        grid = [cells[i:i + 2] + [""] * (2 - len(cells[i:i + 2])) for i in range(0, len(cells), 2)]
+        t = Table(grid, colWidths=[col + 3 * mm] * 2)
+        t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 1),
+                               ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+        story.append(t)
+
+    def footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont(font, 7)
+        canvas.setFillColor(colors.grey)
+        stamp = " · ".join(x for x in (info.get("date", ""), info.get("hospital", ""), info.get("unit", ""),
+                                       info.get("scanner", ""), "검사자 " + (info.get("tester", "") or "-")) if x)
+        canvas.drawString(15 * mm, 8 * mm, f"{TITLE} · {stamp}")
+        canvas.drawRightString(A4[0] - 15 * mm, 8 * mm, f"{doc.page}")
+        canvas.restoreState()
     SimpleDocTemplate(path, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=14 * mm,
-                      bottomMargin=14 * mm, title=TITLE).build(story)
+                      bottomMargin=14 * mm, title=TITLE).build(story, onFirstPage=footer, onLaterPages=footer)
 
 
-def _write_docx(path, info, rows, approximate, snapshots, steps=()):
+def _write_docx(path, info, rows, approximate, snapshots, steps=(), evidence=()):
     import docx
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml import OxmlElement
@@ -359,10 +392,18 @@ def _write_docx(path, info, rows, approximate, snapshots, steps=()):
                     t.rows[1].cells[i].text = caption
             for line in step.get("lines", []):
                 doc.add_paragraph(line).runs[0].font.size = Pt(9)
+    if evidence:
+        doc.add_page_break()
+        doc.add_heading(EVIDENCE_TITLE, level=2)
+        t = doc.add_table(rows=0, cols=2)
+        for i in range(0, len(evidence), 2):
+            cells = t.add_row().cells
+            for c, item in zip(cells, evidence[i:i + 2]):
+                c.paragraphs[0].add_run().add_picture(item[4], width=Mm(85))
     doc.save(path)
 
 
-def _write_xlsx(path, info, rows, approximate, snapshots, steps=()):
+def _write_xlsx(path, info, rows, approximate, snapshots, steps=(), evidence=()):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     wb = Workbook()
@@ -415,6 +456,13 @@ def _write_xlsx(path, info, rows, approximate, snapshots, steps=()):
             for line in step.get("lines", []):
                 ws2.append([line])
         ws2.column_dimensions["A"].width = 140
+    if evidence:
+        ws3 = wb.create_sheet("증빙 목록")
+        ws3.append(["번호", "검사", "내용", "W/L · 값", "파일"])
+        for number, test, desc, note, p in evidence:
+            ws3.append([_evidence_label(number), test, desc, note, os.path.basename(p)])
+        for col, width in zip("ABCDE", (10, 18, 40, 70, 12)):
+            ws3.column_dimensions[col].width = width
     raw = wb.create_sheet("측정값")
     raw.append(["검사", "시퀀스", "측정값", "기준", "판정"])
     for test, seq, measured, criterion, ok in rows:

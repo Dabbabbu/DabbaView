@@ -876,6 +876,18 @@ def find_sets(images, progress=None):
             if (len(rest) > 1 and rest[0][1] == 2 and rest[1][1] == 2
                     and abs(rest[1][2] - rest[0][2]) == 1):
                 t2 = rest[1][0]
+    # 나머지 11장 세트 = 사이트 시퀀스 (ACR T1·T2 외에 병원 프로토콜로 찍은 것). 이중 에코의 다른 에코는 제외
+    extra = []
+    t2_first = order[id(t2[0])] if t2 else None
+    for imgs, stride, first_i in sorted(sets, key=lambda s: s[2]):
+        if imgs is t1 or imgs is t2:
+            continue
+        if t2 is not None and stride == 2 and abs(first_i - t2_first) == 1:
+            continue
+        ref, ref2 = imgs[0].ref, t2[0].ref if t2 else None
+        if with_te and ref and ref2 and ref[0] is ref2[0]:
+            continue
+        extra.append(imgs)
     first = next(i for i, img in enumerate(images) if img is t1[0])
     loc = None
     for i in range(first - 1, -1, -1):
@@ -884,7 +896,7 @@ def find_sets(images, progress=None):
             break
     if loc is None:
         loc = next((img for img, k in zip(images, kinds) if k == "localizer"), None)
-    return {"LOC": loc, "T1": t1, "T2": t2, "kinds": kinds}
+    return {"LOC": loc, "T1": t1, "T2": t2, "extra": extra, "kinds": kinds}
 
 
 # ═══ 값 계산 (주석 → 결과) ═══
