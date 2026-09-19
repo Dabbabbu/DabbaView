@@ -355,8 +355,18 @@ def place_thickness(img):
     bot = [rows[i] for i in range(split + 1, len(rows)) if prof[i] > 0.5 * prof[i_bot]]
     if not top or not bot:
         raise ValueError("두께 경사판 두 개를 구분하지 못했습니다.")
-    out = [ann_rect("ACR ST ROI top", xa, top[0], xb, top[-1] + 1, "thickness"),
-           ann_rect("ACR ST ROI bottom", xa, bot[0], xb, bot[-1] + 1, "thickness")]
+    # ACR: 경사판 가운데에 작은 ROI → 평균의 절반이 기준. 띠 전체(가장자리 행 포함)로 잡으면 평균이
+    # 낮아져 경사판이 길게 재짐 (수동 측정 대비 +0.2~0.3 mm) → 가운데 행·가운데 ±3 mm만
+    half_w = max(3, int(round(3.0 / img.px[1])))
+    ca, cb = int(cx) - half_w, int(cx) + half_w + 1
+
+    def core(strip):
+        pr = img.a[strip][:, ca:cb].mean(1)
+        keep = [strip[i] for i in range(len(strip)) if pr[i] >= 0.85 * pr.max()]
+        return keep or strip
+    ct, cbt = core(top), core(bot)
+    out = [ann_rect("ACR ST ROI top", ca, ct[0], cb, ct[-1] + 1, "thickness"),
+           ann_rect("ACR ST ROI bottom", ca, cbt[0], cb, cbt[-1] + 1, "thickness")]
     m_top = roi_mean(img, out[0])
     m_bot = roi_mean(img, out[1])
     thr = (m_top + m_bot) / 4          # ACR: 두 경사판 평균의 절반을 기준
@@ -468,9 +478,11 @@ def _large_roi(img):
     r_mm = math.sqrt(LARGE_ROI_MM2 / math.pi)
     rx, ry = r_mm / img.px[1], r_mm / img.px[0]
     yy, xx = np.indices(img.shape)
-    structure = ndi.binary_dilation((img.a < 0.5 * level) & fit["filled"], iterations=2)
+    # 큰 ROI도 내부 구조물(노치 막대)에서 5 mm 떨어지게 (가장자리 부분 용적 제외)
+    structure = ndi.binary_dilation((img.a < 0.5 * level) & fit["filled"],
+                                    iterations=max(2, int(round(5.0 / min(img.px)))))
     shift = 0.0
-    while shift < 0.1 * r:
+    while shift < 0.15 * r:
         inside = ((xx - cx) / rx) ** 2 + ((yy - cy - shift) / ry) ** 2 <= 1
         if not (inside & structure).any():
             break
@@ -484,7 +496,10 @@ def place_uniformity(img):
     rs_mm = math.sqrt(SMALL_ROI_MM2 / math.pi)
     rs = rs_mm / min(img.px)
     means, cover = _disk_mean_map(img, rs)
-    _m, clean = _disk_mean_map_mask(img, ~structure, rs)
+    # 내부 구조물(위쪽 노치 막대 등) 가장자리의 부분 용적은 균일도가 아님 → 5 mm 떨어진 곳만
+    from scipy import ndimage as ndi
+    margin = ndi.binary_dilation(structure, iterations=max(2, int(round(5.0 / min(img.px)))))
+    _m, clean = _disk_mean_map_mask(img, ~margin, rs)
     yy, xx = np.indices(img.shape)
     ok = ((((xx - cx) / (rx - rs)) ** 2 + ((yy - cy) / (ry - rs)) ** 2 <= 1)
           & (cover > 0.99) & (clean > 0.999))
