@@ -207,6 +207,17 @@ class AppSettings:
     def set_auto_hanging(self, enabled):
         self._qs.setValue("auto_hanging", bool(enabled))
 
+    # 영상 위 표시 항목 (위상 인코딩 방향 · 방향 문자 · 스캔 커버리지 선)
+    def overlay_items(self):
+        out = {"phase": True, "orientation": True, "coverage": True}
+        saved = self._load_json("overlay_items", {})
+        if isinstance(saved, dict):
+            out.update({k: bool(v) for k, v in saved.items() if k in out})
+        return out
+
+    def set_overlay_items(self, items):
+        self._save_json("overlay_items", {k: bool(v) for k, v in items.items()})
+
     # Reading (판독)
     def report_folder(self):
         return self._qs.value("report_folder", "", type=str)
