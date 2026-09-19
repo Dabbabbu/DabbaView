@@ -16,7 +16,8 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 AUTHORITY = "https://login.microsoftonline.com/common"
 SCOPES = ["Files.Read.All"]
 CACHE_KEY = "onedrive_token_cache"
-SELECT = "id,name,size,folder,file,package,lastModifiedDateTime,remoteItem,parentReference"
+SELECT = ("id,name,size,folder,file,package,lastModifiedDateTime,remoteItem,parentReference,"
+          "cTag,eTag")
 
 SETUP_HELP = (
     "OneDrive를 쓰려면 본인이 등록한 Azure 앱이 필요합니다 (앱에 내장된 키 없음).\n\n"
@@ -162,7 +163,10 @@ class OneDriveProvider:
         return CloudItem(source.get("id", entry.get("id")), entry.get("name", ""), is_folder,
                          int(source.get("size", 0) or 0),
                          (source.get("lastModifiedDateTime") or "")[:16].replace("T", " "),
-                         extra={"drive_id": drive_id})
+                         extra={"drive_id": drive_id,
+                                # 캐시 버전: 내용 태그(cTag) → 없으면 eTag/수정 시각+크기
+                                "version": source.get("cTag") or source.get("eTag") or
+                                f"{source.get('lastModifiedDateTime', '')}|{source.get('size', '')}"})
 
     def download(self, item, dest_dir, progress=None, cancelled=None):
         if item.is_folder:
@@ -173,10 +177,14 @@ class OneDriveProvider:
                     raise CloudError("취소했습니다.")
                 self.download(child, target, progress, cancelled)
             return target
+        return self.download_file(item, os.path.join(dest_dir, safe_name(item.name)),
+                                  progress, cancelled)
+
+    def download_file(self, item, path, progress=None, cancelled=None):
+        """파일 하나를 path에 저장"""
         drive = item.extra.get("drive_id")
         url = (f"/drives/{drive}/items/{item.id}/content" if drive
                else f"/me/drive/items/{item.id}/content")
-        path = os.path.join(dest_dir, safe_name(item.name))
         resp = self._get(url, stream=True)
         done = 0
         with open(path, "wb") as fh:

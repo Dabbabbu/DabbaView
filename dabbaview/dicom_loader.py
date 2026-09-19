@@ -298,6 +298,7 @@ class DicomLoader:
     def __init__(self):
         self.series_dict = {}  # series_uid -> DicomSeries
         self.load_errors = []
+        self.cached_count = 0  # 캐시에서 바로 읽은 파일 수 (상태 표시용)
         self._reset_extras()
 
     def _reset_extras(self):
@@ -375,23 +376,44 @@ class DicomLoader:
         self.load_errors.clear()
         self._reset_extras()
 
+        from . import cache
         files = []
+        cached = 0
+        pending = {}   # 캐시에 없거나 바뀐 폴더 → (서명, DICOM 후보 파일)
         for path in paths:
             if os.path.isdir(path):
-                files.extend(self.collect_files(path, recursive))
+                dir_files = self.collect_files(path, recursive)
+                dicom_files = [f for f in dir_files if file_kind(f) == "dicom"]
+                signature = cache.folder_signature(dicom_files)
+                data = cache.load_metadata(path, recursive, signature) if dicom_files else None
+                if data is not None and data.get("pydicom") == pydicom.__version__:
+                    # 같은 폴더를 다시 열었고 파일이 그대로 → 메타데이터 파싱 생략
+                    for ds in data["datasets"]:
+                        self._add_dataset(ds)
+                    self.load_errors.extend(data.get("errors", []))
+                    cached += len(data["datasets"])
+                    files.extend(f for f in dir_files if file_kind(f) != "dicom")
+                    continue
+                pending[path] = (signature, dicom_files)
+                files.extend(dir_files)
             elif os.path.isfile(path):
                 files.append(path)
+        self.cached_count = cached
         # 형식별 분류: DICOM은 병렬 메타데이터 읽기, 나머지는 형식별 reader
         others = [f for f in files if file_kind(f) != "dicom"]
         files = [f for f in files if file_kind(f) == "dicom"]
         total = len(files) + len(others)
         if total == 0:
-            return 0
+            for series in self.series_dict.values():
+                series.sort_slices()
+            return cached
 
-        loaded = self._load_other_formats(others, progress_callback, total)
+        loaded = self._load_other_formats(others, progress_callback, total) + cached
         done = len(others)
         if cancel_event is not None and cancel_event.is_set():
             return loaded
+        parsed, failed = {}, {}   # 폴더 캐시 저장용
+        cancelled = False
         with ThreadPoolExecutor(
                 max_workers=max_workers or default_worker_count()) as ex:
             futures = {ex.submit(_read_metadata, f): f for f in files}
@@ -400,19 +422,33 @@ class DicomLoader:
                 done += 1
                 try:
                     ds = future.result()
+                    parsed[futures[future]] = ds
                     if ds is not None:
                         self._add_dataset(ds)
                         loaded += 1
                 except Exception as e:
+                    failed[futures[future]] = str(e)
                     self.load_errors.append((futures[future], str(e)))
 
                 if progress_callback:
                     progress_callback(done, total)
 
                 if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
                     for f in futures:
                         f.cancel()
                     break
+
+        # 다 읽은 폴더는 메타데이터를 캐시에 저장 (다음에 열 때 파싱 생략)
+        if not cancelled:
+            for folder, (signature, dicom_files) in pending.items():
+                if not dicom_files:
+                    continue
+                datasets = [parsed[f] for f in dicom_files if parsed.get(f) is not None]
+                errors = [(f, failed[f]) for f in dicom_files if f in failed]
+                if datasets:
+                    cache.save_metadata(folder, recursive, signature, datasets, errors,
+                                        extra={"pydicom": pydicom.__version__})
 
         # 모든 시리즈 정렬
         for series in self.series_dict.values():
@@ -462,7 +498,10 @@ class DicomLoader:
         """로드된 시리즈 목록 반환"""
         series_list = list(self.series_dict.values())
         # 시리즈 번호 또는 설명 순으로 정렬
-        series_list.sort(key=lambda s: (s.study_date, s.description))
+        # 날짜·설명이 같아도 순서가 항상 같도록 시리즈 번호·UID로 마무리 (캐시/파싱 무관)
+        series_list.sort(key=lambda s: (s.study_date, s.description,
+                                        s.series_number if s.series_number is not None else -1,
+                                        s.series_uid))
         return series_list
 
     def merge(self, other):

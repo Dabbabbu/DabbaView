@@ -28,6 +28,14 @@ def main():
     app.setOrganizationName("DabbaView")
     shortcut_fallback.install(app)  # 한글 입력 상태에서도 T/R/P 등 단축키 동작
 
+    # 지난 실행의 클라우드 세션 폴더 정리 + 캐시 용량 한도 적용
+    try:
+        from . import cache
+        cache.clear_sessions()
+        cache.enforce_limit(force=True)
+    except OSError:
+        pass
+
     window = MainWindow()
     window.setAcceptDrops(True)  # 드래그 앤 드롭 활성화
     window.show()
