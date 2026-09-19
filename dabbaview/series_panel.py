@@ -16,8 +16,8 @@ INFINITT 스타일 시리즈 패널
 카드를 Multi View 칸으로 드래그 가능.
 """
 from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QStyledItemDelegate,
-                             QStyle, QAbstractItemView)
-from PyQt5.QtCore import Qt, QSize, QRectF, QPointF, QMimeData, pyqtSignal
+                             QStyle, QAbstractItemView, QMenu)
+from PyQt5.QtCore import Qt, QSize, QRectF, QPointF, QMimeData, QEvent, pyqtSignal
 from PyQt5.QtGui import QColor, QCursor, QFont, QPainter, QPen, QImage, QFontMetrics
 
 from . import dicom_info
@@ -189,6 +189,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
     series_activated = pyqtSignal(str)  # 클릭(뗄 때) / Enter → 뷰포트에 로드
     thumbnail_ready = pyqtSignal(str, QImage)
     summary_changed = pyqtSignal(dict)  # {"patients", "studies", "series", "images"}
+    rename_requested = pyqtSignal(str, str)   # ("study"|"series"|"patient", UID)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -208,6 +209,8 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         self._thumb_worker = None
         self.currentItemChanged.connect(self._on_current_changed)
         self.itemClicked.connect(self._on_item_clicked)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._context_menu)
         self._click_init()
         self._headers = []            # [(머리글 item, 종류, 키)]
         self._collapsed = set()       # 접힌 머리글 키 ("P:..." 환자, "S:..." 검사)
@@ -219,6 +222,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         self.blockSignals(True)
         self.clear()
         self._items_by_uid = {}
+        self._series_by_uid = {s.series_uid: s for s in series_list}
         self._headers = []
         self._first_uid = {}
         first = target = None
@@ -230,6 +234,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
             patient = QListWidgetItem(
                 format_patient_name(pname) + (f"  ({pid})" if pid else ""))
             patient.setData(ROLE_KIND, "patient")
+            patient.setData(ROLE_UID, studies[0][3][0].study_uid if studies and studies[0][3] else "")
             patient.setData(ROLE_GROUP, pkey)
             n = len(studies)
             patient.setData(ROLE_DETAIL, f"{n} stud{'ies' if n != 1 else 'y'} · {p_images:,} images")
@@ -247,6 +252,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
                 header.setData(ROLE_GROUP, pkey)
                 header.setData(ROLE_STUDY, skey)
                 header.setData(ROLE_DETAIL, f"{len(series_group)} series")
+                header.setData(ROLE_UID, first_series.study_uid or "")
                 header.setFlags(Qt.ItemIsEnabled)
                 header.setToolTip(f"Patient: {pname}  ID: {pid or '-'}")
                 self.addItem(header)
@@ -412,7 +418,48 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
             return item.data(ROLE_UID)
         return None
 
+    # ─── 이름 바꾸기 (우클릭, F2) ───
+    def _study_uid_of(self, item):
+        if item is None:
+            return ""
+        if item.data(ROLE_KIND) == "series":
+            series = self._series_by_uid.get(item.data(ROLE_UID))
+            return series.study_uid if series is not None else ""
+        return item.data(ROLE_UID) or ""
+
+    def _context_menu(self, pos):
+        item = self.itemAt(pos)
+        if item is None:
+            return
+        kind = item.data(ROLE_KIND)
+        menu = QMenu(self)
+        study_uid = self._study_uid_of(item)
+        if kind == "series":
+            uid = item.data(ROLE_UID)
+            menu.addAction("Rename Series… (⇧F2)", lambda: self.rename_requested.emit("series", uid))
+        if study_uid and kind in ("series", "header"):
+            menu.addAction("Rename Study… (F2)", lambda: self.rename_requested.emit("study", study_uid))
+        if study_uid:
+            menu.addSeparator()
+            menu.addAction("Edit Patient Name/ID…", lambda: self.rename_requested.emit("patient", study_uid))
+        menu.exec_(self.viewport().mapToGlobal(pos))
+
+    def event(self, event):
+        # F2는 창 전체에서 '시리즈 패널 접기'지만, 이 목록에 포커스가 있으면 이름 바꾸기
+        if event.type() == QEvent.ShortcutOverride and event.key() == Qt.Key_F2:
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F2:
+            item = self.currentItem()
+            if item is not None and item.data(ROLE_KIND) == "series" \
+                    and event.modifiers() & Qt.ShiftModifier:
+                self.rename_requested.emit("series", item.data(ROLE_UID))
+            elif self._study_uid_of(item):
+                self.rename_requested.emit("study", self._study_uid_of(item))
+            return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             item = self.currentItem()
             if item is not None and item.data(ROLE_KIND) == "series":

@@ -278,6 +278,7 @@ class ClickToLoadMixin:
 
 ROLE_PATIENT_KEY = Qt.UserRole + 20   # 환자 항목: 환자 키 / 첫 시리즈 UID
 ROLE_FIRST_UID = Qt.UserRole + 21
+ROLE_STUDY_UID = Qt.UserRole + 22
 
 
 class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
@@ -289,10 +290,13 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
 
     series_selected = pyqtSignal(str)   # 누름 / 방향키 (선택 표시)
     series_activated = pyqtSignal(str)  # 클릭(뗄 때) / Enter → 뷰포트에 로드
+    rename_requested = pyqtSignal(str, str)   # ("study"|"series"|"patient", UID)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setHeaderLabels(["Series", "Images"])
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._context_menu)
         self.setIconSize(QSize(THUMB_SIZE, THUMB_SIZE))
         self.setUniformRowHeights(False)  # 시리즈 행만 썸네일 높이
         self.setIndentation(14)
@@ -385,6 +389,7 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
                     0, f"Study Date: {date_text}\n"
                        f"Description: {study_desc or '-'}")
                 study_item.setFlags(Qt.ItemIsEnabled)
+                study_item.setData(0, ROLE_STUDY_UID, series_group[0].study_uid or "")
                 patient_item.addChild(study_item)
 
                 for s in series_group:
@@ -399,6 +404,7 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
                     item.setIcon(0, _series_icon(s.modality,
                                                  self._thumbnails.get(s.series_uid)))
                     item.setData(0, ROLE_SERIES_UID, s.series_uid)
+                    item.setData(0, ROLE_STUDY_UID, s.study_uid or "")
                     item.setTextAlignment(1, Qt.AlignRight | Qt.AlignVCenter)
                     tooltip = (dicom_info.sequence_tooltip(
                         ds, s.description, s.num_slices) if ds is not None else "")
@@ -532,7 +538,49 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
         item = self.itemAt(pos)
         return item.data(0, ROLE_SERIES_UID) if item is not None else None
 
+    # ─── 이름 바꾸기 (우클릭, F2) ───
+    @staticmethod
+    def _study_uid_of(item):
+        if item is None:
+            return ""
+        uid = item.data(0, ROLE_STUDY_UID)
+        if not uid and item.childCount():   # 환자 항목: 첫 스터디
+            uid = item.child(0).data(0, ROLE_STUDY_UID)
+        return uid or ""
+
+    def _context_menu(self, pos):
+        from PyQt5.QtWidgets import QMenu
+        item = self.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        series_uid = item.data(0, ROLE_SERIES_UID)
+        study_uid = self._study_uid_of(item)
+        if series_uid:
+            menu.addAction("Rename Series… (⇧F2)", lambda: self.rename_requested.emit("series", series_uid))
+        if study_uid and item.parent() is not None:
+            menu.addAction("Rename Study… (F2)", lambda: self.rename_requested.emit("study", study_uid))
+        if study_uid:
+            menu.addSeparator()
+            menu.addAction("Edit Patient Name/ID…", lambda: self.rename_requested.emit("patient", study_uid))
+        menu.exec_(self.viewport().mapToGlobal(pos))
+
+    def event(self, event):
+        from PyQt5.QtCore import QEvent
+        if event.type() == QEvent.ShortcutOverride and event.key() == Qt.Key_F2:
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F2:
+            item = self.currentItem()
+            series_uid = item.data(0, ROLE_SERIES_UID) if item is not None else None
+            if series_uid and event.modifiers() & Qt.ShiftModifier:
+                self.rename_requested.emit("series", series_uid)
+            elif self._study_uid_of(item):
+                self.rename_requested.emit("study", self._study_uid_of(item))
+            return
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             item = self.currentItem()
             uid = item.data(0, ROLE_SERIES_UID) if item is not None else None

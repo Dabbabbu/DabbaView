@@ -233,6 +233,13 @@ class AppSettings:
     def set_monai_token(self, token):
         self._qs.setValue("monai_label_token", (token or "").strip())
 
+    # DICOM 원본 수정 (스터디·시리즈 이름, 환자 정보)
+    def dicom_edit_backup(self):
+        return self._qs.value("dicom_edit/backup", True, type=bool)
+
+    def set_dicom_edit_backup(self, on):
+        self._qs.setValue("dicom_edit/backup", bool(on))
+
     # 오픈소스 모델 (TotalSegmentator, nnU-Net, MedSAM, ONNX, REST) - 키는 "models/..."
     MODEL_DEFAULTS = {"python": "", "device": "auto", "nnunet_folder": "", "nnunet_folds": "0",
                       "medsam_encoder": "", "medsam_decoder": "", "medsam_mode": "medsam",

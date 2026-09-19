@@ -6,7 +6,7 @@
 버전은 여기의 __version__ 하나만 고치면 된다.
 앱 번들(setup_app.py), 타이틀 바, About, 시작 화면, README가 모두 이 값을 쓴다.
 """
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 APP_NAME = "DabbaView"
 COPYRIGHT = "Copyright (c) 2026 Park Seongho (Dabbabbu)"
