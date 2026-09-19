@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Park Seongho (Dabbabbu)
 # This file is part of DabbaView, licensed under GPL-3.0.
 # See LICENSE for details.
-"""Analysis 메뉴 (9개 카테고리) + 오른쪽 Analysis 도크 + 심장 윤곽 오버레이"""
+"""Analysis 메뉴 (10개 카테고리 + ACR Phantom QC) + 오른쪽 Analysis 도크 + 심장 윤곽 오버레이"""
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QPen, QPolygonF
 
 from ..annotations import instance_key
-from . import tools_cardiac, tools_quant, tools_regional
+from . import tools_cardiac, tools_iq, tools_quant, tools_regional
 from .cardiac import CONTOUR_TYPES, ContourStore
 from .panel import AnalysisDock
 
@@ -20,6 +20,7 @@ CATEGORIES = [
     ("Diffusion", tools_quant.DIFFUSION),
     ("Perfusion", tools_quant.PERFUSION),
     ("Spectroscopy", tools_quant.SPECTROSCOPY),
+    ("Image Quality Assessment", tools_iq.TOOLS),
 ]
 
 
@@ -44,6 +45,7 @@ def install(main, menubar):
     toggle.triggered.connect(lambda: dock.setVisible(not dock.isVisible()))
     from ..viewport import DicomViewport
     DicomViewport.add_overlay_painter(draw_contours(main))
+    DicomViewport.add_overlay_painter(tools_iq.paint_markers)
     main._contours.changed.connect(lambda *_: [vp.update() for vp in main._all_viewports()])
     return menu
 
