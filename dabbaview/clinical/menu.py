@@ -38,12 +38,36 @@ def install(main, menubar):
             action.triggered.connect(
                 lambda _=False, c=category, k=key, t=cls: dock.open_tool(c, k, t))
     menu.addSeparator()
+    install_acr(main, dock, menu)
+    menu.addSeparator()
     toggle = menu.addAction("Analysis 패널 보이기/숨기기")
     toggle.triggered.connect(lambda: dock.setVisible(not dock.isVisible()))
     from ..viewport import DicomViewport
     DicomViewport.add_overlay_painter(draw_contours(main))
     main._contours.changed.connect(lambda *_: [vp.update() for vp in main._all_viewports()])
     return menu
+
+
+def install_acr(main, dock, menu):
+    """Analysis ▸ ACR Phantom QC 서브메뉴"""
+    from . import tools_acr
+    sub = menu.addMenu("ACR Phantom QC")
+
+    def run(method):
+        tool = dock.open_tool("QC", "acr_qc", tools_acr.ACRTool)
+        if method:
+            tool._guard(getattr(tool, method))
+    for text, method in (("▶ Auto Analyze (7개 검사)", "auto_analyze"),
+                         ("ACR QC 패널 열기", None),
+                         ("🔍 영상 자동 찾기", "find_images"),
+                         ("↻ 수동 수정 후 다시 계산", "recompute"),
+                         ("📄 Export Report…", "export_report"),
+                         ("📈 추세 (날짜별 그래프)…", "show_trend"),
+                         ("⚙ 기준값…", "edit_criteria")):
+        sub.addAction(text).triggered.connect(lambda _=False, m=method: run(m))
+    from ..viewport import DicomViewport
+    DicomViewport.add_overlay_painter(tools_acr.paint_markers)
+    return sub
 
 
 def draw_contours(main):

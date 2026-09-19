@@ -123,6 +123,12 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 | 태그 | 컬러 태그 칩으로 거르기(여러 개 = 모두 포함), 우클릭으로 색 변경, 빠른 태그 버튼(#interesting #teaching #followup, 편집 가능) |
 | 검색 | 환자명·ID·설명·검사일·메모·폴더, `#태그` — 현재 컬렉션 안에서 (전체 스터디 선택 시 전체) |
 | 저장 | `~/Library/Application Support/DabbaView/library.json` (앱 시작 시 자동 로드), JSON 내보내기 / 가져오기(병합) |
+| 내보내기 | Library 우클릭 **Export…** / ⋯ 메뉴 / File → **Export Library...**: 범위(전체·컬렉션·선택), 형식 **PDF**(reportlab, 한글 글꼴) · **Word**(python-docx) · **Excel**(openpyxl: 스터디 목록 · 컬렉션별 · 시리즈 · 측정 시트) · PNG/JPEG 연락처 시트 또는 스터디별 이미지 · CSV · JSON · Markdown. 포함 항목(환자·스터디 정보·시리즈 목록·메모·태그·썸네일·측정/ROI) 선택, 미리보기. HWP는 macOS용 라이브러리가 없어 PDF/DOCX로 저장 후 한글에서 열도록 안내 |
+
+### 스터디·시리즈 이름 / 환자 정보 바꾸기
+- 시리즈 패널·트리·Library에서 우클릭 **Rename Study…**(F2) / **Rename Series…**(⇧F2) / **Edit Patient Name/ID…**
+- **DICOM 파일 원본도 수정**(기본): pydicom으로 태그만 바꾸고 픽셀 데이터는 그대로, 진행률·취소, 수정 전 `<파일>.bak` 백업(Settings에서 끄기). 끄면 원본은 그대로 두고 Library에서만 표시 이름 변경
+- 환자 이름·ID 변경은 익명화와 구분된 별도 경고 + 새 PatientID를 한 번 더 입력해야 진행
 
 ### 오픈소스 AI 모델 (AI 메뉴 → Open Source Models, AI 패널 → 🧩 Models 탭)
 
@@ -174,6 +180,29 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 | Spectroscopy | DICOM MR Spectroscopy / Siemens `.rda` → 스펙트럼 (선폭 가중, 자동·수동 위상), NAA · Cho · Cr · mI · Lac 피크, Cho/Cr · NAA/Cr · Cho/NAA |
 
 > 연구·교육용입니다. 진단용으로 검증된 소프트웨어가 아니므로 결과는 원래 기록 워크스테이션·검증된 도구와 대조하세요.
+
+### ACR Phantom QC (Analysis ▸ ACR Phantom QC)
+
+ACR 대형 MRI 팬텀의 7개 검사를 자동으로 분석합니다. 기준값은 **3.0T ACR**(GE SIGNA Architect 기준) 기본, Settings → **ACR QC**에서 변경(1.5T 프리셋 포함).
+
+1. **Auto Analyze**: 불러온 영상에서 localizer · T1 slice 1–11 · T2 slice 1–11을 자동으로 찾음 (DICOM은 EchoTime으로 T1/T2·이중 에코 구분, 콘솔 화면 캡처 JPEG 폴더는 격자 영상(slice 5) 기준, T2 이중 에코는 둘째 에코)
+2. 검사마다 해당 슬라이스로 이동해 ROI·측정선을 **주석으로 배치** (진행 목록에 단계 표시) → ROI Manager에서 보이고 Measure All 가능
+
+| 검사 | 자동 배치 / 계산 | 기준 (3T) |
+|---|---|---|
+| 1. 기하학적 정확도 | localizer 위아래 길이, slice 1 가로·세로, slice 5 가로·세로·대각 둘 (국소 반치 가장자리, 노치 피한 평행 현 보정) | 148 ± 2 / 190 ± 2 mm |
+| 2. 고대조도 분해능 | slice 1 구멍 배열 6개(1.1·1.0·0.9 mm × UL·LR) 자동 판정 → 사용자 확인 | ≤ 1.0 mm |
+| 3. 절편 두께 | slice 1 경사판 두 개, 기준 = 두 ROI 평균의 절반, 0.2 × 위 × 아래 / (위 + 아래) | 5.0 ± 0.7 mm |
+| 4. 절편 위치 | slice 1·11 쐐기 막대 두 개 길이 차이 (오른쪽 − 왼쪽) | ≤ 5 mm |
+| 5. 균일도 PIU | slice 7 200 cm² 원 안에서 1 cm² 평균 최대·최소 | ≥ 82 % |
+| 6. 고스팅 PSG | 팬텀 밖 위·아래·좌·우 10 cm² 타원 (글자·자 오버레이 피함) | ≤ 2.5 % (T1) |
+| 7. 저대조도 | slice 8–11 스포크 10개 × 원판 3개 (slice 11에서 회전·중심을 찾고 9°씩 예측) → 스포크 수 자동 → 사용자 확인·수정 | 합 ≥ 37 |
+
+- **수동 수정**: ROI·측정선을 옮기면 자동으로 다시 계산 (또는 ↻ 버튼), 스포크 수·분해능은 표에서 직접 수정. 원판·구멍 배열은 초록(보임)/빨강 표시
+- **결과 표**: 항목별 적합(초록)/부적합(빨강) + 종합 판정
+- **Export Report**: 기록지 형식 PDF · Word · Excel (병원·연도/반기·장비·자장·호기·검사일·코일·검사자, 7개 항목 T1/T2, 종합 판정, ROI 그린 영상)
+- **추세**: 결과를 날짜별로 저장(`acr_history.json`)하고 항목별 그래프(기준선 포함)로 비교
+- 화면 캡처(JPEG·PNG)는 픽셀 크기를 FOV(기본 250 mm)로 가정하고 콘솔 글자 오버레이를 피합니다. 신호값은 표시 창이 적용된 값이라 L = W/2(하한 0)일 때 비율 검사(PIU·고스팅)가 유효합니다
 
 ## 마우스 조작 (PACS 표준, Settings에서 변경 가능)
 
@@ -231,10 +260,11 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 - **W/L Presets**: 프리셋 추가/편집/삭제
 - **Hanging Protocols**: 모달리티, 부위 키워드, 레이아웃, 칸별 시리즈 키워드
 - **DICOM Nodes**: 이 컴퓨터의 AE Title, 전송/인쇄 대상 (AE Title, Host, Port)
-- **Reading**: 기록 폴더(감시), 기본 Creator
+
 - **Deploy Web**(Help → Deploy Web): 저장소·워크플로·브랜치, GitHub 토큰
 - **AI**: MONAI Label 서버 주소, Access Token
 - **Cloud**: Google OAuth Client ID / Client Secret / API Key, OneDrive(Azure) Client ID, 로그아웃
+- **ACR QC**: 판정 기준값(3T / 1.5T 프리셋), 보고서 머리글(병원·호기·장비·자장·코일·검사자), 이미지 파일 FOV
 - **Cache**: 캐시 위치·사용량(메타데이터/썸네일/클라우드 파일), 최대 용량 1~50 GB(기본 5 GB, 넘으면 오래 안 쓴 것부터 자동 삭제), Clear Cache
 
 ### 캐시
@@ -323,6 +353,7 @@ DabbaView/
     │   ├── models.py        # ADC·IVIM·T1/T2·감마·DSC sSVD·Tofts·PC 유량
     │   ├── cardiac.py / lesion.py / mrs.py   # 심장·병변/폐/혈관·분광 엔진
     │   ├── panel.py         # 오른쪽 Analysis 도크, 결과 표·그래프
+    │   ├── acr.py / acr_report.py / tools_acr.py   # ACR 팬텀 QC 엔진 · 기록지·추세 · 도구
     │   └── tools_*.py, menu.py              # 도구 페이지, 메뉴 등록
     ├── analysis/            # 3D Slicer · ImageJ 스타일 분석
     │   ├── processing.py    # 필터 (Gaussian, Median, Unsharp, Sobel, Canny, Morphology)
@@ -346,6 +377,8 @@ DabbaView/
     ├── open_datasets.py     # Help → Open Datasets 링크
     ├── library.py           # 스터디 라이브러리 저장소 (즐겨찾기·컬렉션·메모·태그, library.json)
     ├── library_panel.py     # 왼쪽 Library 탭 (컬렉션 트리·목록·메모·검색)
+    ├── library_export.py / library_export_dialog.py   # Library 내보내기 (PDF·Word·Excel·이미지·CSV·JSON·MD)
+    ├── dicom_edit.py / rename_dialog.py               # 스터디·시리즈 이름, 환자 정보 변경 (원본 태그 수정·.bak)
     └── ai/                  # AI Research
         ├── panel.py         # 사이드 패널 UI
         ├── segmentation.py  # 마스크 편집 (Brush/Eraser/Wand/Threshold/보간)
