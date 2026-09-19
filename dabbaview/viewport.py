@@ -174,6 +174,9 @@ class DicomViewport(QWidget):
         # 테두리 강조 (활성 뷰포트 / 드롭 대상)
         self._highlight = None       # (QColor, width)
 
+        # AI Research 세그멘테이션 (SegmentationController, 모든 뷰포트 공유)
+        self._seg = None
+
     # ─── 시리즈 ───
 
     def set_series(self, series):
@@ -315,6 +318,62 @@ class DicomViewport(QWidget):
         self.set_tool_cursor()
         self.update()
 
+    # ─── 세그멘테이션 (AI Research) ───
+
+    def set_segmentation(self, controller):
+        self._seg = controller
+        controller.changed.connect(self._on_segmentation_changed)
+        controller.tool_changed.connect(lambda _tool: (self.set_tool_cursor(), self.update()))
+
+    def _on_segmentation_changed(self, series_uid):
+        if not series_uid or (self._series is not None
+                              and self._series.series_uid == series_uid):
+            self.update()
+
+    def _seg_active(self):
+        """세그멘테이션 도구가 선택되어 좌클릭을 가져가는지"""
+        seg = getattr(self, "_seg", None)
+        return seg is not None and seg.tool is not None and self._series is not None
+
+    def _draw_segmentation(self, painter, transform):
+        """라벨 오버레이 + Threshold 미리보기 + 브러시 커서 (영상 좌표계로 그림)"""
+        seg = self._seg
+        if seg is None or self._series is None:
+            return
+        k = self._current_slice
+        layers = []
+        rgba = seg.overlay_rgba(self._series, k)
+        if rgba is not None:
+            layers.append(rgba)
+        if seg.tool == "threshold":
+            preview = seg.threshold_preview(self._series, k)
+            if preview is not None and preview.any():
+                layer = np.zeros(preview.shape + (4,), dtype=np.uint8)
+                layer[preview] = seg.labels.color(seg.active_label) + (90,)
+                layers.append(layer)
+        brush = (seg.tool in ("brush", "eraser") and self._hover_pos is not None)
+        if not layers and not brush:
+            return
+        painter.save()
+        painter.setTransform(transform)
+        for layer in layers:
+            layer = np.ascontiguousarray(layer)
+            h, w = layer.shape[:2]
+            painter.drawImage(0, 0, QImage(layer.data, w, h, 4 * w, QImage.Format_RGBA8888))
+        if brush:
+            img_pos = self._screen_to_image(self._hover_pos)
+            if img_pos is not None:
+                pen = QPen(QColor(255, 255, 255) if seg.tool == "eraser"
+                           else QColor(*seg.labels.color(seg.active_label)), 1.5)
+                pen.setCosmetic(True)
+                if seg.tool == "eraser":
+                    pen.setStyle(Qt.DashLine)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                r = seg.brush_radius
+                painter.drawEllipse(QPointF(img_pos[0], img_pos[1]), r, r)
+        painter.restore()
+
     def set_overlay_visible(self, visible):
         """환자 정보 오버레이 + 측정/주석 표시 (T / O)"""
         self._show_overlay = visible
@@ -366,6 +425,17 @@ class DicomViewport(QWidget):
         return "none"
 
     def mousePressEvent(self, event):
+        if (self._seg_active() and event.button() == Qt.LeftButton
+                and not event.modifiers() & (Qt.AltModifier | CTRL_MODIFIERS)):
+            # 세그멘테이션 도구: 좌클릭 드래그 = 칠하기 (Alt/Ctrl 드래그는 기존 동작)
+            self._mouse_pressed = True
+            self._mouse_button = event.button()
+            self._last_mouse_pos = event.pos()
+            self._drag_action = "seg"
+            self._seg.press(self._series, self._current_slice,
+                            self._screen_to_image(event.pos()))
+            self.update()
+            return
         self._mouse_pressed = True
         self._mouse_button = event.button()
         self._last_mouse_pos = event.pos()
@@ -479,6 +549,8 @@ class DicomViewport(QWidget):
                 self._go_to_slice(self._current_slice + steps, user=True)
         elif action == "tool":
             self._tool_move(pos, img_pos, dx, dy)
+        elif action == "seg":
+            self._seg.move(img_pos)
 
         self._last_mouse_pos = pos
         self.update()
@@ -524,6 +596,8 @@ class DicomViewport(QWidget):
         self._magnifying = False
         if action == "roi_window":
             self._apply_roi_window()
+        if action == "seg":
+            self._seg.release()
         if action == "tool" and self._draft:
             kind = self._draft["type"]
             if kind in ("roi", "area"):
@@ -543,6 +617,9 @@ class DicomViewport(QWidget):
                    self.TOOL_TEXT: Qt.IBeamCursor}
         default = (Qt.ArrowCursor if self._current_tool in (self.TOOL_SELECT, self.TOOL_WINDOW)
                    else Qt.CrossCursor)
+        if self._seg_active():
+            self.setCursor(Qt.CrossCursor)
+            return
         self.setCursor(cursors.get(self._current_tool, default))
 
     def mouseDoubleClickEvent(self, event):
@@ -552,7 +629,8 @@ class DicomViewport(QWidget):
         """
         button = event.button()
         if button == Qt.LeftButton and (self._current_tool in self.DRAWING_TOOLS
-                                        or self._cursor_mode_active()):
+                                        or self._cursor_mode_active()
+                                        or self._seg_active()):
             self.mousePressEvent(event)
             return
         key = {Qt.LeftButton: "left_double", Qt.RightButton: "right_double"}.get(button)
@@ -658,6 +736,8 @@ class DicomViewport(QWidget):
         key = event.key()
         if key in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_last_annotation()
+        elif key == Qt.Key_Escape and self._seg_active():
+            self._seg.set_tool(None)  # 세그멘테이션 도구 해제
         elif key == Qt.Key_Escape:
             if self._draft is None:
                 self.clear_cursor3d()
@@ -1085,6 +1165,7 @@ class DicomViewport(QWidget):
         painter.setTransform(transform)
         painter.drawPixmap(0, 0, pixmap)
         painter.restore()
+        self._draw_segmentation(painter, transform)
 
         self._draw_reference_lines(painter)
         if self._show_annotations:

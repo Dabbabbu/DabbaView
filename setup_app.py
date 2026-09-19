@@ -35,7 +35,9 @@ OPTIONS = {
     'packages': ['dabbaview', 'pydicom', 'pynetdicom', 'numpy', 'PIL', 'scipy', 'cv2',
                  'pypdfium2', 'pypdfium2_raw', 'striprtf',
                  # 3D Volume Rendering (import vtk → vtkmodules.*, .dylibs 포함)
-                 'vtkmodules'],
+                 'vtkmodules',
+                 # AI Research: ONNX 모델 로컬 추론
+                 'onnxruntime'],
     'includes': ['PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui',
                  'PyQt5.QtPrintSupport', 'vtk'],
     # vtk wheel이 끌어오는 matplotlib 등은 앱에서 쓰지 않음

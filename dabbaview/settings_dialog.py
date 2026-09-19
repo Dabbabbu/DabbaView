@@ -61,7 +61,7 @@ def _append_row(table, values):
 
 class SettingsDialog(QDialog):
 
-    TABS = ("mouse", "presets", "hanging", "nodes", "reading")
+    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai")
 
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
@@ -76,6 +76,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._hanging_tab(), "Hanging Protocols")
         self._tabs.addTab(self._nodes_tab(), "DICOM Nodes")
         self._tabs.addTab(self._reading_tab(), "Reading")
+        self._tabs.addTab(self._ai_tab(), "AI")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -279,6 +280,26 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return page
 
+    def _ai_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+        self._monai_url = QLineEdit(self._settings.monai_url())
+        self._monai_url.setPlaceholderText("http://127.0.0.1:8000")
+        form.addRow("MONAI Label 서버:", self._monai_url)
+        self._monai_token = QLineEdit(self._settings.monai_token())
+        self._monai_token.setEchoMode(QLineEdit.Password)
+        self._monai_token.setPlaceholderText("인증을 쓰는 서버만 (선택)")
+        form.addRow("Access Token:", self._monai_token)
+        layout.addLayout(form)
+        layout.addWidget(QLabel(
+            "AI Research 패널(툴바 🧠 AI)의 모델 탭에서 이 서버로 자동 세그멘테이션을 요청하고,\n"
+            "수정한 라벨을 피드백으로 제출할 수 있습니다 (active learning).\n"
+            "서버로는 픽셀 볼륨(NIfTI)만 전송되며 환자 이름·ID 등 DICOM 정보는 보내지 않습니다.\n"
+            "예: monailabel start_server --app apps/radiology --studies datasets/ --conf models segmentation"))
+        layout.addStretch()
+        return page
+
     def _browse_report_folder(self):
         from PyQt5.QtWidgets import QFileDialog
         folder = QFileDialog.getExistingDirectory(self, "판독문 폴더", self._report_folder.text())
@@ -305,4 +326,6 @@ class SettingsDialog(QDialog):
         self._settings.set_local_ae_title(self._local_ae.text())
         self._settings.set_report_folder(self._report_folder.text().strip())
         self._settings.set_report_creator(self._report_creator.text())
+        self._settings.set_monai_url(self._monai_url.text())
+        self._settings.set_monai_token(self._monai_token.text())
         self.accept()
