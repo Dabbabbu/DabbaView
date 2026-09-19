@@ -95,24 +95,47 @@ def _python_version(path):
         return None
 
 
+def _command_line_tools_installed():
+    """/usr/bin/python3는 Xcode Command Line Tools가 없으면 설치 창을 띄우므로 먼저 확인"""
+    try:
+        return subprocess.run(["/usr/bin/xcode-select", "-p"], capture_output=True,
+                              timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def find_base_python():
-    """가상환경을 만들 시스템 Python (3.9 이상, 앱 번들 안의 Python은 제외)"""
+    """가상환경을 만들 시스템 Python: 3.9–3.13 중 가장 새 버전 (앱 번들 안의 Python 제외)
+
+    Finder로 실행한 앱은 PATH가 짧아서 흔한 설치 위치(python.org, Homebrew, pyenv)도 직접 찾음.
+    macOS 기본 /usr/bin/python3는 마지막 수단 (Command Line Tools가 있을 때만)
+    """
+    env_path = clean_env()["PATH"]
     candidates = [os.environ.get("DABBAVIEW_BASE_PYTHON", "")]
-    for name in ("python3.12", "python3.11", "python3.10", "python3"):
-        candidates.append(shutil.which(name) or "")
+    for name in ("python3.13", "python3.12", "python3.11", "python3.10", "python3.9", "python3"):
+        candidates.append(shutil.which(name, path=env_path) or "")
+    for version in ("3.13", "3.12", "3.11", "3.10", "3.9"):
+        candidates += [f"/Library/Frameworks/Python.framework/Versions/{version}/bin/python{version}",
+                       f"/opt/homebrew/bin/python{version}", f"/usr/local/bin/python{version}"]
     candidates += ["/opt/homebrew/bin/python3", "/usr/local/bin/python3",
-                   "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
-                   "/usr/bin/python3"]
+                   os.path.expanduser("~/.pyenv/shims/python3")]
     if sys.platform.startswith("win"):
         candidates += [shutil.which("py") or ""]
-    seen = set()
+    best, seen = None, set()
     for path in candidates:
-        if not path or path in seen or ".app/Contents" in path or not os.path.exists(path):
+        if (not path or path in seen or ".app/Contents" in path or path == "/usr/bin/python3"
+                or not os.path.exists(path)):
             continue
-        seen.add(path)
+        seen.add(os.path.realpath(path))
         version = _python_version(path)
-        if version and (3, 9) <= version < (3, 14):
-            return path
+        if version and (3, 9) <= version < (3, 14) and (best is None or version > best[0]):
+            best = (version, path)
+    if best is not None:
+        return best[1]
+    if sys.platform == "darwin" and os.path.exists("/usr/bin/python3") and _command_line_tools_installed():
+        version = _python_version("/usr/bin/python3")
+        if version and version >= (3, 9):
+            return "/usr/bin/python3"
     return None
 
 

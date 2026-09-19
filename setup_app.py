@@ -97,7 +97,8 @@ OPTIONS = {
                  'google.api_core.client_options', 'google.api_core.exceptions',
                  'google.protobuf', 'jaraco.context', 'jaraco.functools',
                  'jaraco.classes.properties', 'keyring.backends.macOS', 'gdcm'],
-    'excludes': ['tkinter', 'PySide2', 'PySide6', 'PyQt6'],
+    'excludes': ['tkinter', 'PySide2', 'PySide6', 'PyQt6',
+                 'onnx'],   # 개발용(테스트 모델 생성)일 뿐, onnxruntime만 있으면 됨
 }
 
 setup(
