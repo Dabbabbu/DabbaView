@@ -19,10 +19,13 @@ from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QDialog, QHBoxLayo
 STAGE_METADATA = "메타데이터 읽기"
 STAGE_DECODE = "픽셀 디코딩"
 STAGE_TIMEOUT = "타임아웃"
+STAGE_CLOUD = "클라우드 미다운로드"
 
 
 def _stage(source, reason):
     """불러오기(메타데이터) / 표시(픽셀) 단계 + 이유 → 표시할 단계 이름"""
+    if reason.startswith("클라우드"):
+        return STAGE_CLOUD
     if reason.startswith("시간 초과"):
         return STAGE_TIMEOUT
     return STAGE_METADATA if source == "load" else STAGE_DECODE
@@ -161,8 +164,9 @@ class FailedFilesDialog(QDialog):
         self.path_label.setStyleSheet("color: #bbb;")
         layout.addWidget(self.path_label)
         hint = QLabel("압축 형식 오류는 디코더(pylibjpeg, GDCM)가 지원하지 않거나 파일이 손상된 경우입니다. "
-                      "타임아웃은 네트워크 드라이브·클라우드 동기화 폴더에서 자주 생깁니다 — "
-                      "로컬로 복사한 뒤 다시 열어 보세요. 행을 더블클릭하면 Finder에서 보여 줍니다.")
+                      "타임아웃·클라우드 미다운로드는 OneDrive 같은 동기화 폴더에서 생깁니다 — "
+                      "Finder에서 폴더를 우클릭해 '다운로드'(항상 이 기기에 유지)한 뒤 다시 열어 보세요. "
+                      "행을 더블클릭하면 Finder에서 보여 줍니다.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #999;")
         layout.addWidget(hint)
