@@ -4,13 +4,23 @@
 """
 Phase (심장 위상 · 시간 위상) 나누기 - cine · perfusion처럼 한 위치에 여러 장이 있는 시리즈
 
-위상 구분: TemporalPositionIdentifier (0020,0100) → TriggerTime (0018,1060).
+위상 구분: TemporalPositionIdentifier (0020,0100) → TriggerTime (0018,1060) →
+(태그가 없으면) 같은 위치에 여러 장이 있을 때 그 순서.
 같은 위치(ImagePositionPatient를 법선에 투영한 값)끼리 묶고, 그 안에서 위상 값 순서가 위상 번호가 된다.
 CardiacNumberOfImages (0018,1090)는 확인용으로만 쓴다.
 """
 from .clinical.data import position_key
 
 MIN_PHASES = 5   # cine · perfusion처럼 진짜 시간 위상만 (T1/T2 map, DWI b값은 제외)
+
+
+def _order_value(ds, fallback):
+    """위상 태그가 없을 때 같은 위치 안에서의 순서 (InstanceNumber → 불러온 순서)"""
+    value = getattr(ds, "InstanceNumber", None)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(fallback)
 
 
 def _phase_value(ds):
@@ -79,13 +89,18 @@ def _build(series):
     slices = getattr(series, "slices", None) or []
     if len(slices) < 4:
         return None
-    values, keys = [], []
-    for ds in slices:
-        value = _phase_value(ds)
-        if value is None:
-            return None
-        values.append(value)
-        keys.append(position_key(ds))
+    keys = [position_key(ds) for ds in slices]
+    values = [_phase_value(ds) for ds in slices]
+    if any(v is None for v in values):
+        # 위상 태그가 없는 시리즈(일부 cine · 다중 프레임): 같은 위치가 여러 번 나오면 그 순서를 위상으로
+        order_value = [_order_value(ds, i) for i, ds in enumerate(slices)]
+        seen = {}
+        values = []
+        for k, ov in zip(keys, order_value):
+            seen.setdefault(k, []).append(ov)
+        rank = {k: {v: i for i, v in enumerate(sorted(vs))} for k, vs in seen.items()}
+        for k, ov in zip(keys, order_value):
+            values.append(float(rank[k][ov]))
     positions = sorted(set(keys))
     if len(positions) * 2 > len(slices):   # 위치마다 한두 장 = 위상 아님
         return None
@@ -94,17 +109,17 @@ def _build(series):
     for i, (k, v) in enumerate(zip(keys, values)):
         by_position.setdefault(order[k], []).append((v, i))
     n_phases = max(len(v) for v in by_position.values())
-    if n_phases < MIN_PHASES:   # b값 · TI · TE가 다른 파라미터 영상(2~4장)은 위상이 아님
-        return None
-    counts = {len(v) for v in by_position.values()}
-    if len(counts) > 1 and min(counts) * 2 < n_phases:   # 위치마다 장수가 크게 다르면 위상으로 보지 않음
+    counts = sorted(len(v) for v in by_position.values())
+    typical = counts[len(counts) // 2]   # 가운데 값 - 일부만 내보낸 검사(위치마다 장수가 다름)도 받아들임
+    if n_phases < MIN_PHASES or typical < MIN_PHASES:   # b값 · TI · TE가 다른 파라미터 영상은 위상이 아님
         return None
     slice_of, of_slice = {}, {}
     for position, items in by_position.items():
         for phase, (_v, index) in enumerate(sorted(items)):
             slice_of[(position, phase)] = index
             of_slice[index] = (position, phase)
-    unit = "TemporalPositionIdentifier" if getattr(slices[0], "TemporalPositionIdentifier", None) is not None \
-        else "TriggerTime (ms)"
+    unit = ("TemporalPositionIdentifier" if getattr(slices[0], "TemporalPositionIdentifier", None) is not None
+            else "TriggerTime (ms)" if getattr(slices[0], "TriggerTime", None) is not None
+            else "같은 위치의 영상 순서")
     labels = [str(i + 1) for i in range(n_phases)]
     return PhaseMap(n_phases, len(positions), slice_of, of_slice, labels, unit)
