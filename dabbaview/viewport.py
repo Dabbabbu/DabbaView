@@ -1031,8 +1031,19 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 self.clear_cursor3d()
             self._draft = None
             self.update()
+        elif key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
+            # ↑↓ 슬라이스 위치, ←→ 위상 (위상이 없는 시리즈는 넷 다 슬라이스 이동)
+            direction = 1 if key in (Qt.Key_Down, Qt.Key_Right) else -1
+            self.step_slice("position" if key in (Qt.Key_Up, Qt.Key_Down) else "phase", direction)
         else:
             super().keyPressEvent(event)
+
+    def step_slice(self, kind, direction):
+        """kind: 'position' (슬라이스 위치) | 'phase' (같은 위치의 위상)"""
+        target = self.slice_navigator(self._current_slice, direction, kind) \
+            if self.slice_navigator is not None else None
+        self._go_to_slice(target if target is not None else self._current_slice + direction, user=True)
+        self.update()
 
     def _adjust_window(self, dx, dy):
         # 좌우 = Width, 상하 = Center
