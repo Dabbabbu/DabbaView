@@ -393,7 +393,7 @@ class CloudBrowserDialog(QDialog):
             parts.append("하위 폴더 내용은 '열기'를 누르면 합쳐서 보여 줍니다")
         self._summary_label.setText(f"{title}  " + "  ·  ".join(parts))
         self._fill_ext_table(summary.get("by_ext", {}))
-        self._summary_toggle.setVisible(bool(summary.get("by_ext")))
+        self._summary_toggle.setVisible(bool(summary.get("by_ext")) or bool(summary.get("folders")))
         self._update_mode_hint()
 
     def _on_progress(self, value):
