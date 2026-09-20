@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 2.6.2 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 2.7.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -163,6 +163,21 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 3. 칸을 클릭하면 그 칸이 활성(노란 테두리)이 되고, 도구와 W/L은 활성 칸에 적용됩니다.
 4. **Space**를 누르면 활성 칸만 크게 보고, 다시 누르면 돌아옵니다.
 5. 같은 좌표계의 시리즈끼리는 **Sync Scroll / Sync W/L / Crosslink(C) / Ref Lines**로 함께 움직일 수 있습니다.
+
+### 여러 칸 함께 움직이기
+
+| 조작 | 결과 |
+|---|---|
+| **Ctrl(⌘)+클릭** | 그 칸을 "함께 움직이는 칸"에 넣거나 뺌 (파란 테두리) |
+| **Shift+클릭** | 활성 칸부터 그 칸까지 한 번에 선택 |
+| 그냥 클릭 | 선택 해제, 그 칸만 활성 (노란 테두리) |
+| **Sync Scroll** 버튼 | 따로 고르지 않아도 보이는 모든 칸이 함께 움직임 |
+
+- 고른 칸들은 **휠 · ← → (슬라이스 위치) · ↑ ↓ (위상)** 에 함께 반응합니다.
+- 같은 좌표계에 평행한 시리즈는 **위치(mm) 기준**으로, 좌표계가 다르거나 장수가 다른 시리즈는 **장수 비율**로 맞춥니다.
+  - 예: SA CINE(270장)의 100번째 → 2CH CINE(30장)의 11번째
+- Compare로 묶은 칸은 예전처럼 간격을 유지합니다.
+- 칸을 고르면 Sync Scroll 버튼보다 **선택이 우선**입니다 (고른 칸끼리만 움직임).
 6. 레이아웃 `Default`는 Hanging Protocol로 자동 배치하고, `ALL`은 검사의 모든 시리즈를 띄웁니다.
 
 ### Ref Lines — 스캔 커버리지

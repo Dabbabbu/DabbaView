@@ -18,7 +18,8 @@ from PyQt5.QtCore import Qt, QEvent, pyqtSignal
 from .viewport import DicomViewport
 from .series_tree import SERIES_MIME_TYPE
 
-ACTIVE_BORDER = ("#ffd400", 2)       # GE 스타일 노란 테두리
+ACTIVE_BORDER = ("#ffd400", 2)       # GE 스타일 노란 테두리 (활성 칸)
+SELECTED_BORDER = ("#3d8bfd", 2)     # 함께 움직이는 칸 (Ctrl·Shift 클릭으로 고름)
 DROP_TARGET_BORDER = ("#ff8c00", 4)
 MAX_VIEWPORTS = 16
 
@@ -43,6 +44,13 @@ def grid_for_count(n):
 # Reference Line 전체 커버리지 색 (Multi View 칸 순서: 파랑, 초록, 주황, 보라, 분홍, 청록 …)
 COVERAGE_COLORS = ["#4aa3ff", "#3ddc84", "#ff9f40", "#c78bff", "#ff6b9a", "#35d0d0", "#e6e6e6", "#b8b83a"]
 
+def _proportional(index, src_count, dst_count):
+    """장수가 다른 시리즈: 같은 비율 위치로 (예: 195장의 100번째 → 20장의 10번째)"""
+    if src_count <= 1 or dst_count <= 1:
+        return 0
+    return int(round(index * (dst_count - 1) / (src_count - 1)))
+
+
 class MultiViewport(QWidget):
     """다중 뷰포트 관리 위젯"""
 
@@ -50,6 +58,7 @@ class MultiViewport(QWidget):
     series_dropped = pyqtSignal(int, str)      # viewport index, SeriesInstanceUID
     paths_dropped = pyqtSignal(int, list)      # viewport index, 파일/폴더 경로
     layout_changed = pyqtSignal(str)
+    selection_changed = pyqtSignal(list)       # 함께 움직이는 칸 번호들
 
     LAYOUT_1x1 = "1x1"
     LAYOUT_1x2 = "1x2"
@@ -64,6 +73,7 @@ class MultiViewport(QWidget):
         self._sync_scroll = False
         self._sync_window = False
         self._reference_lines = False
+        self._selected = set()                 # 활성 칸 외에 함께 움직이는 칸
         self._compare_offsets = {}  # (i, j) → j 슬라이스 - i 슬라이스
         self._syncing = False
         self._maximized = False  # Space: 활성 칸만 크게
@@ -111,6 +121,7 @@ class MultiViewport(QWidget):
             vp.setAcceptDrops(True)
             vp.installEventFilter(self)
             vp.scrolled.connect(lambda index, src=i: self._on_scrolled(src, index))
+            vp.stepped.connect(lambda kind, direction, src=i: self._on_stepped(src, kind, direction))
             vp.window_adjusted.connect(
                 lambda c, w, src=i: self._on_window_adjusted(src, c, w))
             vp.slice_changed.connect(lambda *_: self._refresh_reference_lines())
@@ -129,7 +140,14 @@ class MultiViewport(QWidget):
         idx = self._viewports.index(obj)
 
         if etype == QEvent.MouseButtonPress:
-            self.set_active(idx)
+            mods = event.modifiers()
+            if mods & (Qt.ControlModifier | Qt.MetaModifier):      # Ctrl(⌘)+클릭: 하나씩 고르기
+                self.toggle_selected(idx)
+            elif mods & Qt.ShiftModifier:                          # Shift+클릭: 활성 칸부터 여기까지
+                self.select_range(self._active_index, idx)
+            else:
+                self._selected.clear()
+                self.set_active(idx)
 
         elif etype in (QEvent.DragEnter, QEvent.DragMove):
             if self._accepts(event.mimeData()):
@@ -222,9 +240,50 @@ class MultiViewport(QWidget):
     def is_maximized(self):
         return self._maximized
 
+    def toggle_selected(self, index):
+        """Ctrl(⌘)+클릭: 함께 움직일 칸에 넣거나 뺌 (활성 칸은 항상 포함)"""
+        if not 0 <= index < self.num_visible:
+            return
+        if index == self._active_index:
+            return
+        if index in self._selected:
+            self._selected.discard(index)
+        else:
+            self._selected.add(index)
+        self._highlight_active()
+        self.selection_changed.emit(sorted(self.selected_indices))
+
+    def select_range(self, start, end):
+        """Shift+클릭: 두 칸 사이를 모두 선택"""
+        lo, hi = sorted((start, end))
+        self._selected = {i for i in range(lo, hi + 1) if i < self.num_visible and i != self._active_index}
+        self._highlight_active()
+        self.selection_changed.emit(sorted(self.selected_indices))
+
+    @property
+    def selected_indices(self):
+        """함께 움직이는 칸 (활성 칸 포함). 하나뿐이면 다중 선택 아님"""
+        return {self._active_index} | {i for i in self._selected if i < self.num_visible}
+
+    def clear_selection(self):
+        if self._selected:
+            self._selected.clear()
+            self._highlight_active()
+            self.selection_changed.emit(sorted(self.selected_indices))
+
+    def _sync_targets(self, src):
+        """src가 움직였을 때 따라갈 칸들"""
+        selected = self.selected_indices
+        if len(selected) > 1:
+            return [i for i in selected if i != src] if src in selected else []
+        if self._sync_scroll:
+            return [i for i in range(self.num_visible) if i != src]
+        return []
+
     def set_active(self, index):
         """활성 뷰포트 설정"""
         if 0 <= index < len(self._viewports):
+            self._selected.discard(index)
             self._active_index = index
             if self._maximized:
                 self._apply_layout()  # 최대화 중이면 새 활성 칸을 크게
@@ -233,11 +292,14 @@ class MultiViewport(QWidget):
             self.active_viewport_changed.emit(index)
 
     def _highlight_active(self):
-        """활성 뷰포트 노란 테두리 (1x1에서는 생략)"""
+        """활성 칸은 노란 테두리, 함께 고른 칸은 파란 테두리 (1x1에서는 생략)"""
         multi = self.num_visible > 1
+        selected = self.selected_indices
         for i, vp in enumerate(self._viewports):
             if multi and i == self._active_index:
                 vp.set_highlight(*ACTIVE_BORDER)
+            elif multi and i in selected:
+                vp.set_highlight(*SELECTED_BORDER)
             else:
                 vp.set_highlight(None)
 
@@ -316,27 +378,46 @@ class MultiViewport(QWidget):
         self._compare_offsets[(j, i)] = a.current_slice - b.current_slice
 
     def _on_scrolled(self, src, index):
-        if not self._sync_scroll or self._syncing or src >= self.num_visible:
+        if self._syncing or src >= self.num_visible:
+            return
+        targets = self._sync_targets(src)
+        if not targets:
             return
         source = self._viewports[src]
         src_geom = source.sync_geometry()
         self._syncing = True
         try:
-            for j, target in enumerate(self.visible_viewports):
-                if j == src or target.series is None:
+            for j in targets:
+                target = self._viewports[j]
+                if target.series is None:
                     continue
                 if (src, j) in self._compare_offsets:
                     target.go_to_slice(index + self._compare_offsets[(src, j)], user=False)
                     continue
                 dst_geom = target.sync_geometry()
-                if (src_geom is None or dst_geom is None
-                        or not src_geom.is_linkable_with(dst_geom)
-                        or not src_geom.is_parallel_to(index, dst_geom,
-                                                       target.current_slice)):
-                    continue
-                # 같은 좌표계 + 평행: 소스 슬라이스 중심에서 가장 가까운 슬라이스
-                nearest, _ = dst_geom.nearest_slice(src_geom.center_point(index))
-                target.go_to_slice(nearest, user=False)
+                if (src_geom is not None and dst_geom is not None
+                        and src_geom.is_linkable_with(dst_geom)
+                        and src_geom.is_parallel_to(index, dst_geom, target.current_slice)):
+                    # 같은 좌표계 + 평행: 소스 슬라이스 중심에서 가장 가까운 슬라이스
+                    nearest, _ = dst_geom.nearest_slice(src_geom.center_point(index))
+                    target.go_to_slice(nearest, user=False)
+                else:
+                    # 좌표계가 다르거나 방향이 다른 시리즈: 장수 비율로 맞춰서 이동
+                    target.go_to_slice(_proportional(index, source.series.num_slices,
+                                                     target.series.num_slices), user=False)
+        finally:
+            self._syncing = False
+
+    def _on_stepped(self, src, kind, direction):
+        """방향키(위치 · 위상)를 함께 고른 칸에도 그대로 적용"""
+        if self._syncing or src >= self.num_visible:
+            return
+        self._syncing = True
+        try:
+            for j in self._sync_targets(src):
+                target = self._viewports[j]
+                if target.series is not None:
+                    target.step_slice(kind, direction, user=False)
         finally:
             self._syncing = False
 
