@@ -24,14 +24,10 @@ WORKERS = 6
 
 
 def wanted(name):
-    """로컬 폴더 열기와 같은 파일 선별 (+ 판독문 .txt는 작으니 함께 받는다)"""
-    from ..dicom_loader import TEXT_REPORT_EXTENSIONS, is_candidate_file
+    """로컬 폴더 열기와 같은 파일 선별"""
+    from ..dicom_loader import is_candidate_file
     from ..formats.readers import file_kind
-    if name.startswith("."):
-        return False
-    if name.lower().endswith(TEXT_REPORT_EXTENSIONS):
-        return True
-    return is_candidate_file(name) or file_kind(name) != "dicom"
+    return is_candidate_file(name) or (not name.startswith(".") and file_kind(name) != "dicom")
 
 
 def _human_time(seconds):
