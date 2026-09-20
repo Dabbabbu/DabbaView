@@ -103,6 +103,12 @@ jobs:
         with:
           name: DabbaView-Windows
 
+      - name: 파일 이름에 버전 · OS 넣기
+        run: |
+          mv DabbaView-macOS.zip "DabbaView-$GITHUB_REF_NAME-macOS.zip"
+          mv DabbaView-Windows.zip "DabbaView-$GITHUB_REF_NAME-Windows.zip"
+          ls -lh DabbaView-*.zip
+
       - name: Release 본문 (CHANGELOG에서 이 버전 부분만)
         shell: bash
         run: |
@@ -119,8 +125,9 @@ jobs:
           print()
           print("| 운영체제 | 파일 | 설치 |")
           print("|---|---|---|")
-          print("| macOS | `DabbaView-macOS.zip` | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |")
-          print("| Windows | `DabbaView-Windows.zip` | 압축을 풀고 `DabbaView\\DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |")
+          tag = "${{ github.ref_name }}"
+          print(f"| macOS | `DabbaView-{tag}-macOS.zip` | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |")
+          print(f"| Windows | `DabbaView-{tag}-Windows.zip` | 압축을 풀고 `DabbaView\\DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |")
           print()
           print("서명되지 않은 앱이라 처음 열 때 경고가 나옵니다. 전체 변경 이력은 [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).")
           print()
@@ -135,5 +142,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "DabbaView $GITHUB_REF_NAME" \
             --notes-file notes.md \
-            DabbaView-macOS.zip DabbaView-Windows.zip
+            "DabbaView-$GITHUB_REF_NAME-macOS.zip" "DabbaView-$GITHUB_REF_NAME-Windows.zip"
 

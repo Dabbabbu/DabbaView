@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 2.6.1 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 2.6.2 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -43,7 +43,7 @@
 
 ### 미리 빌드된 앱 (권장)
 
-1. GitHub [Releases](https://github.com/Dabbabbu/DabbaView/releases/latest)에서 `DabbaView-macOS.zip` (또는 `DabbaView-Windows.zip`)을 받습니다. 로그인 없이 받을 수 있습니다.
+1. GitHub [Releases](https://github.com/Dabbabbu/DabbaView/releases/latest)에서 `DabbaView-v2.6.2-macOS.zip` (또는 `DabbaView-v2.6.2-Windows.zip`)을 받습니다. 파일 이름에 버전과 운영체제가 들어 있고, 로그인 없이 받을 수 있습니다.
 2. 압축을 풉니다.
    - macOS: `DabbaView.app`을 **응용 프로그램(/Applications)** 폴더로 옮깁니다.
    - Windows: `DabbaView` 폴더를 원하는 곳에 둡니다.
