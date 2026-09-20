@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 2.4.1 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 2.5.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -146,6 +146,8 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
    - 맨 오른쪽 **[ALL]** 은 기본 모드입니다. 전체 위상을 영상 순서대로 스크롤·재생합니다 (지금 위상은 점선 테두리로 표시).
    - 오른쪽에 `위치 2/9 · 위상 13/30`처럼 현재 위치와 위상이 나옵니다.
    - 번호를 고르면 그 위상만 봅니다: 휠은 위상을 고정한 채 슬라이스 위치를 옮기고, ▶ Play는 그 위치의 위상을 차례로 돌립니다. [ALL]을 누르면 예전 동작으로 돌아옵니다.
+   - **🔒 이 슬라이스에서 위상 보기**: 한 슬라이스 위치에 머문 채 휠로 위상을 넘깁니다 (수축기 → 이완기를 한 단면에서 확인). ▶ Play도 그 위치의 위상만 돌립니다. [ALL]을 누르면 풀립니다.
+   - **방향키**: **↑ ↓** 슬라이스 위치, **← →** 위상. 어느 모드에서나 같습니다 (위상이 없는 시리즈에서는 넷 다 슬라이스 이동).
    - 위상 구분은 TemporalPositionIdentifier (0020,0100) 또는 TriggerTime (0018,1060)으로 하고, 두 태그가 없으면 같은 위치에 있는 영상의 순서로 나눕니다. 위치마다 장수가 달라도(검사 일부만 내보낸 경우) 됩니다.
    - 띠는 한 위치에 위상이 **5개 이상**일 때 나옵니다. T1/T2 map, DWI b값처럼 파라미터만 다른 영상은 나오지 않습니다.
 7. **▦ Tile** (Shift+T)을 누르면 여러 영상을 격자로 봅니다. 아래 예는 SAX cine의 연속 위상입니다. 격자 크기는 옆의 `4x` 목록에서 고릅니다.
@@ -368,6 +370,7 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | Ctrl+D | 현재 스터디를 Library에 추가 | F | Landmark |
 | Shift+L | Line Profile | F3 | Python 콘솔 |
 | Ctrl+Shift+L | ★ Library 탭 열기/닫기 | ⌘Q | 끝내기 (클라우드 경고창이 떠 있어도) |
+| ↑ / ↓ | 슬라이스 위치 (cine: 위상 고정) | ← / → | 위상 (cine · perfusion) |
 
 ## 21. 마우스 조작
 
