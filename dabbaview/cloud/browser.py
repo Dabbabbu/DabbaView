@@ -334,6 +334,8 @@ class CloudBrowserDialog(QDialog):
         if not (isinstance(value, tuple) and value):
             return
         if value[0] == "summary":
+            self._stop_ticker()
+            self._prog = None
             summary = dict(value[1], listing=False)
             self._show_summary(summary)
             self._status.setText(
@@ -341,14 +343,18 @@ class CloudBrowserDialog(QDialog):
                 f"{human_size(summary['bytes'])}"
                 + (f"  ·  그림 {summary['mixed_images']:,}장 제외" if summary.get("mixed_images") else ""))
             return
-        if value[0] != "scan" or len(value) < 8:
+        if value[0] != "scan" or len(value) < 4:
             return
-        _tag, listed, found, files, elapsed, where, by_ext, all_bytes = value
+        listed, found, files = value[1], value[2], value[3]
+        elapsed = value[4] if len(value) > 4 else 0
+        by_ext = value[6] if len(value) > 6 else {}
+        all_bytes = value[7] if len(value) > 7 else 0
         self._fill_ext_table(by_ext)
-        from .transfer import _human_time
-        self._status.setText(
-            f"하위 폴더 확인 중…  폴더 {listed:,}/{found:,}  ·  파일 {files:,}개  ·  "
-            f"{human_size(all_bytes)}  ·  경과 {_human_time(elapsed)}")
+        import time as _t
+        self._prog = {"kind": "scan", "done": listed, "total": found, "files": files,
+                      "bytes": all_bytes, "start": _t.monotonic() - elapsed}
+        self._start_ticker()
+        self._tick_progress()
 
     def _fill_ext_table(self, by_ext):
         """확장자별 개수·용량 표 (빈도순)"""
@@ -402,29 +408,95 @@ class CloudBrowserDialog(QDialog):
             return
         self._on_progress_bar(value)
 
+    def _start_ticker(self):
+        """파일 하나가 끝날 때까지 화면이 멈춰 보이지 않게 0.5초마다 갱신"""
+        if getattr(self, "_ticker", None) is None:
+            from PyQt5.QtCore import QTimer
+            self._ticker = QTimer(self)
+            self._ticker.setInterval(500)
+            self._ticker.timeout.connect(self._tick_progress)
+        if not self._ticker.isActive():
+            self._ticker.start()
+
+    def _stop_ticker(self):
+        if getattr(self, "_ticker", None) is not None:
+            self._ticker.stop()
+
+    SPINNER = "◐◓◑◒"
+
+    def _tick_progress(self):
+        """마지막으로 받은 수치에 '지금까지 흐른 시간'을 더해 다시 그린다"""
+        state = getattr(self, "_prog", None)
+        if not state:
+            return
+        self._spin = (getattr(self, "_spin", 0) + 1) % len(self.SPINNER)
+        mark = self.SPINNER[self._spin]
+        import time as _t
+        from .transfer import _human_time
+        elapsed = _t.monotonic() - state["start"]
+        done, total = state["done"], state["total"]
+        if state["kind"] == "count":
+            percent = (done * 100.0 / total) if total else 0.0
+            self._progress.setFormat(f"{done:,} / {total:,} 파일 ({percent:.1f}%)")
+            parts = [state["title"], f"{done:,} / {total:,} 파일 ({percent:.1f}%)"]
+            if state.get("bytes"):
+                parts.append(f"{human_size(state['bytes'])} 받음")
+                speed = state["bytes"] / max(0.001, elapsed)
+                parts.append(f"{human_size(speed)}/s")
+            speed_files = done / max(0.001, elapsed)
+            if done and done < total and speed_files > 0:
+                parts.append(f"남은 시간 약 {_human_time((total - done) / speed_files)}")
+            parts.append(f"경과 {_human_time(elapsed)}")
+            parts.extend(state.get("extra") or [])
+            self._status.setText(f"{mark}  " + "  ·  ".join(parts))
+        else:   # 폴더 훑는 중
+            self._status.setText(
+                f"{mark}  하위 폴더 확인 중…  폴더 {done:,}/{total:,}  ·  "
+                f"파일 {state['files']:,}개  ·  {human_size(state.get('bytes', 0))}  ·  "
+                f"경과 {_human_time(elapsed)}")
+
     def _on_progress_bar(self, value):
         if isinstance(value, tuple) and value and value[0] == "count":
             _tag, done, total, text = value
             self._progress.setRange(0, max(total, 1))
             self._progress.setValue(done)
-            self._progress.setFormat(f"{done:,}/{total:,} 파일 (%p%)")
-            self._status.setText(text)
+            parts = str(text).split("  ·  ")
+            head = parts[0] if parts else "내려받는 중"
+            # 보내는 쪽이 준 세부 정보(받은 용량·캐시 수) 중 겹치지 않는 것만 이어 붙임
+            extra = [p.strip() for p in parts[1:]
+                     if any(k in p for k in ("받음", "캐시", "/s"))]
+            state = getattr(self, "_prog", None) or {}
+            if state.get("kind") != "count":
+                state = {}                      # 훑기 → 다운로드로 넘어가면 처음부터
+            self._prog = {"kind": "count", "done": done, "total": total,
+                          "title": head or "내려받는 중", "extra": extra,
+                          "bytes": 0, "hits": 0,
+                          "start": state.get("start") or __import__("time").monotonic()}
+            self._start_ticker()
+            self._tick_progress()
         elif isinstance(value, tuple) and value and value[0] == "scan":
             # 폴더 훑는 중: 확인한 폴더 / 지금까지 찾은 폴더 (하위로 들어가며 전체가 늘어남)
-            _tag, listed, found, files, elapsed, where = value
-            from .transfer import _human_time
+            # 보내는 쪽 항목 수가 달라져도 깨지지 않게 위치로 읽는다
+            listed, found, files = value[1], value[2], value[3]
+            elapsed = value[4] if len(value) > 4 else 0
+            by_ext = value[6] if len(value) > 6 else None
+            all_bytes = value[7] if len(value) > 7 else 0
+            if by_ext:
+                self._fill_ext_table(by_ext)
             self._progress.setRange(0, max(found, 1))
             self._progress.setValue(listed)
             self._progress.setFormat(f"폴더 {listed:,}/{found:,} (%p%)")
-            text = (f"폴더 확인 중  ·  {listed:,}/{found:,} 폴더  ·  파일 {files:,}개 찾음  ·  "
-                    f"경과 {_human_time(elapsed)}")
-            if where:
-                text += f"  ·  {where}"
-            self._status.setText(text)
+            import time as _t
+            self._prog = {"kind": "scan", "done": listed, "total": found, "files": files,
+                          "bytes": all_bytes, "start": _t.monotonic() - elapsed}
+            self._start_ticker()
+            self._tick_progress()
         else:
             self._status.setText(str(value))
 
     def _finish(self):
+        self._stop_ticker()
+        self._prog = None
         if self._worker is not None:
             self._worker.wait(2000)
         self._worker = None

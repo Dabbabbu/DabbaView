@@ -201,8 +201,13 @@ def fetch_heads(provider, files, tops, progress=None, cancelled=None, workers=WO
             with lock:
                 stats["hits"] += 1
         else:
-            got = provider.download_head(item, dest, head_bytes)
-            lazy.register(dest, provider, item)     # 나머지는 볼 때 받음
+            try:
+                got = provider.download_head(item, dest, head_bytes)
+                lazy.register(dest, provider, item)     # 나머지는 볼 때 받음
+            except Exception:  # noqa: BLE001 - 부분 다운로드가 안 되면 통째로 받는다
+                path, _hit = _fetch_one(provider, item, None, cancelled)
+                _link(path, dest)
+                got = getattr(item, "size", 0) or 0
             with lock:
                 stats["bytes"] += got
                 stats["heads"] += 1

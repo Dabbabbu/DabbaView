@@ -224,13 +224,14 @@ class GoogleDriveProvider:
         환자·검사·시리즈·슬라이스 위치를 읽을 수 있다 (픽셀은 나중에).
         """
         import urllib.request
+        from ..update_check import _ssl_context      # 번들 앱: certifi 인증서 사용
         token = self._access_token()
         url = (f"https://www.googleapis.com/drive/v3/files/{item.id}"
                "?alt=media&supportsAllDrives=true")
         request = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {token}",
             "Range": f"bytes=0-{max(0, int(length) - 1)}"})
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=60, context=_ssl_context()) as response:
             data = response.read()
         with open(path, "wb") as fh:
             fh.write(data)

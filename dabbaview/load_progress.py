@@ -10,7 +10,7 @@
 """
 import time
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton,
                              QVBoxLayout)
 
@@ -41,6 +41,14 @@ class LoadProgressDialog(QDialog):
         self._start = time.monotonic()
         self._maximum = 100
         self._force_shown = False
+        self._last_update = time.monotonic()
+        self._spin = 0
+        self._last_stats = ""
+        # 새 소식이 없어도 화면이 멈춘 것처럼 보이지 않게 0.5초마다 갱신
+        self._ticker = QTimer(self)
+        self._ticker.setInterval(500)
+        self._ticker.timeout.connect(self._tick)
+        self._ticker.start()
 
         layout = QVBoxLayout(self)
         self.label = QLabel("Loading DICOM files...")
@@ -104,7 +112,10 @@ class LoadProgressDialog(QDialog):
         self.label.setText(f"{phase or '불러오는 중'}…")
         if total <= 0:
             self.bar.setRange(0, 0)
-            self.stats.setText("파일을 찾는 중입니다…")
+            self._last_stats = "파일을 찾는 중입니다…  ·  경과 " + human_time(
+                time.monotonic() - self._start)
+            self._last_update = time.monotonic()
+            self.stats.setText(f"{self.SPINNER[self._spin]}  {self._last_stats}")
             return
         if self.bar.maximum() == 0:
             self.bar.setRange(0, 100)
@@ -118,11 +129,29 @@ class LoadProgressDialog(QDialog):
             parts.append(f"{speed:.1f}개/초")
             if speed > 0 and current < total:
                 parts.append(f"남은 시간 약 {human_time((total - current) / speed)}")
-        self.stats.setText("  ·  ".join(parts))
+        self._last_stats = "  ·  ".join(parts)
+        self._last_update = time.monotonic()
+        self.stats.setText(f"{self.SPINNER[self._spin]}  {self._last_stats}")
         # 5초 넘게 걸리는 작업이면 강제 중단 버튼을 보여 줌
         if not self._force_shown and elapsed > 5:
             self._force_shown = True
             self.force_button.setVisible(True)
+
+    SPINNER = "◐◓◑◒"
+
+    def _tick(self):
+        """0.5초마다: 회전 표시와 경과 시간을 갱신해 '진행 중'임을 보여 준다"""
+        if not self.isVisible():
+            return
+        self._spin = (self._spin + 1) % len(self.SPINNER)
+        elapsed = time.monotonic() - self._start
+        quiet = time.monotonic() - self._last_update
+        mark = self.SPINNER[self._spin]
+        text = f"{mark}  {self._last_stats}" if self._last_stats else \
+            f"{mark}  준비 중…  ·  경과 {human_time(elapsed)}"
+        if quiet > 3:
+            text += f"   (마지막 응답 {human_time(quiet)} 전 — 큰 파일이면 시간이 걸립니다)"
+        self.stats.setText(text)
 
     def show_force_button(self):
         """멈춤이 감지되면 바로 보여 줌"""
