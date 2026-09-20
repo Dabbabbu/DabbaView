@@ -11,8 +11,9 @@ import os
 import traceback
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
-                             QLineEdit, QMessageBox, QProgressBar, QPushButton, QStyle,
+from PyQt5.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
+                             QLineEdit, QMessageBox, QProgressBar, QPushButton,
+                             QRadioButton, QStyle,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
 from .. import cache
@@ -147,21 +148,35 @@ class CloudBrowserDialog(QDialog):
         self._summary_detail.setRootIsDecorated(False)
         layout.addWidget(self._summary_detail)
 
-        self._fast_open = QCheckBox(
-            "⚡ 빠른 열기 (권장) - 메타데이터만 먼저 받고, 보는 영상만 그때 받기")
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("열기 방식:"))
+        self._fast_open = QRadioButton("⚡ 빠른 열기 (권장)")
         self._fast_open.setChecked(True)
         self._fast_open.setToolTip(
-            "인터넷이 되는 환경이라면 켜 두는 쪽이 항상 낫습니다.\n"
+            "인터넷이 되는 환경이라면 이쪽이 항상 낫습니다.\n"
             " · 파일 앞부분(64 KB)만 받아 시리즈 목록을 바로 띄웁니다\n"
             " · 시리즈를 열면 나머지를 백그라운드로 미리 받아 스크롤이 끊기지 않습니다\n"
             " · 안 보는 시리즈는 아예 받지 않습니다 (시간·디스크 절약)\n"
-            "끄면 예전처럼 전부 받은 뒤 열립니다.\n"
             "(동기화 폴더로 열 때는 불가능하고, API로 연결했을 때만 됩니다)")
-        layout.addWidget(self._fast_open)
-        fast_hint = QLabel(
-            "    인터넷이 없는 곳에서 볼 계획이면, 연 뒤 File ▸ ☁ 클라우드 영상 전체 받기로 미리 받아 두세요.")
-        fast_hint.setStyleSheet("color:#8a9;font-size:11px;")
-        layout.addWidget(fast_hint)
+        self._full_open = QRadioButton("⬇ 전체 다운로드 (오프라인 대비)")
+        self._full_open.setToolTip(
+            "고른 폴더의 영상을 모두 내려받은 뒤 엽니다.\n"
+            "인터넷이 없는 곳에서 볼 예정이거나, 원본을 그대로 보관할 때 고르세요.\n"
+            "시간과 디스크 공간이 더 듭니다.")
+        group = QButtonGroup(self)
+        group.addButton(self._fast_open)
+        group.addButton(self._full_open)
+        self._mode_group = group
+        mode_row.addWidget(self._fast_open)
+        mode_row.addWidget(self._full_open)
+        mode_row.addStretch(1)
+        layout.addLayout(mode_row)
+        self._mode_hint = QLabel()
+        self._mode_hint.setStyleSheet("color:#8a9;font-size:11px;")
+        self._mode_hint.setWordWrap(True)
+        layout.addWidget(self._mode_hint)
+        self._fast_open.toggled.connect(lambda *_: self._update_mode_hint())
+        self._update_mode_hint()
         dest_row = QHBoxLayout()
         self._dest_hint = QLabel()
         self._dest_hint.setWordWrap(True)
@@ -272,9 +287,42 @@ class CloudBrowserDialog(QDialog):
             settings.set_cloud_download_dir(folder)
         self._refresh_dest_hint()
 
+    def _update_mode_hint(self):
+        """고른 방식에 따라 무슨 일이 일어나는지 한 줄로 안내 + 예상 용량"""
+        summary = getattr(self, "_summary", None)
+        total = (summary or {}).get("bytes", 0)
+        if self._fast_open.isChecked():
+            head = min(total, (summary or {}).get("files", 0) * transfer.HEAD_BYTES)
+            text = ("    지금은 메타데이터만 받습니다"
+                    + (f" (약 {human_size(head)})" if head else "")
+                    + " → 목록이 바로 뜨고, 여는 영상만 그때 받습니다."
+                    "  인터넷 없이 보려면 연 뒤 File ▸ ☁ 클라우드 영상 전체 받기.")
+        else:
+            text = ("    고른 폴더의 영상을 모두 받은 뒤 엽니다"
+                    + (f" (약 {human_size(total)})" if total else "")
+                    + " → 다 받을 때까지 기다려야 하지만, 인터넷 없이도 볼 수 있습니다.")
+        self._mode_hint.setText(text)
+
     def _toggle_summary(self, on):
         self._summary_toggle.setText("▾ 접기" if on else "▸ 자세히")
         self._summary_detail.setVisible(on)
+
+    def _show_listing_summary(self, items):
+        """지금 보고 있는 폴더의 내용 요약 (하위 폴더는 들어가야 알 수 있음)
+
+        '열기'로 훑고 나면 하위까지 합친 요약으로 바뀐다.
+        """
+        files = [i for i in items if not i.is_folder]
+        folders = len(items) - len(files)
+        by_ext = {}
+        for item in files:
+            ext = (os.path.splitext(item.name)[1] or "(확장자 없음)").lower()
+            entry = by_ext.setdefault(ext, [0, 0])
+            entry[0] += 1
+            entry[1] += getattr(item, "size", 0) or 0
+        self._show_summary({"folders": folders, "files": len(files), "skipped": 0,
+                            "bytes": sum(getattr(i, "size", 0) or 0 for i in files),
+                            "by_ext": by_ext, "mixed_images": 0, "listing": True})
 
     def _show_summary(self, summary):
         """폴더 N개 · 파일 N개 · 용량 · (자세히: 확장자별 개수·용량)"""
@@ -286,7 +334,10 @@ class CloudBrowserDialog(QDialog):
             parts.append(f"그림 {summary['mixed_images']:,}장 제외(DICOM과 섞임)")
         elif summary.get("skipped"):
             parts.append(f"지원 안 함 {summary['skipped']:,}개 제외")
-        self._summary_label.setText("선택한 폴더:  " + "  ·  ".join(parts))
+        title = "이 폴더:" if summary.get("listing") else "선택한 폴더(하위 포함):"
+        if summary.get("listing") and summary["folders"]:
+            parts.append("하위 폴더 내용은 '열기'를 누르면 합쳐서 보여 줍니다")
+        self._summary_label.setText(f"{title}  " + "  ·  ".join(parts))
         self._summary_detail.clear()
         for ext, (count, size) in sorted(summary.get("by_ext", {}).items(),
                                          key=lambda kv: -kv[1][0]):
@@ -297,6 +348,7 @@ class CloudBrowserDialog(QDialog):
         for i in range(3):
             self._summary_detail.resizeColumnToContents(i)
         self._summary_toggle.setVisible(bool(summary.get("by_ext")))
+        self._update_mode_hint()
 
     def _on_progress(self, value):
         if isinstance(value, tuple) and value and value[0] == "summary":
@@ -389,6 +441,7 @@ class CloudBrowserDialog(QDialog):
         self._apply_filter(self._filter.text())
         folders = sum(1 for i in items if i.is_folder)
         self._status.setText(f"폴더 {folders}개 · 파일 {len(items) - folders}개")
+        self._show_listing_summary(items)
 
     def _apply_filter(self, text):
         text = text.strip().lower()

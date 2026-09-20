@@ -1270,6 +1270,64 @@ class MainWindow(QMainWindow):
             self.download_all_cloud()
         return True
 
+    def _attach_text_reports(self, loader):
+        """영상과 같은 폴더에 있던 .txt 판독문을 해당 검사(Study)에 붙인다
+
+        이미 판독문이 있으면 덮어쓰지 않고, 상태바로만 알린다.
+        """
+        files = list(getattr(loader, "text_files", []) or [])
+        if not files:
+            return
+        # 시리즈의 파일 위치 → StudyInstanceUID (가장 가까운 상위 폴더로 짝짓기)
+        study_of_dir = {}
+        for series in loader.get_series_list():
+            uid = getattr(series, "study_uid", "") or ""
+            for sl in getattr(series, "slices", [])[:1]:
+                folder = os.path.dirname(getattr(sl, "filename", "") or "")
+                while folder and folder not in study_of_dir:
+                    study_of_dir.setdefault(folder, uid)
+                    parent = os.path.dirname(folder)
+                    if parent == folder:
+                        break
+                    folder = parent
+        attached, skipped = [], 0
+        for path in files:
+            folder = os.path.dirname(path)
+            uid = None
+            while folder:
+                uid = study_of_dir.get(folder)
+                if uid:
+                    break
+                parent = os.path.dirname(folder)
+                if parent == folder:
+                    break
+                folder = parent
+            if not uid:
+                continue
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    text = f.read().strip()
+            except OSError:
+                continue
+            if not text:
+                continue
+            existing = self._report_store.load(uid)
+            if existing and (existing.get("text") or existing.get("findings")):
+                skipped += 1
+                continue
+            self._report_store.save({
+                "study_uid": uid, "text": text, "findings": text, "conclusion": "",
+                "source_file": path, "imported_from": os.path.basename(path)})
+            attached.append(os.path.basename(path))
+        if attached:
+            self._statusbar.showMessage(
+                f"판독문 파일 {len(attached)}개를 검사에 연결했습니다 "
+                f"({', '.join(attached[:2])}{'…' if len(attached) > 2 else ''}) — "
+                "📝 Reading에서 확인하세요.", 12000)
+        elif skipped:
+            self._statusbar.showMessage(
+                f"판독문 파일 {skipped}개를 찾았지만 이미 작성된 판독문이 있어 두었습니다.", 8000)
+
     def _setup_lazy_cloud(self):
         """빠른 열기: 볼 때 나머지를 받는 동안 상태바에 알림 (다른 스레드에서 오므로 시그널로)"""
         from .cloud import lazy
@@ -1542,6 +1600,7 @@ class MainWindow(QMainWindow):
             self._multi_viewport.set_active(target_viewport)
             self._update_series_list(select_uid=new_uids[0] if new_uids else None)
         self._report_library.set_studies(self._studies_for_matching())
+        self._attach_text_reports(loader)     # 같은 폴더의 판독문 .txt → 해당 검사에 연결
         notes = self._apply_loaded_extras(loader)
         errors = loader.load_errors
         message = f"Loaded {loaded} files"
