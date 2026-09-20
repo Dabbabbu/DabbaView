@@ -35,6 +35,7 @@ class PhaseBar(QWidget):
         self._viewport = None
         self._map = None
         self._buttons = []
+        self._series = None
         self._all_mode = True
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 6, 2)
@@ -71,6 +72,7 @@ class PhaseBar(QWidget):
         viewport.slice_changed.connect(lambda *_: self.refresh())
 
     def set_series(self, series):
+        self._series = series
         self._map = phase_map(series) if series is not None else None
         self._all_mode = True   # 시리즈를 바꾸면 전체 모드로
         self._rebuild()
@@ -137,7 +139,12 @@ class PhaseBar(QWidget):
         return self._map.step_position(index, direction)
 
     def refresh(self):
-        if self._map is None or self._viewport is None:
+        if self._viewport is None:
+            return
+        if self._viewport.series is not self._series:   # 다른 길로 시리즈가 바뀌어도 따라감
+            self.set_series(self._viewport.series)
+            return
+        if self._map is None:
             return
         where = self._map.where(self._viewport.current_slice)
         if where is None:
