@@ -65,6 +65,15 @@ def plan(provider, items, progress=None, cancelled=None):
     queue = []          # [(folder, rel)]
     listed = 0
     start = time.monotonic()
+    seen = {}           # 확장자 -> [개수, 용량] (걸러지기 전 전체)
+    seen_bytes = [0]
+
+    def note(name, size):
+        ext = (os.path.splitext(name)[1] or "(확장자 없음)").lower()
+        entry = seen.setdefault(ext, [0, 0])
+        entry[0] += 1
+        entry[1] += size or 0
+        seen_bytes[0] += size or 0
 
     def report(where=""):
         if progress:
@@ -79,22 +88,32 @@ def plan(provider, items, progress=None, cancelled=None):
         elif item.downloadable:
             files.append((rel, item))
     report()
+    for rel, item in list(files):       # 파일을 직접 고른 경우도 집계
+        note(item.name, getattr(item, "size", 0))
     while queue:
         if cancelled and cancelled():
             raise CloudError("취소했습니다.")
-        folder, rel = queue.pop(0)
+        folder, rel = queue.pop(0)  # noqa: E501 - 너비 우선(처음 고른 폴더부터 차례로)
         for child in provider.list_children(folder):
             child_rel = os.path.join(rel, safe_name(child.name))
             if child.is_folder:
                 queue.append((child, child_rel))
             elif child.downloadable and wanted(child.name):
                 files.append((child_rel, child))
+                note(child.name, getattr(child, "size", 0))
             else:
                 skipped += 1
+                note(child.name, getattr(child, "size", 0))
         listed += 1
         report(rel)
     files, mixed = _drop_mixed_images(files)
     skipped += mixed
+    summary = {"folders": listed, "files": len(files), "skipped": skipped,
+               "bytes": sum(getattr(i, "size", 0) or 0 for _rel, i in files),
+               "all_bytes": seen_bytes[0], "by_ext": seen,
+               "seconds": time.monotonic() - start, "mixed_images": mixed}
+    if progress:
+        progress(("summary", summary))
     return files, skipped, tops
 
 
@@ -134,6 +153,69 @@ def _fetch_one(provider, item, on_bytes, cancelled):
         json.dump({"name": item.name, "id": item.id, "version": _version(item),
                    "size": item.size}, f, ensure_ascii=False)
     return data, False
+
+
+HEAD_BYTES = 64 * 1024        # DICOM 헤더용으로 받을 앞부분 크기
+
+
+def fetch_heads(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
+                dest_root=None, head_bytes=HEAD_BYTES):
+    """파일 앞부분(헤더)만 받아 둔다 → (경로 목록, 통계)
+
+    받은 파일은 lazy 모듈에 등록되어, 픽셀이 필요해지는 순간 전체를 내려받는다.
+    """
+    from . import lazy
+    session = session_dir(provider.key, dest_root)
+    total = len(files)
+    lock = threading.Lock()
+    stats = {"done": 0, "hits": 0, "bytes": 0, "total": total, "folder": session,
+             "heads": 0}
+    start = time.monotonic()
+    paths = []
+
+    def report():
+        elapsed = max(0.001, time.monotonic() - start)
+        done = stats["done"]
+        speed = done / elapsed
+        parts = [f"{done:,}/{total:,} 파일 ({done * 100 // max(1, total)}%)",
+                 f"헤더 {cache.human_size(stats['bytes'])} 받음"]
+        if speed > 0.1:
+            parts.append(f"{speed:.0f}개/초")
+            if done < total:
+                parts.append(f"남은 시간 약 {_human_time((total - done) / speed)}")
+        if progress:
+            progress(("count", done, total,
+                      "빠른 열기 - 메타데이터만 받는 중  ·  " + "  ·  ".join(parts)))
+
+    def task(rel, item):
+        dest = os.path.join(session, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        cached = cached_path(provider, item)
+        if cached:                                  # 이미 전체가 캐시에 있으면 그대로 사용
+            _link(cached, dest)
+            with lock:
+                stats["hits"] += 1
+        else:
+            got = provider.download_head(item, dest, head_bytes)
+            lazy.register(dest, provider, item)     # 나머지는 볼 때 받음
+            with lock:
+                stats["bytes"] += got
+                stats["heads"] += 1
+        with lock:
+            stats["done"] += 1
+            paths.append(dest)
+        report()
+
+    report()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(task, rel, item) for rel, item in files]
+        for future in concurrent.futures.as_completed(futures):
+            if cancelled and cancelled():
+                for f in futures:
+                    f.cancel()
+                raise CloudError("취소했습니다.")
+            future.result()
+    return sorted(paths), stats
 
 
 def _link(src, dst):

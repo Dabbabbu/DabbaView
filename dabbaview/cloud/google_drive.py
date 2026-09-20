@@ -217,6 +217,36 @@ class GoogleDriveProvider:
         return self.download_file(item, os.path.join(dest_dir, safe_name(item.name)),
                                   progress, cancelled)
 
+    def download_head(self, item, path, length):
+        """파일 앞부분 length 바이트만 받아 저장 → 실제로 받은 바이트 수
+
+        DICOM은 앞부분에 메타데이터가 모두 들어 있어서, 이것만 받아도
+        환자·검사·시리즈·슬라이스 위치를 읽을 수 있다 (픽셀은 나중에).
+        """
+        import urllib.request
+        token = self._access_token()
+        url = (f"https://www.googleapis.com/drive/v3/files/{item.id}"
+               "?alt=media&supportsAllDrives=true")
+        request = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {token}",
+            "Range": f"bytes=0-{max(0, int(length) - 1)}"})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            data = response.read()
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return len(data)
+
+    def _access_token(self):
+        """지금 쓸 수 있는 액세스 토큰 (만료되었으면 갱신)"""
+        creds = self._creds
+        if creds is None:
+            self._service()          # 로그인 · 토큰 준비
+            creds = self._creds
+        if getattr(creds, "expired", False) and getattr(creds, "refresh_token", None):
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
+        return creds.token
+
     def download_file(self, item, path, progress=None, cancelled=None):
         """파일 하나를 path에 저장"""
         if not item.downloadable:

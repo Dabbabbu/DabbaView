@@ -269,6 +269,7 @@ class MainWindow(QMainWindow):
         self._restored_studies = set()
         self._setup_worksave()
         self._setup_update_check()
+        self._setup_lazy_cloud()
         # 다른 앱에 갔다 돌아왔을 때 팝업이 뒤로 숨어 먹통이 되지 않게
         self._modal_raiser = _ModalRaiser()
         QApplication.instance().installEventFilter(self._modal_raiser)
@@ -557,6 +558,13 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self._act_send)
         file_menu.addAction(self._act_print)
+        file_menu.addSeparator()
+        self._act_download_all = QAction("☁ 클라우드 영상 전체 받기… (오프라인 대비)", self)
+        self._act_download_all.setToolTip(
+            "빠른 열기로 헤더만 받아 둔 영상을 모두 내려받아, 인터넷 없이도 볼 수 있게 합니다")
+        self._act_download_all.setShortcut(QKeySequence("Ctrl+Shift+D"))
+        self._act_download_all.triggered.connect(self.download_all_cloud)
+        file_menu.addAction(self._act_download_all)
         file_menu.addSeparator()
         self._act_settings.setText("⚙ Settings… (환경설정)")
         file_menu.addAction(self._act_settings)
@@ -1168,6 +1176,125 @@ class MainWindow(QMainWindow):
         self._status_ram.setVisible(True)
         worker.start()
 
+    def download_all_cloud(self, silent=False):
+        """헤더만 받아 둔 클라우드 영상을 모두 내려받음 (인터넷 없는 곳에서 보기 위해)"""
+        from .cloud import lazy
+        from .cache import human_size
+        paths = lazy.pending_paths()
+        if not paths:
+            if not silent:
+                QMessageBox.information(self, "클라우드 영상",
+                                        "모든 영상이 이미 이 컴퓨터에 있습니다. "
+                                        "인터넷이 없어도 전부 볼 수 있습니다.")
+            return True
+        size = lazy.pending_bytes()
+        answer = QMessageBox.question(
+            self, "클라우드 영상 전체 받기",
+            f"아직 이 컴퓨터에 없는 영상이 {len(paths):,}장 있습니다"
+            + (f" (약 {human_size(size)})" if size else "") + ".\n\n"
+            "지금 모두 받아 두면 인터넷이 없는 곳에서도 볼 수 있습니다.\n"
+            "받지 않으면 영상을 열 때마다 그때그때 내려받습니다 (인터넷 필요).",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if answer != QMessageBox.Yes:
+            return False
+
+        from .load_progress import LoadProgressDialog
+        progress = LoadProgressDialog(self)
+        progress.setWindowTitle("클라우드 영상 받는 중")
+        progress.setWindowModality(Qt.NonModal)
+        progress.show()
+        import threading
+        stop = threading.Event()
+        progress.canceled.connect(stop.set)
+        progress.force_stopped.connect(stop.set)
+
+        class _Notify(QObject):
+            tick = pyqtSignal(int, int)
+        notifier = _Notify()
+        notifier.tick.connect(lambda done, total:
+                              progress.update_load("클라우드에서 영상 받는 중", done, total))
+
+        class _Downloader(QThread):
+            def run(self):
+                lazy.prefetch(paths, cancelled=stop.is_set,
+                              progress=lambda d, t: notifier.tick.emit(d, t))
+
+        worker = _Downloader(self)
+        self._cloud_dl_worker = worker
+        self._cloud_dl_keep = (progress, notifier, stop)   # 참조 유지
+
+        def done():
+            progress.close()
+            left = lazy.pending_count()
+            self._cloud_dl_worker = None
+            self._statusbar.showMessage(
+                "클라우드 영상을 모두 받았습니다. 이제 인터넷 없이도 볼 수 있습니다." if not left
+                else f"중단했습니다 — 아직 {left:,}장이 클라우드에 있습니다.", 10000)
+            self._update_cloud_status()
+        worker.finished.connect(done)
+        worker.start()
+        return False
+
+    def _update_cloud_status(self):
+        """상태바에 '☁ N장 미수신' 표시 (클릭하면 전체 받기)"""
+        from .cloud import lazy
+        left = lazy.pending_count()
+        if not hasattr(self, "_status_cloud"):
+            self._status_cloud = QLabel()
+            self._status_cloud.setStyleSheet("color:#9ab;")   # 경고색 대신 차분한 안내색
+            self._status_cloud.setToolTip("클릭하면 모두 받습니다 (오프라인 대비)")
+            self._status_cloud.mousePressEvent = lambda _e: self.download_all_cloud()
+            self._statusbar.addPermanentWidget(self._status_cloud)
+        self._status_cloud.setText(f"☁ {left:,}장 미수신" if left else "")
+        self._status_cloud.setVisible(bool(left))
+
+    def warn_if_cloud_pending(self, what):
+        """MPR·3D·동영상처럼 전체 영상이 필요한 기능 전에 확인 → 계속하면 True"""
+        from .cloud import lazy
+        if not lazy.pending_count():
+            return True
+        left = lazy.pending_count()
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)      # 위험이 아니라 선택 안내 - '주의' 수준
+        box.setWindowTitle("아직 받지 않은 영상이 있습니다")
+        box.setText(f"{what}에는 영상 전체가 필요한데, {left:,}장이 아직 클라우드에 있습니다.")
+        box.setInformativeText("지금 받아 두면 끊김 없이 쓸 수 있고 인터넷이 없어도 열립니다.\n"
+                               "'그냥 진행'을 골라도 됩니다 — 필요할 때마다 그때그때 받습니다 (인터넷 필요).")
+        get = box.addButton("지금 모두 받기", QMessageBox.AcceptRole)
+        box.addButton("그냥 진행", QMessageBox.DestructiveRole)
+        cancel = box.addButton("취소", QMessageBox.RejectRole)
+        box.exec_()
+        if box.clickedButton() is cancel:
+            return False
+        if box.clickedButton() is get:
+            self.download_all_cloud()
+        return True
+
+    def _setup_lazy_cloud(self):
+        """빠른 열기: 볼 때 나머지를 받는 동안 상태바에 알림 (다른 스레드에서 오므로 시그널로)"""
+        from .cloud import lazy
+
+        class _Notifier(QObject):
+            message = pyqtSignal(str, str)
+        self._lazy_notifier = _Notifier()
+        self._lazy_notifier.message.connect(self._on_lazy_fetch)
+        lazy.add_listener(lambda path, state: self._lazy_notifier.message.emit(path, state))
+
+    def _on_lazy_fetch(self, path, state):
+        name = os.path.basename(path)
+        if state == "start":
+            self._statusbar.showMessage(f"클라우드에서 영상을 받는 중… {name}", 20000)
+        elif state == "failed":
+            self._statusbar.showMessage(
+                f"클라우드에서 받지 못했습니다: {name} — 인터넷 연결을 확인해 주세요", 10000)
+        else:
+            from .cloud import lazy
+            left = lazy.pending_count()
+            self._statusbar.showMessage(
+                f"받았습니다: {name}" + (f"  ·  아직 헤더만 있는 파일 {left:,}개" if left else ""),
+                4000)
+        self._update_cloud_status()
+
     def _update_ram(self):
         """상태바 'RAM: X MB' 갱신. 시스템 메모리가 80%를 넘으면 경고 문구 반환"""
         from .memory_monitor import SYSTEM_WARN_PERCENT, status
@@ -1742,6 +1869,32 @@ class MainWindow(QMainWindow):
         series = self._loader.get_series_by_uid(uid)
         if series:
             self._select_series(series)
+            self._prefetch_series(series)
+
+    def _prefetch_series(self, series):
+        """빠른 열기로 연 시리즈: 스크롤할 때 끊기지 않게 나머지를 미리 받아 둠"""
+        from .cloud import lazy
+        if not lazy.pending_count() or series is None:
+            return
+        paths = [getattr(sl, "filename", "") for sl in getattr(series, "slices", [])]
+        paths = [p for p in paths if p and lazy.is_pending(p)]
+        if not paths:
+            return
+        if getattr(self, "_prefetch_thread", None) is not None \
+                and self._prefetch_thread.isRunning():
+            self._prefetch_stop.set()
+            self._prefetch_thread.wait(1500)
+        import threading
+        self._prefetch_stop = threading.Event()
+        stop = self._prefetch_stop
+
+        class _Prefetch(QThread):
+            def run(self):
+                lazy.prefetch(paths, cancelled=stop.is_set)
+        self._prefetch_thread = _Prefetch(self)
+        self._prefetch_thread.start()
+        self._statusbar.showMessage(
+            f"이 시리즈의 영상 {len(paths):,}장을 미리 받는 중입니다 (보면서 기다리셔도 됩니다)", 6000)
 
     # ─── 시리즈 패널 접기/펼치기 ───
 
@@ -2105,6 +2258,13 @@ class MainWindow(QMainWindow):
         self._ai_panel.on_series_changed()
 
     def _on_tab_changed(self, index):
+        # MPR·3D는 시리즈 전체 픽셀이 필요 → 클라우드에 남은 영상이 있으면 먼저 알림
+        name = self._tab_widget.tabText(index) if index >= 0 else ""
+        if any(k in name for k in ("MPR", "3D")) and not getattr(self, "_cloud_warned", False):
+            from .cloud import lazy
+            if lazy.pending_count():
+                self._cloud_warned = True
+                self.warn_if_cloud_pending(name.strip() or "이 기능")
         self._sync_volume_tabs()
         self._refresh_image_info()
         self._ai_panel.on_series_changed()
@@ -3050,6 +3210,8 @@ class MainWindow(QMainWindow):
         if not series_list:
             QMessageBox.information(self, "일괄 동영상 내보내기",
                                     "2장 이상인 시리즈가 없습니다. 먼저 영상을 여세요.")
+            return
+        if not self.warn_if_cloud_pending("일괄 동영상 내보내기"):
             return
         vp = self._target_viewport()
         window = (vp._window_center, vp._window_width) if vp.series is not None else None
