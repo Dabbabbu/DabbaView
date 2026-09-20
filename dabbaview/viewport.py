@@ -79,6 +79,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     status_message = pyqtSignal(str)  # 측정 결과 등
     scrolled = pyqtSignal(int)  # 사용자가 슬라이스를 넘김 (동기화 스크롤용)
     cine_state_changed = pyqtSignal(bool)  # 시네 재생 중이면 True (Play/Stop 버튼 표시)
+    stepped = pyqtSignal(str, int)         # 방향키 이동 ("position"|"phase", +1/-1) - 함께 고른 칸 동기화
     window_adjusted = pyqtSignal(float, float)  # 사용자가 W/L 변경 (동기화 윈도잉용)
     profile_measured = pyqtSignal(object)  # 라인 프로파일 결과 dict (하단 패널 그래프)
     selection_changed = pyqtSignal(list)   # 선택한 주석 id 목록 (ROI Manager 동기화)
@@ -1038,12 +1039,24 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         else:
             super().keyPressEvent(event)
 
-    def step_slice(self, kind, direction):
-        """kind: 'position' (슬라이스 위치) | 'phase' (같은 위치의 위상)"""
+    def step_slice(self, kind, direction, user=True):
+        """kind: 'position' (슬라이스 위치) | 'phase' (같은 위치의 위상)
+
+        Phase 띠가 없는 뷰포트(Multi View 칸 등)도 시리즈에서 위상 표를 바로 만들어 씀.
+        """
         target = self.slice_navigator(self._current_slice, direction, kind) \
             if self.slice_navigator is not None else None
-        self._go_to_slice(target if target is not None else self._current_slice + direction, user=True)
+        if target is None and self._series is not None:
+            from .phases import phase_map
+            phases = phase_map(self._series)
+            if phases is not None:
+                target = (phases.step_phase(self._current_slice, direction) if kind == "phase"
+                          else phases.step_position(self._current_slice, direction))
+        # 이동 자체는 scrolled를 내보내지 않음 (같은 동작을 stepped로만 전파 → 두 번 움직이지 않게)
+        self._go_to_slice(target if target is not None else self._current_slice + direction, user=False)
         self.update()
+        if user:
+            self.stepped.emit(kind, direction)
 
     def _adjust_window(self, dx, dy):
         # 좌우 = Width, 상하 = Center

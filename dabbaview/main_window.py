@@ -865,8 +865,10 @@ class MainWindow(QMainWindow):
                                  self._capture_image)
         self._act_ref_lines = make("Ref Lines", "", "Reference Line: Multi View 다른 칸의 슬라이스 위치 표시",
                                    self._multi_viewport.set_reference_lines, checkable=True)
-        self._act_sync_scroll = make("Sync Scroll", "", "Multi View 동기화 스크롤\n"
-                                     "같은 좌표계·평행한 시리즈는 위치 기준, 비교(Compare) 칸은 간격 유지",
+        self._act_sync_scroll = make("Sync Scroll", "", "Multi View 동기화 스크롤 (보이는 모든 칸)\n"
+                                     "같은 좌표계·평행한 시리즈는 위치 기준, 다른 시리즈는 장수 비율로, "
+                                     "비교(Compare) 칸은 간격 유지\n"
+                                     "Ctrl(⌘)·Shift+클릭으로 칸을 고르면 버튼과 상관없이 고른 칸만 함께 움직입니다",
                                      self._multi_viewport.set_sync_scroll, checkable=True)
         self._act_sync_window = make("Sync W/L", "", "Multi View 동기화 윈도잉 (같은 모달리티)",
                                      self._multi_viewport.set_sync_window, checkable=True)
@@ -970,6 +972,7 @@ class MainWindow(QMainWindow):
             vp.slice_changed.connect(lambda *_: self._refresh_image_info())
         self._multi_viewport.active_viewport_changed.connect(
             lambda *_: (self._refresh_image_info(), self._ai_panel.on_series_changed()))
+        self._multi_viewport.selection_changed.connect(self._on_viewport_selection)
         self._seg.status.connect(lambda text: self._statusbar.showMessage(text, 6000))
 
     # ─── 파일 열기 ───
@@ -2819,6 +2822,16 @@ class MainWindow(QMainWindow):
             action.blockSignals(False)
         for vp in self._all_viewports():
             vp.set_overlay_items(items)
+
+    def _on_viewport_selection(self, indices):
+        """Ctrl(⌘)·Shift+클릭으로 고른 칸: 휠 · 방향키 · 위상이 함께 움직임"""
+        if len(indices) > 1:
+            names = ", ".join(str(i + 1) for i in indices)
+            self._statusbar.showMessage(
+                f"칸 {names} 함께 선택 — 휠 · ↑↓ · ←→가 같이 움직입니다 "
+                "(빈 곳을 그냥 클릭하면 해제)", 8000)
+        else:
+            self._statusbar.showMessage("칸 선택 해제 — 활성 칸만 움직입니다", 4000)
 
     def _toggle_overlay(self):
         """환자 정보 오버레이 + 측정/주석 표시 토글 (T / O)"""
