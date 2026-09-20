@@ -247,6 +247,19 @@ class AppSettings:
     def set_restore_work(self, mode):
         self._qs.setValue("work/restore", mode if mode in ("ask", "auto", "never") else "ask")
 
+    # 새 버전 확인
+    def update_check(self):
+        return self._qs.value("update/check", True, type=bool)
+
+    def set_update_check(self, on):
+        self._qs.setValue("update/check", bool(on))
+
+    def update_skip_version(self):
+        return self._qs.value("update/skip", "", type=str)
+
+    def set_update_skip_version(self, tag):
+        self._qs.setValue("update/skip", str(tag or ""))
+
     # Reading (기록)
     def report_folder(self):
         return self._qs.value("report_folder", "", type=str)
