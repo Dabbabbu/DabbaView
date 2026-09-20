@@ -70,6 +70,11 @@ class CollectionTree(QTreeWidget):
 
 
 class StudyList(QTreeWidget):
+    """스터디 목록. 이름 바꾸기 · 열기 키를 여기서 처리 (목록이 키를 먼저 받음)"""
+
+    rename_key = pyqtSignal()
+    open_key = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setColumnCount(4)
@@ -79,6 +84,24 @@ class StudyList(QTreeWidget):
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragOnly)
         self.setUniformRowHeights(True)
+
+    def keyPressEvent(self, event):
+        from .platform_keys import is_open_key, is_rename_key
+        if is_rename_key(event):      # macOS Return · Windows F2
+            self.rename_key.emit()
+            return
+        if is_open_key(event):        # macOS ⌘Return · 그 밖의 OS Return
+            self.open_key.emit()
+            return
+        super().keyPressEvent(event)
+
+    def event(self, event):
+        from PyQt5.QtCore import QEvent
+        from .platform_keys import is_rename_key
+        if event.type() == QEvent.ShortcutOverride and is_rename_key(event):
+            event.accept()            # 창 단축키(F2)보다 목록의 이름 바꾸기가 먼저
+            return True
+        return super().event(event)
 
     def mimeTypes(self):
         return [STUDY_MIME]
@@ -151,6 +174,8 @@ class LibraryPanel(QWidget):
 
         self.studies = StudyList()
         self.studies.itemSelectionChanged.connect(self._on_study_selection)
+        self.studies.rename_key.connect(self._on_rename_key)
+        self.studies.open_key.connect(self._on_open_key)
         self.studies.itemDoubleClicked.connect(lambda item, _c: self.open_requested.emit(item.data(0, ROLE_ID)))
         self.studies.setContextMenuPolicy(Qt.CustomContextMenu)
         self.studies.customContextMenuRequested.connect(self._study_menu)
@@ -475,17 +500,27 @@ class LibraryPanel(QWidget):
 
     def event(self, event):
         from PyQt5.QtCore import QEvent
-        if (event.type() == QEvent.ShortcutOverride and event.key() == Qt.Key_F2
+        from .platform_keys import is_rename_key
+        if (event.type() == QEvent.ShortcutOverride and is_rename_key(event)
                 and self.studies.hasFocus()):
             event.accept()
             return True
         return super().event(event)
 
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_F2 and self.studies.hasFocus() and self._current:
+    def _on_rename_key(self):
+        if self._current:
             self.rename_requested.emit("study", self._current)
+
+    def _on_open_key(self):
+        if self._current:
+            self.open_requested.emit(self._current)
+
+    def keyPressEvent(self, event):
+        from .platform_keys import is_open_key, is_rename_key
+        if is_rename_key(event) and self.studies.hasFocus() and self._current:
+            self.rename_requested.emit("study", self._current)   # macOS Return · Windows F2
             return
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.studies.hasFocus() and self._current:
+        if is_open_key(event) and self.studies.hasFocus() and self._current:
             self.open_requested.emit(self._current)
             return
         if event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self.studies.hasFocus():
@@ -552,7 +587,8 @@ class LibraryPanel(QWidget):
             return
         menu = QMenu(self)
         menu.addAction("📂 열기", lambda: self.open_requested.emit(uids[0]))
-        menu.addAction("Rename Study… (F2)", lambda: self.rename_requested.emit("study", uids[0]))
+        from .platform_keys import RENAME_LABEL
+        menu.addAction(f"Rename Study… ({RENAME_LABEL})", lambda: self.rename_requested.emit("study", uids[0]))
         menu.addAction("Edit Patient Name/ID…", lambda: self.rename_requested.emit("patient", uids[0]))
         menu.addAction("Finder에서 보기", self._reveal_study)
         add = menu.addMenu("컬렉션에 추가")

@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 2.10.1 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 2.11.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -118,7 +118,10 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 4. **☰** 버튼으로 트리 보기로 바꿉니다. **F2** 또는 패널 옆 ◀ 버튼으로 패널을 접을 수 있습니다.
    - **Series · ★ Library** 탭 이름에 마우스를 올리면 **✕ 버튼**이 나오고, 누르면 그 탭이 닫힙니다. 다시 여는 방법은 [22장](#22-패널--탭-닫기와-다시-열기).
 5. 카드에 마우스를 올리면 시퀀스 정보(TR/TE/TI, FA, 두께, Matrix, FoV 등)가 나옵니다.
-6. 우클릭하면 **Rename Study… (F2) / Rename Series… (⇧F2) / Edit Patient Name/ID…** 가 있습니다.
+6. 우클릭하면 **Rename Study… / Rename Series… / Edit Patient Name/ID…** 가 있습니다.
+   - 이름 바꾸기 키는 운영체제 기본 규칙을 따릅니다: **macOS는 Return**(Finder와 같음), **Windows는 F2**(탐색기와 같음). 시리즈 이름은 **⇧Return / Shift+F2**.
+   - macOS에서는 Return이 이름 바꾸기라서, 목록에서 열기는 **더블클릭** 또는 **⌘Return**입니다.
+   - 같은 규칙이 시리즈 카드·트리, ★ Library 목록, ROI Manager 이름 칸에 모두 적용됩니다.
    - DICOM 원본까지 고칠 수 있고, 이때 `.bak` 백업을 만듭니다.
 
 ## 5. 2D View
@@ -425,8 +428,9 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | Ctrl+T | DICOM 태그 | Ctrl+I | Image 정보 패널 |
 | Ctrl+O | 파일 열기 | Ctrl+Shift+O | 폴더 열기 |
 | Ctrl+S | 이미지 내보내기 | Ctrl+Shift+E | 동영상 내보내기 |
-| Ctrl+Shift+S | Capture | F2 | 시리즈 패널 접기 / (목록에서) 스터디 이름 바꾸기 |
-| ⇧F2 | 시리즈 이름 바꾸기 | ⌘, | Settings |
+| Ctrl+Shift+S | Capture | F2 | 시리즈 패널 접기 |
+| **Return** (Windows: **F2**) | 목록에서 스터디 이름 바꾸기 | **⇧Return** (Windows: **Shift+F2**) | 시리즈 이름 바꾸기 |
+| ⌘Return (Windows: Return) | 목록에서 시리즈 · 스터디 열기 | ⌘, | Settings |
 | Ctrl+Shift+A | AI Research 패널 | D / X | Brush / Eraser |
 | W / G / M | Magic Wand / Threshold / MedSAM | Ctrl+Z / Ctrl+Y | 되돌리기 / 다시 하기 |
 | Shift+E | 사각형 ROI | Shift+D | 경로 길이 |
