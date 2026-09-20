@@ -82,7 +82,8 @@ def plan(provider, items, progress=None, cancelled=None):
     def report(where=""):
         if progress:
             progress(("scan", listed, listed + len(queue), len(files),
-                      time.monotonic() - start, where))
+                      time.monotonic() - start, where,
+                      {k: list(v) for k, v in seen.items()}, seen_bytes[0]))
 
     for item in items:
         rel = safe_name(item.name)

@@ -117,6 +117,7 @@ class CloudBrowserDialog(QDialog):
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self._tree.itemDoubleClicked.connect(self._on_double_click)
+        self._tree.itemSelectionChanged.connect(self._update_open_buttons)
         layout.addWidget(self._tree, 1)
 
         hint = QLabel("폴더는 더블클릭으로 들어갑니다. 파일·폴더를 골라(여러 개 가능) '열기'를 누르면 "
@@ -171,12 +172,7 @@ class CloudBrowserDialog(QDialog):
         mode_row.addWidget(self._full_open)
         mode_row.addStretch(1)
         layout.addLayout(mode_row)
-        self._mode_hint = QLabel()
-        self._mode_hint.setStyleSheet("color:#8a9;font-size:11px;")
-        self._mode_hint.setWordWrap(True)
-        layout.addWidget(self._mode_hint)
         self._fast_open.toggled.connect(lambda *_: self._update_mode_hint())
-        self._update_mode_hint()
         dest_row = QHBoxLayout()
         self._dest_hint = QLabel()
         self._dest_hint.setWordWrap(True)
@@ -199,11 +195,12 @@ class CloudBrowserDialog(QDialog):
         layout.addWidget(self._status)
         buttons = QHBoxLayout()
         buttons.addStretch()
-        self._open_here = QPushButton("📂 현재 폴더 전체 열기")
-        self._open_here.setToolTip("지금 보고 있는 폴더를 하위 폴더까지 통째로 내려받아 엽니다")
+        self._open_here = QPushButton("📂 이 폴더 전체 열기")
+        self._open_here.setToolTip("지금 들어와 있는 폴더를 하위 폴더까지 통째로 엽니다 (고를 필요 없음)")
         self._open_here.clicked.connect(self._open_current_folder)
         buttons.addWidget(self._open_here)
-        self._open = QPushButton("열기 (내려받아 불러오기)")
+        self._open = QPushButton("선택 항목 열기")
+        self._open.setToolTip("위 목록에서 고른 폴더·파일만 엽니다 (여러 개 고를 수 있음)")
         self._open.setDefault(True)
         self._open.clicked.connect(self._download_selected)
         self._cancel = QPushButton("닫기")
@@ -288,24 +285,81 @@ class CloudBrowserDialog(QDialog):
         self._refresh_dest_hint()
 
     def _update_mode_hint(self):
-        """고른 방식에 따라 무슨 일이 일어나는지 한 줄로 안내 + 예상 용량"""
+        """고른 폴더를 훑고 나면 각 방식의 예상 용량을 버튼 이름에 붙여 준다"""
         summary = getattr(self, "_summary", None)
         total = (summary or {}).get("bytes", 0)
-        if self._fast_open.isChecked():
-            head = min(total, (summary or {}).get("files", 0) * transfer.HEAD_BYTES)
-            text = ("    지금은 메타데이터만 받습니다"
-                    + (f" (약 {human_size(head)})" if head else "")
-                    + " → 목록이 바로 뜨고, 여는 영상만 그때 받습니다."
-                    "  인터넷 없이 보려면 연 뒤 File ▸ ☁ 클라우드 영상 전체 받기.")
+        files = (summary or {}).get("files", 0)
+        if total and files and not (summary or {}).get("listing"):
+            head = min(total, files * transfer.HEAD_BYTES)
+            self._fast_open.setText(f"⚡ 빠른 열기 (권장 · 약 {human_size(head)})")
+            self._full_open.setText(f"⬇ 전체 다운로드 (오프라인 대비 · 약 {human_size(total)})")
         else:
-            text = ("    고른 폴더의 영상을 모두 받은 뒤 엽니다"
-                    + (f" (약 {human_size(total)})" if total else "")
-                    + " → 다 받을 때까지 기다려야 하지만, 인터넷 없이도 볼 수 있습니다.")
-        self._mode_hint.setText(text)
+            self._fast_open.setText("⚡ 빠른 열기 (권장)")
+            self._full_open.setText("⬇ 전체 다운로드 (오프라인 대비)")
 
     def _toggle_summary(self, on):
         self._summary_toggle.setText("▾ 접기" if on else "▸ 자세히")
         self._summary_detail.setVisible(on)
+        if on:
+            self._scan_current()          # 하위 폴더 내용까지 훑어서 채움
+        else:
+            self._cancel_scan()
+
+    # ─── 하위 폴더 내용 미리 보기 ───
+    def _cancel_scan(self):
+        worker = getattr(self, "_scan_worker", None)
+        if worker is not None:
+            worker.cancel = True
+            self._scan_worker = None
+
+    def _scan_current(self):
+        """지금 보고 있는 폴더(또는 고른 폴더들)의 하위까지 훑어 확장자·용량을 보여 준다"""
+        targets = [i for i in self._selected_items() if i.is_folder] or \
+                  ([self._stack[-1]] if self._stack else
+                   [i for i in self._items if i.is_folder])
+        if not targets:
+            return
+        self._cancel_scan()
+        provider = self.provider
+        worker = _Worker(lambda progress, cancelled:
+                         transfer.plan(provider, targets, progress, cancelled))
+        self._scan_worker = worker
+        worker.progress.connect(self._on_scan_progress)
+        worker.done.connect(lambda _r: setattr(self, "_scan_worker", None))
+        worker.failed.connect(lambda _m: setattr(self, "_scan_worker", None))
+        self._status.setText("하위 폴더 내용을 확인하는 중…")
+        worker.start()
+
+    def _on_scan_progress(self, value):
+        if not (isinstance(value, tuple) and value):
+            return
+        if value[0] == "summary":
+            summary = dict(value[1], listing=False)
+            self._show_summary(summary)
+            self._status.setText(
+                f"하위 포함: 폴더 {summary['folders']:,}개 · 파일 {summary['files']:,}개 · "
+                f"{human_size(summary['bytes'])}"
+                + (f"  ·  그림 {summary['mixed_images']:,}장 제외" if summary.get("mixed_images") else ""))
+            return
+        if value[0] != "scan" or len(value) < 8:
+            return
+        _tag, listed, found, files, elapsed, where, by_ext, all_bytes = value
+        self._fill_ext_table(by_ext)
+        from .transfer import _human_time
+        self._status.setText(
+            f"하위 폴더 확인 중…  폴더 {listed:,}/{found:,}  ·  파일 {files:,}개  ·  "
+            f"{human_size(all_bytes)}  ·  경과 {_human_time(elapsed)}")
+
+    def _fill_ext_table(self, by_ext):
+        """확장자별 개수·용량 표 (빈도순)"""
+        self._summary_detail.clear()
+        for ext, (count, size) in sorted(by_ext.items(), key=lambda kv: (-kv[1][0], kv[0])):
+            row = QTreeWidgetItem([ext, f"{count:,}개", human_size(size)])
+            row.setTextAlignment(1, Qt.AlignRight)
+            row.setTextAlignment(2, Qt.AlignRight)
+            self._summary_detail.addTopLevelItem(row)
+        for i in range(3):
+            self._summary_detail.resizeColumnToContents(i)
 
     def _show_listing_summary(self, items):
         """지금 보고 있는 폴더의 내용 요약 (하위 폴더는 들어가야 알 수 있음)
@@ -338,15 +392,7 @@ class CloudBrowserDialog(QDialog):
         if summary.get("listing") and summary["folders"]:
             parts.append("하위 폴더 내용은 '열기'를 누르면 합쳐서 보여 줍니다")
         self._summary_label.setText(f"{title}  " + "  ·  ".join(parts))
-        self._summary_detail.clear()
-        for ext, (count, size) in sorted(summary.get("by_ext", {}).items(),
-                                         key=lambda kv: -kv[1][0]):
-            row = QTreeWidgetItem([ext, f"{count:,}개", human_size(size)])
-            row.setTextAlignment(1, Qt.AlignRight)
-            row.setTextAlignment(2, Qt.AlignRight)
-            self._summary_detail.addTopLevelItem(row)
-        for i in range(3):
-            self._summary_detail.resizeColumnToContents(i)
+        self._fill_ext_table(summary.get("by_ext", {}))
         self._summary_toggle.setVisible(bool(summary.get("by_ext")))
         self._update_mode_hint()
 
@@ -438,10 +484,16 @@ class CloudBrowserDialog(QDialog):
             self._tree.addTopLevelItem(row)
         self._up.setEnabled(bool(self._stack))
         self._open_here.setEnabled(bool(self._stack))
+        self._update_open_buttons()
         self._apply_filter(self._filter.text())
-        folders = sum(1 for i in items if i.is_folder)
-        self._status.setText(f"폴더 {folders}개 · 파일 {len(items) - folders}개")
+        self._cancel_scan()
         self._show_listing_summary(items)
+        folders = sum(1 for i in items if i.is_folder)
+        self._status.setText(
+            "▸ 자세히를 누르면 하위 폴더 내용(확장자·용량)까지 확인합니다" if folders
+            else "")
+        if self._summary_toggle.isChecked():
+            self._scan_current()
 
     def _apply_filter(self, text):
         text = text.strip().lower()
@@ -519,8 +571,19 @@ class CloudBrowserDialog(QDialog):
 
     # ─── 다운로드 ───
 
+    def _update_open_buttons(self):
+        picked = [i for i in self._selected_items() if i.is_folder or i.downloadable]
+        self._open.setEnabled(bool(picked))
+        if picked:
+            self._open.setText(f"선택 항목 열기 ({len(picked)}개)")
+        else:
+            self._open.setText("선택 항목 열기")
+
+    def _selected_items(self):
+        return [r.data(0, Qt.UserRole) for r in self._tree.selectedItems()]
+
     def _download_selected(self):
-        selected = [r.data(0, Qt.UserRole) for r in self._tree.selectedItems()]
+        selected = self._selected_items()
         selected = [i for i in selected if i.is_folder or i.downloadable]
         if not selected:
             QMessageBox.information(self, self.provider.name, "열 파일이나 폴더를 고르세요.")
