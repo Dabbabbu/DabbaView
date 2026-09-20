@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QAction, QActionGroup, QFileDialog, QStatusBar,
     QSlider, QLabel, QProgressDialog, QMessageBox,
     QSpinBox, QApplication, QMenuBar, QTabWidget, QMenu, QStackedWidget,
-    QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy, QShortcut, QDialog
+    QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy, QShortcut, QDialog, QCheckBox
 )
 from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings, QObject, QEvent,
                           QVariantAnimation, QEasingCurve, QTimer, QUrl)
@@ -232,6 +232,7 @@ class MainWindow(QMainWindow):
         self._install_overlay_items()
         self._restored_studies = set()
         self._setup_worksave()
+        self._setup_update_check()
         self._report_library.set_folder(self._app_settings.report_folder())
 
         # 다크 테마
@@ -615,6 +616,10 @@ class MainWindow(QMainWindow):
         github = QAction("GitHub 저장소 열기", self)
         github.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
         self._help_menu.addAction(github)
+        updates = QAction("🔄 새 버전 확인…", self)
+        updates.setToolTip("GitHub Releases에서 최신 버전을 확인합니다")
+        updates.triggered.connect(self.check_updates_now)
+        self._help_menu.addAction(updates)
         self._help_menu.addSeparator()
         deploy = QAction("🚀 Deploy Web...", self)
         deploy.setToolTip("DabbaView-Web(GitHub Pages)을 GitHub Actions로 다시 배포")
@@ -2242,6 +2247,43 @@ class MainWindow(QMainWindow):
         self._statusbar.showMessage(f"Key Image {len(exported)}장 내보냄: {folder}", 8000)
 
     # ─── 주석 저장 / 불러오기 ───
+
+    # ─── 새 버전 확인 ───
+    def _setup_update_check(self):
+        from .update_check import UpdateChecker
+        self._update_seen = False
+        self._update_checker = UpdateChecker(self)
+        self._update_checker.found.connect(self._on_update_found)
+        if self._app_settings.update_check():
+            QTimer.singleShot(3000, lambda: self._update_checker.check(
+                self._app_settings.update_skip_version()))
+
+    def check_updates_now(self):
+        """Help ▸ 새 버전 확인 (건너뛴 버전도 다시 알림)"""
+        self._statusbar.showMessage("새 버전 확인 중…", 3000)
+        self._update_seen = False
+        self._update_checker.check(skip_version=None)
+        QTimer.singleShot(9000, lambda: None if self._update_seen else
+                          self._statusbar.showMessage(f"이미 최신 버전입니다 (v{__version__}).", 5000))
+
+    def _on_update_found(self, tag, url):
+        from .update_check import RELEASES_PAGE
+        self._update_seen = True
+        box = QMessageBox(self)
+        box.setWindowModality(Qt.ApplicationModal)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("새 버전")
+        box.setText(f"DabbaView {tag}이(가) 출시되었습니다. (현재 v{__version__})")
+        box.setInformativeText("Releases 페이지에서 macOS · Windows용 zip을 받을 수 있습니다.")
+        skip = QCheckBox("이 버전은 다시 알리지 않기")
+        box.setCheckBox(skip)
+        download = box.addButton("다운로드 페이지 열기", QMessageBox.AcceptRole)
+        box.addButton("나중에", QMessageBox.RejectRole)
+        box.exec_()
+        if skip.isChecked():
+            self._app_settings.set_update_skip_version(tag)
+        if box.clickedButton() is download:
+            QDesktopServices.openUrl(QUrl(url or RELEASES_PAGE))
 
     # ─── 작업(ROI · 측정 · 주석) 저장 · 복원 ───
     def _setup_worksave(self):
