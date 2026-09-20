@@ -157,6 +157,11 @@ class _NetworkDialog(QDialog):
         self._progress.setVisible(True)
         self._progress.setMaximum(total)
         self._progress.setValue(done)
+        if getattr(self, "_eta", None) is None:
+            from .progress_text import Eta
+            self._eta = Eta("장")
+        self._progress.setFormat(self._eta.text(done, total))
+        self._progress.setTextVisible(True)
 
     def _set_busy(self, busy, text=""):
         self._run_btn.setEnabled(not busy)

@@ -512,6 +512,9 @@ class AnonymizeDialog(QDialog):
         uid_mapper = UIDMapper()  # 시리즈 전체가 같은 새 Study/Series UID 공유
         self._progress.setVisible(True)
         self._progress.setMaximum(self._series.num_slices)
+        from .progress_text import Eta
+        eta, total_slices = Eta("장"), self._series.num_slices
+        self._progress.setTextVisible(True)
 
         saved, errors = 0, []
         for i in range(self._series.num_slices):
@@ -525,6 +528,7 @@ class AnonymizeDialog(QDialog):
             except Exception as e:  # noqa: BLE001 - 한 장 실패해도 나머지는 저장
                 errors.append(f"{i}: {e}")
             self._progress.setValue(i + 1)
+            self._progress.setFormat("익명화 중  ·  " + eta.text(i + 1, total_slices))
             QApplication.processEvents()
 
         message = f"{saved}개 파일이 익명화되어 저장되었습니다.\n{output_dir}"

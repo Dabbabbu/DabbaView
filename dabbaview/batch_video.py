@@ -215,12 +215,14 @@ class BatchVideoDialog(QDialog):
         self.bar.setVisible(True)
         self.export_button.setEnabled(False)
         self.list.setEnabled(False)
+        from .progress_text import Eta
+        self._eta = Eta("시리즈")
         self._worker.start()
 
     def _on_progress(self, done, total, name):
         self.bar.setValue(done)
         if done < total:
-            self.status.setText(f"{done + 1}/{total} 시리즈 변환 중…  {name}")
+            self.status.setText(f"{self._eta.text(done, total)}  ·  변환 중: {name}")
 
     def _on_finished(self, ok, fail, errors):
         self.list.setEnabled(True)

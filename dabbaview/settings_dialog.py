@@ -509,6 +509,18 @@ class SettingsDialog(QDialog):
         row.addWidget(guide)
         row.addStretch()
         layout.addLayout(row)
+        dl = QHBoxLayout()
+        dl.addWidget(QLabel("받은 파일 저장 폴더:"))
+        self._cloud_dir = QLineEdit(self._settings.cloud_download_dir())
+        self._cloud_dir.setToolTip("클라우드에서 내려받은 DICOM을 이 폴더 아래 날짜 폴더에 저장합니다")
+        browse = QPushButton("찾아보기…")
+        browse.clicked.connect(self._pick_cloud_dir)
+        reset_dir = QPushButton("기본값")
+        reset_dir.clicked.connect(self._reset_cloud_dir)
+        dl.addWidget(self._cloud_dir, 1)
+        dl.addWidget(browse)
+        dl.addWidget(reset_dir)
+        layout.addLayout(dl)
         from .cloud.secure_store import use_keychain
         self._use_keychain = QCheckBox(f"로그인 토큰·Client Secret을 {backend_name()}에 저장")
         self._use_keychain.setChecked(use_keychain(self._settings._qs))
@@ -523,6 +535,17 @@ class SettingsDialog(QDialog):
             "권한은 읽기 전용입니다 (Drive: drive.readonly, OneDrive: Files.Read.All)."))
         layout.addStretch()
         return page
+
+    def _pick_cloud_dir(self):
+        from PyQt5.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, "받은 파일을 저장할 폴더",
+                                                  self._cloud_dir.text())
+        if folder:
+            self._cloud_dir.setText(folder)
+
+    def _reset_cloud_dir(self):
+        from .app_settings import default_download_dir
+        self._cloud_dir.setText(default_download_dir())
 
     def _cache_tab(self):
         from . import cache
@@ -671,6 +694,7 @@ class SettingsDialog(QDialog):
         from .cloud.secure_store import set_use_keychain
         # 저장 위치(키체인/설정 파일)를 먼저 정하고, 그 다음에 값을 써야 원하는 곳에 들어간다
         set_use_keychain(self._settings._qs, self._use_keychain.isChecked())
+        self._settings.set_cloud_download_dir(self._cloud_dir.text().strip())
         secret = self._google_secret.text().strip()
         if secret:
             self._secure.set(google_drive.SECRET_KEY, secret)
