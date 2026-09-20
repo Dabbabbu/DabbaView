@@ -19,6 +19,8 @@ class CursorSyncController(QObject):
 
     # 전파 결과 (연동된 뷰 수, 좌표계가 달라 제외된 뷰 수) - 상태바 표시용
     synced = pyqtSignal(int, int)
+    # 3D Cursor 전파 결과 (표시된 뷰 수, 스캔 범위 밖이라 표시 못 한 뷰 수)
+    cursor3d_result = pyqtSignal(int, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -74,15 +76,21 @@ class CursorSyncController(QObject):
         self.synced.emit(linked, skipped)
 
     def _broadcast_cursor3d(self, source, point):
-        """3D Cursor는 Crosslink 켜짐 여부와 관계없이 같은 좌표계 뷰에 표시"""
-        linked = skipped = 0
+        """3D Cursor는 Crosslink 켜짐 여부와 관계없이 같은 좌표계 뷰에 표시.
+
+        좌표가 그 시리즈의 스캔 범위 밖이면 커서를 놓지 않는다 (out_of_range로 셈).
+        """
+        linked = skipped = out_of_range = 0
         for view in self._views:
             if view is source or view.series is None:
                 continue
-            if self.is_linked(source, view):
-                view.show_cursor3d(point)
-                linked += 1
-            else:
+            if not self.is_linked(source, view):
                 view.clear_cursor3d()
                 skipped += 1
+                continue
+            if view.show_cursor3d(point):
+                linked += 1
+            else:
+                out_of_range += 1
         self.synced.emit(linked, skipped)
+        self.cursor3d_result.emit(linked, out_of_range)
