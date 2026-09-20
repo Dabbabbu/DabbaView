@@ -321,6 +321,7 @@ class RoiManagerDock(QDockWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.table.installEventFilter(self)   # macOS Return · Windows F2 로 이름 바꾸기
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -490,6 +491,19 @@ class RoiManagerDock(QDockWidget):
         return chosen
 
     # ─── 표 편집 ───
+    def eventFilter(self, obj, event):
+        """표에서 이름 바꾸기 키를 누르면 이름 칸(1열) 편집 시작"""
+        from PyQt5.QtCore import QEvent
+        from .platform_keys import is_rename_key
+        if obj is self.table and event.type() == QEvent.KeyPress and is_rename_key(event):
+            row = self.table.currentRow()
+            if row >= 0:
+                item = self.table.item(row, 1)
+                if item is not None and item.flags() & Qt.ItemIsEditable:
+                    self.table.editItem(item)
+                    return True
+        return super().eventFilter(obj, event)
+
     def _on_item_changed(self, item):
         ann_id = item.data(Qt.UserRole)
         store = self.main._annotation_store

@@ -549,6 +549,7 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
         return uid or ""
 
     def _context_menu(self, pos):
+        from .platform_keys import RENAME_LABEL, RENAME_LABEL_SHIFT
         from PyQt5.QtWidgets import QMenu
         item = self.itemAt(pos)
         if item is None:
@@ -557,9 +558,9 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
         series_uid = item.data(0, ROLE_SERIES_UID)
         study_uid = self._study_uid_of(item)
         if series_uid:
-            menu.addAction("Rename Series… (⇧F2)", lambda: self.rename_requested.emit("series", series_uid))
+            menu.addAction(f"Rename Series… ({RENAME_LABEL_SHIFT})", lambda: self.rename_requested.emit("series", series_uid))
         if study_uid and item.parent() is not None:
-            menu.addAction("Rename Study… (F2)", lambda: self.rename_requested.emit("study", study_uid))
+            menu.addAction(f"Rename Study… ({RENAME_LABEL})", lambda: self.rename_requested.emit("study", study_uid))
         if study_uid:
             menu.addSeparator()
             menu.addAction("Edit Patient Name/ID…", lambda: self.rename_requested.emit("patient", study_uid))
@@ -567,13 +568,15 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
 
     def event(self, event):
         from PyQt5.QtCore import QEvent
-        if event.type() == QEvent.ShortcutOverride and event.key() == Qt.Key_F2:
-            event.accept()
+        from .platform_keys import is_rename_key
+        if event.type() == QEvent.ShortcutOverride and is_rename_key(event):
+            event.accept()   # 창 단축키(F2 = 패널 접기)보다 목록의 이름 바꾸기가 먼저
             return True
         return super().event(event)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_F2:
+        from .platform_keys import is_open_key, is_rename_key
+        if is_rename_key(event):   # macOS Return · Windows F2
             item = self.currentItem()
             series_uid = item.data(0, ROLE_SERIES_UID) if item is not None else None
             if series_uid and event.modifiers() & Qt.ShiftModifier:
@@ -581,7 +584,7 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
             elif self._study_uid_of(item):
                 self.rename_requested.emit("study", self._study_uid_of(item))
             return
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+        if is_open_key(event):   # macOS ⌘Return · 그 밖의 OS Return
             item = self.currentItem()
             uid = item.data(0, ROLE_SERIES_UID) if item is not None else None
             if uid:

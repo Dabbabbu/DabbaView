@@ -428,6 +428,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         return item.data(ROLE_UID) or ""
 
     def _context_menu(self, pos):
+        from .platform_keys import RENAME_LABEL, RENAME_LABEL_SHIFT
         item = self.itemAt(pos)
         if item is None:
             return
@@ -436,9 +437,9 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         study_uid = self._study_uid_of(item)
         if kind == "series":
             uid = item.data(ROLE_UID)
-            menu.addAction("Rename Series… (⇧F2)", lambda: self.rename_requested.emit("series", uid))
+            menu.addAction(f"Rename Series… ({RENAME_LABEL_SHIFT})", lambda: self.rename_requested.emit("series", uid))
         if study_uid and kind in ("series", "header"):
-            menu.addAction("Rename Study… (F2)", lambda: self.rename_requested.emit("study", study_uid))
+            menu.addAction(f"Rename Study… ({RENAME_LABEL})", lambda: self.rename_requested.emit("study", study_uid))
         if study_uid:
             menu.addSeparator()
             menu.addAction("Edit Patient Name/ID…", lambda: self.rename_requested.emit("patient", study_uid))
@@ -446,13 +447,15 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
 
     def event(self, event):
         # F2는 창 전체에서 '시리즈 패널 접기'지만, 이 목록에 포커스가 있으면 이름 바꾸기
-        if event.type() == QEvent.ShortcutOverride and event.key() == Qt.Key_F2:
+        from .platform_keys import is_rename_key
+        if event.type() == QEvent.ShortcutOverride and is_rename_key(event):
             event.accept()
             return True
         return super().event(event)
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_F2:
+        from .platform_keys import is_open_key, is_rename_key
+        if is_rename_key(event):   # macOS Return · Windows F2
             item = self.currentItem()
             if item is not None and item.data(ROLE_KIND) == "series" \
                     and event.modifiers() & Qt.ShiftModifier:
@@ -460,7 +463,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
             elif self._study_uid_of(item):
                 self.rename_requested.emit("study", self._study_uid_of(item))
             return
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+        if is_open_key(event):   # macOS ⌘Return · 그 밖의 OS Return
             item = self.currentItem()
             if item is not None and item.data(ROLE_KIND) == "series":
                 self.series_activated.emit(item.data(ROLE_UID))
