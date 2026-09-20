@@ -1163,6 +1163,7 @@ class MainWindow(QMainWindow):
         progress.canceled.connect(worker.cancel)
         progress.force_stopped.connect(self._force_stop_load)
         progress.show()
+        self.register_popup(progress, "⏳")
 
         self._load_worker = worker
         self._load_progress = progress
@@ -1326,6 +1327,80 @@ class MainWindow(QMainWindow):
         elif skipped:
             self._statusbar.showMessage(
                 f"같은 폴더에서 텍스트 {skipped}개를 찾았지만 이미 기록이 있어 두었습니다.", 8000)
+
+    # ─── 열려 있는 보조 창을 메인 창 옆 탭으로 표시 ───
+    def register_popup(self, widget, icon="☁"):
+        """팝업(클라우드 탐색·진행 창 등)을 메인 창 오른쪽 탭에 등록 — 눌러서 다시 앞으로"""
+        if not hasattr(self, "_popups"):
+            self._popups = []
+        self._popups.append((widget, icon))
+        widget.destroyed.connect(lambda *_: self._update_side_tabs())
+        if not hasattr(self, "_side_tab_timer"):
+            self._side_tab_timer = QTimer(self)
+            self._side_tab_timer.timeout.connect(self._update_side_tabs)
+            self._side_tab_timer.start(1000)
+        self._update_side_tabs()
+
+    def _live_popups(self):
+        alive = []
+        for widget, icon in getattr(self, "_popups", []):
+            try:
+                if widget.isVisible():
+                    alive.append((widget, icon))
+            except RuntimeError:      # 이미 지워진 창
+                continue
+        self._popups = alive
+        return alive
+
+    def _update_side_tabs(self):
+        try:
+            self._refresh_side_tab()
+        except RuntimeError:      # 창이 이미 지워진 뒤에 알림이 오면 무시
+            pass
+
+    def _refresh_side_tab(self):
+        alive = self._live_popups()
+        if not hasattr(self, "_side_tab"):
+            self._side_tab = QPushButton(self)
+            self._side_tab.setCursor(Qt.PointingHandCursor)
+            self._side_tab.setStyleSheet(
+                "QPushButton{background:#2b3a55;color:#dbe5f5;border:1px solid #3d8bfd;"
+                "border-right:none;border-top-left-radius:8px;border-bottom-left-radius:8px;"
+                "padding:8px 12px;font-size:12px;text-align:left}"
+                "QPushButton:hover{background:#35507a}")
+            self._side_tab.clicked.connect(self._raise_popup)
+            self._side_tab.hide()
+        if not alive:
+            self._side_tab.hide()
+            return
+        widget, icon = alive[0]
+        title = widget.windowTitle() or "열린 창"
+        more = f"  +{len(alive) - 1}" if len(alive) > 1 else ""
+        self._side_tab.setText(f"{icon}  {title}{more}")
+        self._side_tab.setToolTip("누르면 그 창을 앞으로 가져옵니다")
+        self._side_tab.adjustSize()
+        self._place_side_tab()
+        self._side_tab.show()
+        self._side_tab.raise_()
+
+    def _place_side_tab(self):
+        if not hasattr(self, "_side_tab") or not self._side_tab.isVisible():
+            return
+        width = self._side_tab.width()
+        self._side_tab.move(self.width() - width, 150)
+
+    def _raise_popup(self):
+        alive = self._live_popups()
+        if not alive:
+            return
+        widget = alive[0][0]
+        widget.showNormal()
+        widget.raise_()
+        widget.activateWindow()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._place_side_tab()
 
     def _setup_lazy_cloud(self):
         """빠른 열기: 볼 때 나머지를 받는 동안 상태바에 알림 (다른 스레드에서 오므로 시그널로)"""

@@ -34,7 +34,8 @@ class LoadProgressDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("불러오는 중")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(620)
+        self.setSizeGripEnabled(False)
         # 대화상자가 아니라 '보통 창'으로 → 메인 창 위에 늘 붙어 있지 않고, 뒤로 보낼 수 있음
         self.setWindowFlags(Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
                             | Qt.WindowMinimizeButtonHint)
@@ -60,9 +61,16 @@ class LoadProgressDialog(QDialog):
         self.bar.setTextVisible(False)
         layout.addWidget(self.bar)
 
+        stats_row = QHBoxLayout()
+        self.spinner = QLabel("")            # 폭 고정 — 글자가 밀리지 않게
+        self.spinner.setFixedWidth(18)
+        self.spinner.setAlignment(Qt.AlignCenter)
+        self.spinner.setStyleSheet("color:#9ab;font-size:12px")
         self.stats = QLabel("")
         self.stats.setStyleSheet("color:#9ab;font-size:12px")
-        layout.addWidget(self.stats)
+        stats_row.addWidget(self.spinner)
+        stats_row.addWidget(self.stats, 1)
+        layout.addLayout(stats_row)
 
         self.detail = QLabel("")
         self.detail.setWordWrap(True)
@@ -82,6 +90,9 @@ class LoadProgressDialog(QDialog):
         row.addWidget(self.force_button)
         row.addWidget(self.cancel_button)
         layout.addLayout(row)
+        from PyQt5.QtWidgets import QSizePolicy
+        for label in (self.label, self.stats, self.detail):
+            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
     # ─── QProgressDialog와 같은 이름의 메서드들 ───
     def setLabelText(self, text):                      # noqa: N802 - Qt 이름 그대로
@@ -115,7 +126,8 @@ class LoadProgressDialog(QDialog):
             self._last_stats = "파일을 찾는 중입니다…  ·  경과 " + human_time(
                 time.monotonic() - self._start)
             self._last_update = time.monotonic()
-            self.stats.setText(f"{self.SPINNER[self._spin]}  {self._last_stats}")
+            self.spinner.setText(self.SPINNER[self._spin])
+            self.stats.setText(self._last_stats)
             return
         if self.bar.maximum() == 0:
             self.bar.setRange(0, 100)
@@ -131,7 +143,8 @@ class LoadProgressDialog(QDialog):
                 parts.append(f"남은 시간 약 {human_time((total - current) / speed)}")
         self._last_stats = "  ·  ".join(parts)
         self._last_update = time.monotonic()
-        self.stats.setText(f"{self.SPINNER[self._spin]}  {self._last_stats}")
+        self.spinner.setText(self.SPINNER[self._spin])
+        self.stats.setText(self._last_stats)
         # 5초 넘게 걸리는 작업이면 강제 중단 버튼을 보여 줌
         if not self._force_shown and elapsed > 5:
             self._force_shown = True
@@ -147,8 +160,8 @@ class LoadProgressDialog(QDialog):
         elapsed = time.monotonic() - self._start
         quiet = time.monotonic() - self._last_update
         mark = self.SPINNER[self._spin]
-        text = f"{mark}  {self._last_stats}" if self._last_stats else \
-            f"{mark}  준비 중…  ·  경과 {human_time(elapsed)}"
+        self.spinner.setText(mark)
+        text = self._last_stats or f"준비 중…  ·  경과 {human_time(elapsed)}"
         if quiet > 3:
             text += f"   (마지막 응답 {human_time(quiet)} 전 — 큰 파일이면 시간이 걸립니다)"
         self.stats.setText(text)

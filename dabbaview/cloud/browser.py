@@ -61,7 +61,8 @@ class CloudBrowserDialog(QDialog):
         self._stack = []          # 들어간 폴더들 (CloudItem)
         self._items = []
         self.downloaded = []
-        self.setWindowTitle(f"Open from {provider.name}")
+        self._base_title = f"Open from {provider.name}"
+        self.setWindowTitle(self._base_title)
         self.resize(760, 560)
         self._build()
 
@@ -191,8 +192,14 @@ class CloudBrowserDialog(QDialog):
         self._progress.setRange(0, 0)
         self._progress.setVisible(False)
         layout.addWidget(self._progress)
+        status_row = QHBoxLayout()
+        self._spinner = QLabel("")          # 회전 표시: 폭을 고정해 글자가 밀리지 않게
+        self._spinner.setFixedWidth(18)
+        self._spinner.setAlignment(Qt.AlignCenter)
         self._status = QLabel()
-        layout.addWidget(self._status)
+        status_row.addWidget(self._spinner)
+        status_row.addWidget(self._status, 1)
+        layout.addLayout(status_row)
         buttons = QHBoxLayout()
         buttons.addStretch()
         self._open_here = QPushButton("📂 이 폴더 전체 열기")
@@ -208,6 +215,7 @@ class CloudBrowserDialog(QDialog):
         buttons.addWidget(self._open)
         buttons.addWidget(self._cancel)
         layout.addLayout(buttons)
+        self._fix_width()
         self._set_busy(False)
 
     # ─── 백그라운드 ───
@@ -296,6 +304,15 @@ class CloudBrowserDialog(QDialog):
         else:
             self._fast_open.setText("⚡ 빠른 열기 (권장)")
             self._full_open.setText("⬇ 전체 다운로드 (오프라인 대비)")
+
+    def _fix_width(self):
+        """글자가 길어져도 창 크기가 변하지 않게 (라벨이 창을 밀지 못하도록)"""
+        from PyQt5.QtWidgets import QSizePolicy
+        for label in (self._status, self._summary_label, self._dest_hint):
+            label.setWordWrap(False)
+            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.setMinimumWidth(880)
 
     def _toggle_summary(self, on):
         self._summary_toggle.setText("▾ 접기" if on else "▸ 자세히")
@@ -421,6 +438,9 @@ class CloudBrowserDialog(QDialog):
     def _stop_ticker(self):
         if getattr(self, "_ticker", None) is not None:
             self._ticker.stop()
+        if hasattr(self, "_spinner"):
+            self._spinner.setText("")
+        self.setWindowTitle(self._base_title)
 
     SPINNER = "◐◓◑◒"
 
@@ -448,10 +468,14 @@ class CloudBrowserDialog(QDialog):
                 parts.append(f"남은 시간 약 {_human_time((total - done) / speed_files)}")
             parts.append(f"경과 {_human_time(elapsed)}")
             parts.extend(state.get("extra") or [])
-            self._status.setText(f"{mark}  " + "  ·  ".join(parts))
+            self._spinner.setText(mark)
+            self._status.setText("  ·  ".join(parts))
+            self.setWindowTitle(f"{self._base_title} — {percent:.1f}%  ({done:,}/{total:,})")
         else:   # 폴더 훑는 중
+            self._spinner.setText(mark)
+            self.setWindowTitle(f"{self._base_title} — 폴더 확인 {done:,}/{total:,}")
             self._status.setText(
-                f"{mark}  하위 폴더 확인 중…  폴더 {done:,}/{total:,}  ·  "
+                f"하위 폴더 확인 중…  폴더 {done:,}/{total:,}  ·  "
                 f"파일 {state['files']:,}개  ·  {human_size(state.get('bytes', 0))}  ·  "
                 f"경과 {_human_time(elapsed)}")
 
@@ -776,7 +800,12 @@ def open_from_cloud(main_window, provider):
     dialog.finished.connect(finished)
     main_window._cloud_dialog = dialog      # 참조 유지 (없으면 바로 사라짐)
     dialog.setModal(False)                  # 창을 띄워 둔 채 다른 작업 가능
-    dialog.setWindowFlags(Qt.Window)        # 보통 창 — 메인 창 위에 늘 붙어 있지 않음
+    # 메인 창에 딸린 창이 아니라 '독립 창'으로 → 창 전환(⌘`)·미션 컨트롤에 따로 나오고,
+    # 메인 창 뒤로 숨지 않는다
+    dialog.setParent(None)
+    dialog.setWindowFlags(Qt.Window)
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()
+    if hasattr(main_window, "register_popup"):
+        main_window.register_popup(dialog, "☁")   # 메인 창 옆 탭으로 표시
