@@ -4,6 +4,11 @@
 버그 수정만 → patch (2.1.0 → 2.1.1), 기능 추가·개선 → minor (2.1.x → 2.2.0), 대규모 변경 → major (2.x → 3.0.0).
 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면·README).
 
+## 2.12.0 — 2026-09-20
+
+### 추가 · 개선
+- **ACR 증빙 영상을 DICOM Secondary Capture로 내보내기**: Export ACR Report 창의 "내보낼 것"에서 보고서 / DICOM SC / 둘 다를 고릅니다. 증빙 46장이 표준 SC DICOM(1.2.840.10008.5.1.4.1.1.7)으로 저장되어 PACS 전송이 가능하고, 환자·검사 정보는 팬텀 원본에서 복사해 같은 Study에 붙습니다 (새 시리즈 9001 `ACR QC evidence`, UTF-8 문자셋, BurnedInAnnotation=YES).
+
 ## 2.11.0 — 2026-09-20
 
 ### 변경

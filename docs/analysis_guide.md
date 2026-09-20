@@ -1,6 +1,6 @@
 # DabbaView AI & Analysis Guide
 
-버전 2.11.0 · 예시는 **3.0T 심장 MRI(CMR) 임상 영상**을 중심으로 구성했습니다.
+버전 2.12.0 · 예시는 **3.0T 심장 MRI(CMR) 임상 영상**을 중심으로 구성했습니다.
 
 > **이 가이드의 예시**
 > - GE SIGNA Architect 3.0T를 쓰는 MRI실의 실제 업무 흐름을 따라갑니다.
@@ -214,6 +214,10 @@ GE 콘솔에서 사람이 하는 순서(W/L 조절 → ROI → 계산기 → 측
 
 6. **📄 Export Report**를 누르고 병원·호기·장비·검사자를 넣습니다.
    - 선택: ROI 캡처 · **측정 과정 단계별 영상** · **증빙 영상 44장** · 증빙 JPG를 보고서 옆 폴더에도 저장 · 추세 기록
+   - **내보낼 것**: 보고서(PDF · Word · Excel) / **DICOM SC** / 둘 다
+     - DICOM SC를 고르면 증빙 영상이 표준 Secondary Capture DICOM(`1.2.840.10008.5.1.4.1.1.7`)으로 `보고서이름_DICOM_SC/` 폴더에 저장됩니다. PACS로 바로 보낼 수 있습니다.
+     - 환자·검사 정보(환자명 · ID · StudyInstanceUID · 검사일 · 장비)는 분석한 팬텀 영상에서 그대로 가져오므로 같은 검사에 붙고, 증빙은 새 시리즈(번호 9001, `ACR QC evidence`)가 됩니다.
+     - 글자가 찍힌 영상이라 `BurnedInAnnotation = YES`, `ImageType = DERIVED\SECONDARY\OTHER`로 표시하고, 한글 설명을 위해 문자셋은 UTF-8(`ISO_IR 192`)입니다.
    - 호기(1·2·3호기)를 구분해 저장하면 장비별 추세를 비교할 수 있습니다.
 
 | 내보내기 | 기록지 (1쪽) |

@@ -205,6 +205,14 @@ class ExportDialog(QDialog):
         self.evidence_files = QCheckBox("증빙 영상을 보고서 옆 폴더에도 JPG로 저장")
         self.evidence_files.setChecked(True)
         form.addRow(self.evidence_files)
+        self.output_kind = QComboBox()
+        for text, key in (("보고서 (PDF · Word · Excel)", "report"),
+                          ("DICOM SC (PACS 전송용)", "dicom"),
+                          ("둘 다", "both")):
+            self.output_kind.addItem(text, key)
+        self.output_kind.setToolTip("DICOM SC: 증빙 영상을 Secondary Capture DICOM으로 저장합니다 "
+                                    "(환자·검사 정보는 팬텀 원본에서 가져옴)")
+        form.addRow("내보낼 것:", self.output_kind)
         self.history = QCheckBox("추세 기록에도 저장")
         self.history.setChecked(True)
         form.addRow(self.history)
@@ -1004,11 +1012,16 @@ class ACRTool(Tool):
         info = dialog.info()
         path = dialog.path.text().strip()
         fmt = dialog.format.currentData()
+        kind = dialog.output_kind.currentData()
+        want_report = kind in ("report", "both")
+        want_dicom = kind in ("dicom", "both")
+        dicom_files = []
         with tempfile.TemporaryDirectory() as tmp:
-            snaps = self._snapshots(tmp) if dialog.snapshots.isChecked() and fmt != "xlsx" else []
-            steps = self._procedure(tmp, images=fmt != "xlsx") if dialog.procedure.isChecked() else []
+            snaps = self._snapshots(tmp) if dialog.snapshots.isChecked() and fmt != "xlsx" and want_report else []
+            steps = (self._procedure(tmp, images=fmt != "xlsx")
+                     if dialog.procedure.isChecked() and want_report else [])
             evidence = []
-            if dialog.evidence.isChecked() or dialog.evidence_files.isChecked():
+            if dialog.evidence.isChecked() or dialog.evidence_files.isChecked() or want_dicom:
                 evidence = self._evidence(os.path.join(tmp, "evidence"), info)
                 if dialog.evidence_files.isChecked():
                     folder = os.path.splitext(path)[0] + "_증빙영상"
@@ -1016,22 +1029,31 @@ class ACRTool(Tool):
                     import shutil
                     for item in evidence:
                         shutil.copy2(item[4], os.path.join(folder, os.path.basename(item[4])))
+                if want_dicom:
+                    from .acr_sc import write_evidence, _source_dataset
+                    dicom_files = write_evidence(evidence, os.path.splitext(path)[0] + "_DICOM_SC",
+                                                 _source_dataset(self), info)
                 if not dialog.evidence.isChecked():
                     evidence = []
-            acr_report.write_report(fmt, path, info, self.rows, self._any_capture(), snaps, steps, evidence)
+            if want_report:
+                acr_report.write_report(fmt, path, info, self.rows, self._any_capture(), snaps, steps, evidence)
         if dialog.history.isChecked():
             acr_report.save_record(acr_report.make_record(info, self.values, self.rows))
-        self.ctx.status(f"ACR QC 보고서 저장: {path}")
+        made = ([path] if want_report else []) + ([f"{len(dicom_files)}개 DICOM SC"] if dicom_files else [])
+        self.ctx.status("ACR QC 저장: " + " · ".join(made))
         box = QMessageBox(self)
         box.setWindowTitle(self.title)
-        box.setText(f"보고서를 저장했습니다.\n{path}")
+        box.setText(("보고서를 저장했습니다.\n" + path + "\n" if want_report else "")
+                    + (f"DICOM SC {len(dicom_files)}개: {os.path.splitext(path)[0]}_DICOM_SC"
+                       if dicom_files else ""))
         open_button = box.addButton("열기", QMessageBox.AcceptRole)
         box.addButton("닫기", QMessageBox.RejectRole)
         box.exec_()
         if box.clickedButton() is open_button:
             from PyQt5.QtCore import QUrl
             from PyQt5.QtGui import QDesktopServices
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(
+                path if want_report else os.path.splitext(path)[0] + "_DICOM_SC"))
         self.last_report = path
 
     def save_history(self):
