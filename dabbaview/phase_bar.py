@@ -8,7 +8,7 @@ Phase 버튼 띠 (INFINITT PACS 방식) - 영상 위에 [1] [2] [3] … 위상 �
 - [ALL] (기본) = 전체 위상: 휠 · 시네가 영상 순서대로
 - 번호를 누르면 그 위상만: 휠은 슬라이스 위치 이동 (위상 고정), 시네 재생은 그 위치의 위상
 - 🔒 이 슬라이스에서 위상 보기: 한 위치에 머문 채 휠로 위상 이동 (수축기 → 이완기)
-- 방향키: ↑↓ 슬라이스 위치, ←→ 위상 (모드와 상관없이)
+- 방향키: ←→ 슬라이스 위치, ↑↓ 위상 (모드와 상관없이)
 - 위상이 없는 시리즈(한 위치에 한 장)에서는 띠가 숨겨진다
 """
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -199,7 +199,7 @@ class PhaseBar(QWidget):
         self.all_button.blockSignals(False)
         mode = ("휠 = 위상 (이 슬라이스)" if self.slice_lock.isChecked()
                 else "휠 = 전체 순서" if self._all_mode else "휠 = 슬라이스 위치")
-        mode += "  ·  ↑↓ 위치, ←→ 위상"
+        mode += "  ·  ←→ 위치, ↑↓ 위상"
         self.position_label.setText(f"위치 {position + 1}/{self._map.n_positions}  ·  "
                                     f"위상 {phase + 1}/{self._map.n_phases}  ·  {mode}")
         button = self._buttons[phase] if phase < len(self._buttons) else None

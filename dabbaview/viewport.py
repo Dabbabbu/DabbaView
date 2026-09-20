@@ -1032,9 +1032,9 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             self._draft = None
             self.update()
         elif key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-            # ↑↓ 슬라이스 위치, ←→ 위상 (위상이 없는 시리즈는 넷 다 슬라이스 이동)
+            # ←→ 슬라이스 위치, ↑↓ 위상 (위상이 없는 시리즈는 넷 다 슬라이스 이동)
             direction = 1 if key in (Qt.Key_Down, Qt.Key_Right) else -1
-            self.step_slice("position" if key in (Qt.Key_Up, Qt.Key_Down) else "phase", direction)
+            self.step_slice("phase" if key in (Qt.Key_Up, Qt.Key_Down) else "position", direction)
         else:
             super().keyPressEvent(event)
 
