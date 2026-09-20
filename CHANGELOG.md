@@ -4,6 +4,12 @@
 버그 수정만 → patch (2.1.0 → 2.1.1), 기능 추가·개선 → minor (2.1.x → 2.2.0), 대규모 변경 → major (2.x → 3.0.0).
 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면·README).
 
+## 2.6.1 — 2026-09-20
+
+### 버그 수정 · 배포
+- Windows 빌드 실패 수정: PyInstaller가 `onnxruntime`을 import하다 러너에서 죽어 빌드가 멈추던 문제 → Windows 앱에서 제외 (ONNX·MedSAM 추론만 빠짐, 나머지는 동일).
+- 버전 태그(`v2.6.1` 등)를 올리면 GitHub Actions가 macOS · Windows를 빌드해 **Release**를 만들고 zip을 붙입니다. [Releases](https://github.com/Dabbabbu/DabbaView/releases/latest)에서 로그인 없이 받을 수 있습니다.
+
 ## 2.6.0 — 2026-09-20
 
 ### 추가 · 개선

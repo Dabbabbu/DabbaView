@@ -324,7 +324,9 @@ VTK는 3D Volume Rendering에만 쓰이며, 없으면 3D 탭만 비활성화되�
 |---|---|---|
 | macOS | `./build_app.sh` (py2app) | `dist/DabbaView.app` |
 | macOS 대안 | `./build_pyinstaller.sh` | `dist/DabbaView.app` |
-| Windows | `build_windows.bat` (PyInstaller) | `dist\DabbaView\DabbaView.exe` |
+| Windows | `build_windows.bat` (PyInstaller) | `dist\DabbaView\DabbaView.exe` (ONNX·MedSAM 추론 제외 — 아래 참고) |
+
+Windows 빌드는 `onnxruntime`을 넣지 않습니다 (PyInstaller가 분석 중 import하다 죽어서 빌드가 실패함). ONNX 모델·MedSAM 추론만 빠지고 나머지 기능은 같습니다. 이 기능이 필요하면 소스에서 실행하세요.
 
 빌드된 앱은 서명되지 않았습니다. 처음 열 때 macOS는 우클릭 → 열기, Windows는 SmartScreen에서 "추가 정보 → 실행"을 선택하세요.
 
