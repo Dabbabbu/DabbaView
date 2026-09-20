@@ -1,7 +1,49 @@
-# DabbaView - Python DICOM Viewer
+<div align="center">
 
-RadiAnt, GE AW, INFINITT PACS 워크스테이션의 작업 방식을 참고한 Python/PyQt5 기반 DICOM 뷰어입니다.
-macOS(.app)와 Windows(.exe)로 빌드됩니다.
+<img src="resources/icon_1024.png" width="104" alt="DabbaView logo">
+
+# DabbaView — Free Open-Source DICOM Viewer
+
+**Cardiac MRI · ACR phantom QC · AI segmentation · MPR · 3D volume rendering · PACS**
+
+[![Release](https://img.shields.io/github/v/release/Dabbabbu/DabbaView?label=release&color=3d8bfd)](https://github.com/Dabbabbu/DabbaView/releases/latest)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![PyQt5](https://img.shields.io/badge/GUI-PyQt5-41CD52?logo=qt&logoColor=white)](https://pypi.org/project/PyQt5/)
+[![License](https://img.shields.io/badge/License-GPL--3.0-blue)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-lightgrey)](https://github.com/Dabbabbu/DabbaView/releases/latest)
+
+[**⬇️ 내려받기 Download**](https://github.com/Dabbabbu/DabbaView/releases/latest) ·
+[**🌐 웹 버전 Web**](https://dabbabbu.github.io/DabbaView-Web/) ·
+[**📖 매뉴얼 Manual**](docs/manual.md) ·
+[**🔬 분석 가이드**](docs/analysis_guide.md) ·
+[**🐛 버그 · 기능 제안**](https://github.com/Dabbabbu/DabbaView/issues/new/choose)
+
+</div>
+
+**DabbaView** is a free, open-source **DICOM viewer and medical image analysis platform** for radiologic technologists, researchers and students.
+It opens DICOM, NIfTI, NRRD, MetaImage, NumPy and image sequences, and adds **cardiac MRI quantification** (EF, T1/T2 mapping, flow, LGE),
+**ACR phantom quality control** with automatic reports and DICOM Secondary Capture evidence, **AI segmentation**
+(TotalSegmentator, MONAI, nnU-Net, MedSAM), **MPR**, **3D volume rendering**, ROI measurement, DICOM Send/Print and structured reading.
+Built with Python and PyQt5, it runs on **macOS and Windows** — no licence, no server, no account.
+
+**DabbaView**는 무료 오픈소스 **DICOM 뷰어이자 의료영상 분석 플랫폼**입니다. RadiAnt · GE AW · INFINITT PACS 워크스테이션의 작업 방식을 참고해 만들었고,
+DICOM은 물론 NIfTI · NRRD · MetaImage · NumPy · 이미지 시퀀스를 열어 **심장 MRI 정량화**(EF, T1/T2 map, Flow, LGE),
+**ACR 팬텀 정도관리**(자동 보고서 · DICOM SC 증빙), **AI 세그멘테이션**, **MPR**, **3D 볼륨 렌더링**, 측정 · ROI, DICOM Send/Print, 판독 기록을 지원합니다.
+Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 설치 비용도 서버도 계정도 필요 없습니다.
+
+![DabbaView Multi View — cardiac MRI](docs/images/m08_multiview.jpg)
+
+### ✨ 한눈에 보기 / At a glance
+
+| | |
+|---|---|
+| 🖼 **보기 Viewing** | 2D · Tile · Multi View(최대 4×4) · MPR · 3D Volume, Crosslink · Reference Lines · Sync Scroll, 3D Cursor, Cine 재생 · Phase 보기 |
+| 📏 **측정 Measure** | 거리 · 각도 · Cobb · 면적 · ROI(원 · 사각 · 자유형) · 프로파일 · 랜드마크, ROI Manager, 주석 저장 · 복원 |
+| ❤️ **Cardiac MRI** | EF · 심근 두께 · Bull's-eye, T1/T2 mapping, Perfusion, Flow(Qp/Qs), LGE 정량 |
+| 🧪 **ACR QC** | 대형 팬텀 7항목 자동 측정, 수동 절차와 같은 단계별 증빙 46장, PDF · DOCX · XLSX 보고서, **DICOM Secondary Capture** 내보내기, 추이 그래프 |
+| 🤖 **AI** | TotalSegmentator · MONAI · nnU-Net · MedSAM · SAM, 라벨 편집, DICOM SEG 입출력 |
+| 🔌 **PACS · 연동** | C-STORE(DICOM Send) · DICOM Print, 익명화, Google Drive · OneDrive 열기, 포맷 변환(NIfTI ↔ DICOM 등) |
+| 🎬 **내보내기** | 화면 캡처, 동영상(MP4 · AVI · GIF), **여러 시리즈 일괄 동영상**, PNG 시퀀스 |
 
 <!-- version -->**Version** 2.13.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
 
@@ -336,8 +378,8 @@ Windows 빌드는 `onnxruntime`을 넣지 않습니다 (PyInstaller가 분석 �
 
 | 운영체제 | 파일 | 설치 |
 |---|---|---|
-| macOS | `DabbaView-v2.6.2-macOS.zip` (안에 `DabbaView.app`) | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |
-| Windows | `DabbaView-v2.6.2-Windows.zip` (안에 `DabbaView\DabbaView.exe`) | 압축을 풀고 `DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |
+| macOS | `DabbaView-v2.13.0-macOS.zip` (안에 `DabbaView.app`) | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |
+| Windows | `DabbaView-v2.13.0-Windows.zip` (안에 `DabbaView\DabbaView.exe`) | 압축을 풀고 `DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |
 
 버전 태그(`v2.6.0` 등)를 올리면 GitHub Actions가 두 플랫폼을 빌드하고 실행되는지 확인한 뒤 Release를 만들고 zip을 붙입니다. 새 Release가 올라가면 이전 Release는 자동으로 지워져 **항상 최신 하나만** 남습니다 (태그는 그대로 남아 소스는 언제든 받을 수 있습니다).
 태그 없이 main에 push한 빌드는 [Actions](https://github.com/Dabbabbu/DabbaView/actions) → 최근 빌드 → **Artifacts**에 남습니다 (GitHub 로그인 필요, 90일 보관).
@@ -348,6 +390,7 @@ Windows 빌드는 `onnxruntime`을 넣지 않습니다 (PyInstaller가 분석 �
 DabbaView/
 ├── run.py                   # 실행 스크립트
 ├── create_icon.py           # 아이콘(.icns/.ico) + 로고 생성
+├── create_social_preview.py # GitHub 소셜 미리보기 이미지(1280×640) 생성
 ├── setup_app.py             # py2app 설정
 ├── build_app.sh / build_pyinstaller.sh / build_windows.bat
 ├── .github/workflows/build.yml   # macOS + Windows 자동 빌드
