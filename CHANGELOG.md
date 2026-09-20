@@ -8,6 +8,7 @@
 
 ### 배포
 - Release 파일 이름에 버전과 운영체제 표시: `DabbaView-v2.6.2-macOS.zip`, `DabbaView-v2.6.2-Windows.zip`.
+- 새 Release가 올라가면 이전 Release는 자동 삭제 (태그는 유지) — Releases 페이지에 최신 하나만 보임.
 
 ## 2.6.1 — 2026-09-20
 
