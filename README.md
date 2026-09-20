@@ -116,15 +116,6 @@ Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 
 - **GE 스타일 오버레이**: 기관·환자·성별/나이/체중, 날짜·시리즈/영상 번호·위치·FoV·Matrix·두께, 시퀀스·장비·코일·TR/TE/TI·FA/ETL/NEX·W/L, 우하단 W/L + 스케일 바
 - **Image 정보 패널**: 현재 영상의 환자·검사·시리즈·획득 파라미터 상세
 
-### Reading (기록) — R
-- INFINITT 기록 창 형태: 제목(모달리티, 환자명, ID, 성별, 검사일시, Study Description, Body Part, 임상정보), 기록 편집기(`====== [Conclusion] =======`로 결론 구분), Creator / Approver / Approver2 / My Comment, Study Comment · Exam Date(상태) · Report Date
-- 버튼: Edit, Import, **JSON 열기 / JSON 저장**, Copy, Print, Save, Approve, Close — Save하면 StudyInstanceUID별 JSON (이 컴퓨터의 앱 데이터 폴더), 다시 열면 불러옴. JSON 저장/열기로 원하는 위치의 파일과 주고받기 (다른 환자·검사의 JSON이면 확인)
-- **Import**: .txt(UTF-8/CP949) · .rtf → 본문에 삽입, .jpg/.png/.bmp/.tiff/.pdf → 이미지 탭(확대/축소), DICOM SR(.dcm) → 텍스트 추출. 파일명에 다른 환자 ID가 있으면 경고
-- **기록 폴더 감시** (Settings → Reading): 새 파일을 파일명·폴더명의 PatientID + 검사일(YYYYMMDD)로 자동 연결, DICOM SR은 StudyInstanceUID로 연결. 예: `1234567_20260917_report.txt`
-- Series 탭: 검사의 시리즈 목록과 시퀀스 파라미터 요약
-
-> 기록과 가져온 파일 경로에는 환자 정보가 들어 있습니다. 앱 데이터 폴더(macOS: `~/Library/Application Support/DabbaView`)를 공유하거나 저장소에 올리지 마세요.
-
 ### 내보내기 / 네트워크
 - 이미지 내보내기, **Capture**(오버레이·측정선 포함), **동영상**(MP4/AVI/GIF)
 - **DICOM Send** (C-STORE), **DICOM Print** (Basic Grayscale Print), 연결 확인(C-ECHO) — pynetdicom 사용
@@ -231,7 +222,7 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 | Perfusion | DCE Tofts (Ktrans · ve · kep), DSC (ΔR2* → sSVD CBV · CBF · MTT, rCBV/rCBF 정규화, 감마 바리에이트 피팅), AIF 자동 / 동맥 ROI / Parker 집단 AIF, 시간-신호 곡선 |
 | Spectroscopy | DICOM MR Spectroscopy / Siemens `.rda` → 스펙트럼 (선폭 가중, 자동·수동 위상), NAA · Cho · Cr · mI · Lac 피크, Cho/Cr · NAA/Cr · Cho/NAA |
 
-> 연구·교육용입니다. 진단용으로 검증된 소프트웨어가 아니므로 결과는 원래 기록 워크스테이션·검증된 도구와 대조하세요.
+> 연구·교육용입니다. 진단용으로 검증된 소프트웨어가 아니므로 결과는 검증된 도구와 대조하세요.
 
 ### 영상화질 평가 (Analysis ▸ Image Quality Assessment)
 
@@ -330,7 +321,6 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 - **W/L Presets**: 프리셋 추가/편집/삭제
 - **Hanging Protocols**: 모달리티, 부위 키워드, 레이아웃, 칸별 시리즈 키워드
 - **DICOM Nodes**: 이 컴퓨터의 AE Title, 전송/인쇄 대상 (AE Title, Host, Port)
-
 - **Deploy Web**(Help → Deploy Web): 저장소·워크플로·브랜치, GitHub 토큰
 - **AI**: MONAI Label 서버 주소, Access Token
 - **Cloud**: Google OAuth Client ID / Client Secret / API Key, OneDrive(Azure) Client ID, 로그아웃

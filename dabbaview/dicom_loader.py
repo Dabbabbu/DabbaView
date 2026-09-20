@@ -48,6 +48,8 @@ CLOUD_TIMEOUT_S = 30.0            # 파일 하나 다운로드 대기 한도
 # DICOM과 같은 폴더에 이미지(JPG·PNG)가 이만큼 넘게 섞여 있으면 이미지는 건너뜀
 #  (논문 그림·캡처 자료가 섞인 폴더를 열면 수만 장을 읽다가 멈춘 것처럼 보임)
 MIXED_IMAGE_LIMIT = 300
+# 영상과 같은 폴더에 함께 있는 텍스트 메모 (Reading 기록으로 연결)
+TEXT_REPORT_EXTENSIONS = (".txt",)
 CLOUD_MAX_CONSECUTIVE_FAILS = 5   # 연속으로 이만큼 실패하면 나머지는 시도하지 않고 건너뜀
 _SF_DATALESS = 0x40000000         # macOS: 내용이 로컬에 없는 파일 (File Provider)
 _WIN_CLOUD_ATTRS = 0x00400000 | 0x00040000 | 0x00001000   # RECALL_ON_DATA_ACCESS/OPEN, OFFLINE
@@ -651,6 +653,7 @@ class DicomLoader:
         self.segmentations = []      # DICOM SEG 파일 경로
         self.meshes = []             # STL 경로
         self.skipped_images = 0      # DICOM과 섞여 있어 건너뛴 이미지 장수
+        self.text_files = []         # 같은 폴더에서 발견한 텍스트 파일
 
     @property
     def extra_count(self):
@@ -680,23 +683,31 @@ class DicomLoader:
             return False
 
     def collect_files(self, dirpath, recursive=True):
-        """디렉토리에서 불러올 파일 경로 수집 (DICOM 후보 + 지원하는 다른 형식)"""
+        """디렉토리에서 불러올 파일 경로 수집 (DICOM 후보 + 지원하는 다른 형식)
+
+        텍스트 파일은 영상이 아니므로 따로 모아 둔다(self.text_files).
+        """
         from .formats.readers import file_kind
         files = []
 
         def wanted(fn):
             return is_candidate_file(fn) or (
                 not fn.startswith('.') and file_kind(fn) != "dicom")
+
+        def take(path, fn):
+            if fn.lower().endswith(TEXT_REPORT_EXTENSIONS) and not fn.startswith('.'):
+                self.text_files.append(path)
+            elif wanted(fn):
+                files.append(path)
         if recursive:
             for root, _, filenames in os.walk(dirpath):
                 for fn in filenames:
-                    if wanted(fn):
-                        files.append(os.path.join(root, fn))
+                    take(os.path.join(root, fn), fn)
         else:
             for fn in os.listdir(dirpath):
                 path = os.path.join(dirpath, fn)
-                if wanted(fn) and os.path.isfile(path):
-                    files.append(path)
+                if os.path.isfile(path):
+                    take(path, fn)
         return files
 
     def load_directory(self, dirpath, recursive=True, progress_callback=None,

@@ -27,7 +27,6 @@
 14. [익명화](#14-익명화)
 15. [동영상 내보내기](#15-동영상-내보내기)
 16. [DICOM Send / Print](#16-dicom-send--print)
-
 18. [Library (스터디 라이브러리)](#18-library-스터디-라이브러리)
 19. [Settings](#19-settings)
 20. [단축키 목록](#20-단축키-목록)
@@ -168,7 +167,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 ![Multi View 2x2 — SAX cine · 4CH · 2CH · LGE](images/m08_multiview.jpg)
 
 1. 위쪽 **Multi View** 탭을 누르거나 레이아웃 목록에서 `1X1` ~ `4X4`를 고릅니다.
-2. 왼쪽 시리즈 카드를 원하는 칸으로 끌어다 놓습니다 (예: SAX cine · 4CH · 2CH · LGE를 한 화면에 두고 기록).
+2. 왼쪽 시리즈 카드를 원하는 칸으로 끌어다 놓습니다 (예: SAX cine · 4CH · 2CH · LGE를 한 화면에).
 3. 칸을 클릭하면 그 칸이 활성(노란 테두리)이 되고, 도구와 W/L은 활성 칸에 적용됩니다.
 4. **Space**를 누르면 활성 칸만 크게 보고, 다시 누르면 돌아옵니다.
 5. 같은 좌표계의 시리즈끼리는 **Sync Scroll / Sync W/L / Crosslink(C) / Ref Lines**로 연동됩니다 (아래 표 참고).
@@ -349,17 +348,6 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 3. 대상과 범위(현재 영상 / 현재 시리즈 전체 / Key Image)를 고릅니다.
 4. **연결 확인 (C-ECHO)** 으로 통신을 확인한 뒤 **전송** 또는 **인쇄**를 누릅니다. Print는 필름 크기·배열·방향·매체·확대·매수를 고를 수 있습니다.
 
-## 17. Reading (기록)
-
-![Reading](images/m21_reading.png)
-
-1. 검사를 열고 **R** 키 또는 도구 막대 **📝 Reading**을 누릅니다.
-   - 붙인 파일(이미지 · PDF · 텍스트) 탭은 이름에 마우스를 올리면 ✕로 닫을 수 있습니다 (Report · Series 탭은 닫히지 않음).
-2. Report 탭에 소견과 결론(Conclusion)을 씁니다. 작성자·승인자·검사일이 함께 저장됩니다. (화면은 CMR 기록 틀 예시)
-3. **Import…** 로 txt·rtf·이미지·PDF·DICOM SR 기록을 불러옵니다. 파일명에 다른 환자 ID가 있으면 경고합니다.
-4. **Save / Approve**로 저장하거나 승인하고, JSON으로 저장·열기, Copy, Print를 할 수 있습니다.
-5. Settings에서 기록 폴더를 지정하면 새 파일을 PatientID와 검사일로 자동 연결합니다.
-
 ## 18. Library (스터디 라이브러리)
 
 ![Library](images/m22_library.jpg)
@@ -379,9 +367,9 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 
-| Mouse | Reading | AI |
+| Mouse | AI | |
 |---|---|---|
-| ![Mouse](images/m23_settings_mouse.png) | ![Reading](images/m23_settings_reading.png) | ![AI](images/m23_settings_ai.png) |
+| ![Mouse](images/m23_settings_mouse.png) | ![AI](images/m23_settings_ai.png) | |
 
 | ACR QC | Cache | Display |
 |---|---|---|
@@ -393,7 +381,6 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | W/L Presets | 프리셋 추가·편집·삭제 |
 | Hanging Protocols | 모달리티·부위별 자동 배치 |
 | DICOM Nodes | AE Title, Send/Print 대상 |
-
 | AI | MONAI Label 서버, 모델 Python, nnU-Net·MedSAM·ONNX·REST 설정 |
 | Cloud | Google / OneDrive OAuth 키, 로그아웃 |
 | Cache | 캐시 위치·용량 (1–50 GB), Clear Cache |
@@ -486,6 +473,7 @@ macOS에서는 표의 `Ctrl` 자리에 ⌘(Command)와 Control 모두 쓸 수 �
 | ![탭 닫기](images/m18b_tab_close.png) | ![패널 닫기](images/m18c_dock_close.png) |
 
 1. 탭 이름이나 패널 제목에 **마우스를 올리면 ✕ 버튼**이 나옵니다 (평소에는 숨김). 누르면 잠깐 흐려지며 닫힙니다.
+   - 대상: Series · ★ Library 탭, Image · AI · Analysis · ROI Manager · Histogram/Profile · Python Console 패널, 패널을 겹쳐 놓았을 때 생기는 아래쪽 탭
    - 패널 제목의 □ 버튼(또는 제목 두 번 클릭)은 패널을 떼어 창으로 띄우거나 다시 붙입니다.
 2. 닫으면 상태 막대에 다시 여는 방법이 나옵니다 (예: `ROI Manager 닫힘 — 다시 열기: View ▸ 패널 ▸ ROI Manager`).
 3. **다시 열기**: **View ▸ 패널**에 모든 탭 · 패널이 있습니다. 도구 막대 버튼과 단축키도 같은 동작입니다 (누를 때마다 열기 ↔ 닫기).

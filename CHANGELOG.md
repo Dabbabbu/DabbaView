@@ -235,6 +235,7 @@
 ## 2.2.0 — 2026-09-19
 
 ### 추가 · 개선
+- 탭 · 패널 닫기 (X): Series · ★ Library 탭, Image · AI · Analysis · ROI Manager · Histogram/Profile · Python Console 도크. 마우스를 올린 탭(도크 제목)에만 X가 보이고, 누르면 흐려지며 닫힘. 상태바에 다시 여는 방법 표시.
 - View ▸ 패널: 닫은 탭 · 패널 다시 열기 (★ Library Ctrl+Shift+L, Image Ctrl+I, AI Ctrl+Shift+A, Python Console F3).
 - View ▸ 오버레이 항목: Phase Encoding 방향 · 방향 문자(A/P · R/L · S/I) · 스캔 커버리지 선을 각각 켜고 끔. 기본값은 Settings ▸ Display, T 키는 전체.
 
