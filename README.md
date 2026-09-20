@@ -3,7 +3,7 @@
 RadiAnt, GE AW, INFINITT PACS 워크스테이션의 작업 방식을 참고한 Python/PyQt5 기반 DICOM 뷰어입니다.
 macOS(.app)와 Windows(.exe)로 빌드됩니다.
 
-<!-- version -->**Version** 2.6.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
+<!-- version -->**Version** 2.6.1 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
 
 > ⚠️ 진단용으로 인증된 의료기기가 아닙니다. 학습·연구·참고용으로 사용하세요.
 
@@ -336,8 +336,8 @@ Windows 빌드는 `onnxruntime`을 넣지 않습니다 (PyInstaller가 분석 �
 
 | 운영체제 | 파일 | 설치 |
 |---|---|---|
-| macOS | `DabbaView-macOS.zip` | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |
-| Windows | `DabbaView-Windows.zip` | 압축을 풀고 `DabbaView\DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |
+| macOS | `DabbaView-v2.6.2-macOS.zip` (안에 `DabbaView.app`) | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |
+| Windows | `DabbaView-v2.6.2-Windows.zip` (안에 `DabbaView\DabbaView.exe`) | 압축을 풀고 `DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |
 
 버전 태그(`v2.6.0` 등)를 올리면 GitHub Actions가 두 플랫폼을 빌드하고 실행되는지 확인한 뒤 Release를 만들고 zip을 붙입니다.
 태그 없이 main에 push한 빌드는 [Actions](https://github.com/Dabbabbu/DabbaView/actions) → 최근 빌드 → **Artifacts**에 남습니다 (GitHub 로그인 필요, 90일 보관).

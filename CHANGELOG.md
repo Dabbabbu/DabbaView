@@ -4,6 +4,11 @@
 버그 수정만 → patch (2.1.0 → 2.1.1), 기능 추가·개선 → minor (2.1.x → 2.2.0), 대규모 변경 → major (2.x → 3.0.0).
 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면·README).
 
+## 2.6.2 — 2026-09-20
+
+### 배포
+- Release 파일 이름에 버전과 운영체제 표시: `DabbaView-v2.6.2-macOS.zip`, `DabbaView-v2.6.2-Windows.zip`.
+
 ## 2.6.1 — 2026-09-20
 
 ### 버그 수정 · 배포
