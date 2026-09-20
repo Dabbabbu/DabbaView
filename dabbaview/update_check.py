@@ -9,6 +9,7 @@
 """
 import json
 import re
+import ssl
 import urllib.request
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
@@ -31,13 +32,22 @@ def is_newer(latest, current=__version__):
     return bool(a and b and a > b)
 
 
+def _ssl_context():
+    """파이썬 기본 인증서 저장소가 비어 있는 설치본(python.org · 번들 앱)에서도 되게 certifi 사용"""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001 - certifi가 없으면 기본 설정
+        return None
+
+
 def fetch_latest(url=API_URL):
     """→ (태그, 이름, 페이지 주소). 실패하면 None"""
     request = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": f"DabbaView/{__version__}",
     })
-    with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+    with urllib.request.urlopen(request, timeout=TIMEOUT_S, context=_ssl_context()) as response:
         data = json.loads(response.read().decode("utf-8"))
     tag = data.get("tag_name")
     if not tag:
