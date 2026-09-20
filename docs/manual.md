@@ -43,7 +43,7 @@
 
 ### 미리 빌드된 앱 (권장)
 
-1. GitHub [Actions](https://github.com/Dabbabbu/DabbaView/actions)에서 최근 빌드를 열고 **Artifacts**의 zip을 받습니다 (GitHub 로그인 필요).
+1. GitHub [Releases](https://github.com/Dabbabbu/DabbaView/releases/latest)에서 `DabbaView-macOS.zip` (또는 `DabbaView-Windows.zip`)을 받습니다. 로그인 없이 받을 수 있습니다.
 2. 압축을 풉니다.
    - macOS: `DabbaView.app`을 **응용 프로그램(/Applications)** 폴더로 옮깁니다.
    - Windows: `DabbaView` 폴더를 원하는 곳에 둡니다.

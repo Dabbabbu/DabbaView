@@ -3,11 +3,12 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ["v*"]          # v2.6.0 처럼 태그를 올리면 Release까지 만듦
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write         # Release 만들기
 
 jobs:
   macos:
@@ -85,3 +86,54 @@ jobs:
         with:
           name: DabbaView-Windows
           path: DabbaView-Windows.zip
+
+  release:
+    name: Release (태그를 올렸을 때)
+    needs: [macos, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: DabbaView-macOS
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: DabbaView-Windows
+
+      - name: Release 본문 (CHANGELOG에서 이 버전 부분만)
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 - "$version" <<'PY' > notes.md
+          import re, sys
+          version = sys.argv[1]
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(rf"^## {re.escape(version)}.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
+          body = (m.group(1).strip() if m else "").strip()
+          print(body or f"DabbaView {version}")
+          print()
+          print("## 내려받기")
+          print()
+          print("| 운영체제 | 파일 | 설치 |")
+          print("|---|---|---|")
+          print("| macOS | `DabbaView-macOS.zip` | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |")
+          print("| Windows | `DabbaView-Windows.zip` | 압축을 풀고 `DabbaView\\DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |")
+          print()
+          print("서명되지 않은 앱이라 처음 열 때 경고가 나옵니다. 전체 변경 이력은 [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).")
+          print()
+          print("> DabbaView는 진단용으로 인증된 의료기기가 아닙니다. 연구 · 교육용으로 사용하세요.")
+          PY
+
+      - name: Release 만들기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "DabbaView $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            DabbaView-macOS.zip DabbaView-Windows.zip
+
