@@ -479,6 +479,10 @@ class MainWindow(QMainWindow):
         export_video_action.setShortcut(QKeySequence("Ctrl+Shift+E"))
         export_video_action.triggered.connect(self._export_video)
         file_menu.addAction(export_video_action)
+        batch_video_action = QAction("Batch Export Videos... (여러 시리즈)", self)
+        batch_video_action.setToolTip("불러온 시리즈를 골라 한 번에 MP4 · AVI · GIF로 내보냅니다")
+        batch_video_action.triggered.connect(self._batch_export_videos)
+        file_menu.addAction(batch_video_action)
 
         # 포맷 변환 (소스 형식 → 대상 형식)
         convert_menu = file_menu.addMenu("Convert / Export As")
@@ -2953,6 +2957,21 @@ class MainWindow(QMainWindow):
         if filepath:
             self._viewport._cached_pixmap.save(filepath)
             self._statusbar.showMessage(f"Exported: {filepath}", 5000)
+
+    def _batch_export_videos(self):
+        """여러 시리즈를 한 번에 동영상으로 (File ▸ Batch Export Videos…)"""
+        from .batch_video import BatchVideoDialog
+        series_list = [s for s in self._loader.get_series_list() if s.num_slices > 1]
+        if not series_list:
+            QMessageBox.information(self, "일괄 동영상 내보내기",
+                                    "2장 이상인 시리즈가 없습니다. 먼저 영상을 여세요.")
+            return
+        vp = self._target_viewport()
+        window = (vp._window_center, vp._window_width) if vp.series is not None else None
+        dialog = BatchVideoDialog(series_list, window, vp._inverted, self._last_dir(), self)
+        dialog.exec_()
+        if dialog.result_message:
+            self._statusbar.showMessage(dialog.result_message, 10000)
 
     def _export_video(self):
         if not self._current_series or self._current_series.num_slices == 0:
