@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 2.15.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 2.16.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -88,6 +88,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 2. **File → Open DICOM Folder…** (Ctrl+Shift+O)로 폴더를 엽니다. 하위 폴더까지 읽고, 시리즈별로 자동으로 나눕니다.
 3. Finder나 탐색기에서 파일·폴더를 창으로 **드래그 앤 드롭**해도 됩니다.
 4. 클라우드 폴더는 **Open from Google Drive… / Open from OneDrive…** 로 엽니다. 각자의 OAuth 키를 Settings → Cloud에 먼저 넣어야 합니다.
+   - 목록에 없는 폴더는 탐색 창 위쪽 **🔍 칸에 이름을 넣고 Enter**로 찾습니다. 구글 드라이브 **'다른 컴퓨터'(백업된 PC)** 안의 폴더는 내 드라이브 목록에 나오지 않으므로 이 방법으로 엽니다.
 5. 최근에 연 파일은 **Recent Files**에 10개까지 남습니다.
 
 > 손상되었거나 지원하지 않는 파일은 건너뛰고 오른쪽 아래 **⚠ 로딩 실패** 버튼에 목록으로 남깁니다.
