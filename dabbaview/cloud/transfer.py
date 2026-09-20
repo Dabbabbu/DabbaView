@@ -29,6 +29,22 @@ def wanted(name):
     return is_candidate_file(name) or (not name.startswith(".") and file_kind(name) != "dicom")
 
 
+def _drop_mixed_images(files):
+    """DICOM과 그림이 섞여 있으면 그림은 받지 않음 → (남길 파일, 뺀 장수)
+
+    논문 그림·캡처가 수만 장 섞인 폴더에서 쓸데없이 몇 GB를 내려받는 것을 막는다.
+    (로컬 폴더 열기와 같은 기준: dicom_loader.MIXED_IMAGE_LIMIT)
+    """
+    from ..dicom_loader import MIXED_IMAGE_LIMIT
+    from ..formats.readers import file_kind
+    dicoms = sum(1 for rel, _ in files if file_kind(rel) == "dicom")
+    pictures = [i for i, (rel, _) in enumerate(files) if file_kind(rel) == "image"]
+    if not dicoms or len(pictures) <= MIXED_IMAGE_LIMIT:
+        return files, 0
+    drop = set(pictures)
+    return [f for i, f in enumerate(files) if i not in drop], len(pictures)
+
+
 def plan(provider, items, progress=None, cancelled=None):
     """→ (files [(상대 경로, CloudItem)], 건너뛴 파일 수, 최상위 경로 목록)"""
     files, skipped, tops = [], 0, []
@@ -55,6 +71,8 @@ def plan(provider, items, progress=None, cancelled=None):
             walk(item, rel)
         elif item.downloadable:
             files.append((rel, item))
+    files, mixed = _drop_mixed_images(files)
+    skipped += mixed
     return files, skipped, tops
 
 
