@@ -392,7 +392,13 @@ def open_from_cloud(main_window, provider):
         dialog.start()
     except NotConfigured:
         return
-    if dialog.exec_() == QDialog.Accepted and dialog.downloaded:
+
+    def finished(result):
+        # 창을 닫은 뒤 처리 (모달이 아니므로 탐색·다운로드 중에도 뷰어를 쓸 수 있음)
+        main_window._cloud_dialog = None
+        dialog.deleteLater()
+        if result != QDialog.Accepted or not dialog.downloaded:
+            return
         stats = getattr(dialog, "stats", {})
         main_window.statusBar().showMessage(
             f"{provider.name}: 파일 {stats.get('total', 0)}개 (캐시 {stats.get('hits', 0)}개, "
@@ -401,3 +407,11 @@ def open_from_cloud(main_window, provider):
             10000)
         # 로컬 Open Folder와 같은 방식으로 (세션 폴더는 최근 목록에 남기지 않음)
         main_window.load_paths(dialog.downloaded, remember=False)
+
+    dialog.finished.connect(finished)
+    main_window._cloud_dialog = dialog      # 참조 유지 (없으면 바로 사라짐)
+    dialog.setModal(False)                  # 창을 띄워 둔 채 다른 작업 가능
+    dialog.setWindowFlags(Qt.Window)        # 보통 창 — 메인 창 위에 늘 붙어 있지 않음
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()

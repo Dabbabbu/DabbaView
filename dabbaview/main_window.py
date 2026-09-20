@@ -178,8 +178,12 @@ class _ModalRaiser(QObject):
         app = QApplication.instance()
         if app is None:
             return
+        # ★ 우리 앱이 앞에 있을 때만 올린다.
+        #   (다른 앱으로 전환하는 중에도 올리면 포커스를 도로 빼앗아 다른 작업을 못 하게 됨)
+        if app.applicationState() != Qt.ApplicationActive:
+            return
         window = app.activeModalWidget()
-        if window is not None and window.isVisible():
+        if window is not None and window.isVisible() and not window.isActiveWindow():
             window.raise_()
             window.activateWindow()
 
@@ -554,7 +558,13 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._act_send)
         file_menu.addAction(self._act_print)
         file_menu.addSeparator()
+        self._act_settings.setText("⚙ Settings… (환경설정)")
         file_menu.addAction(self._act_settings)
+        # macOS 앱 메뉴(DabbaView ▸ 설정)에도 하나 더 — 두 곳 어디서나 열림
+        mac_prefs = QAction("Preferences…", self)
+        mac_prefs.setMenuRole(QAction.PreferencesRole)
+        mac_prefs.triggered.connect(lambda: self._open_settings())
+        file_menu.addAction(mac_prefs)
         file_menu.addSeparator()
 
         quit_action = QAction("Quit", self)
@@ -945,7 +955,9 @@ class MainWindow(QMainWindow):
         self._act_settings = make("⚙ Settings", "", "마우스 매핑 / W/L 프리셋 / Hanging Protocol / DICOM 노드",
                                   lambda: self._open_settings())
         self._act_settings.setShortcut(QKeySequence.Preferences)
-        self._act_settings.setMenuRole(QAction.PreferencesRole)
+        # macOS는 PreferencesRole이면 앱 메뉴(DabbaView ▸ Preferences)로 옮겨 가 File 메뉴에서 사라진다
+        # → 찾기 어렵다는 의견이 많아 File 메뉴에 그대로 두고, 앱 메뉴 항목은 따로 만든다
+        self._act_settings.setMenuRole(QAction.NoRole)
         self._act_save_ann = make("Save Annotations...", "", "주석·측정·Key Image를 JSON으로 저장",
                                   self._save_annotations)
         self._act_load_ann = make("Load Annotations...", "", "JSON 주석 파일 불러오기",
@@ -1132,7 +1144,7 @@ class MainWindow(QMainWindow):
 
         from .load_progress import LoadProgressDialog
         progress = LoadProgressDialog(self)
-        progress.setWindowModality(Qt.WindowModal)
+        progress.setWindowModality(Qt.NonModal)   # 불러오는 동안에도 뷰어를 쓸 수 있게
         progress.setValue(0)
 
         worker = DirectoryLoadWorker(paths, target_viewport, remember, self)

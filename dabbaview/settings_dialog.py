@@ -509,10 +509,17 @@ class SettingsDialog(QDialog):
         row.addWidget(guide)
         row.addStretch()
         layout.addLayout(row)
+        from .cloud.secure_store import use_keychain
+        self._use_keychain = QCheckBox(f"로그인 토큰·Client Secret을 {backend_name()}에 저장")
+        self._use_keychain.setChecked(use_keychain(self._settings._qs))
+        self._use_keychain.setToolTip(
+            "켜면 더 안전하지만, 앱을 새 버전으로 바꿀 때마다 macOS가 로그인 암호를 물어볼 수 있습니다.\n"
+            "끄면 앱 설정 파일에 저장되어 암호를 묻지 않습니다 (이 Mac의 내 계정만 읽을 수 있는 파일).")
+        layout.addWidget(self._use_keychain)
         layout.addWidget(QLabel(
-            f"앱에 내장된 키는 없습니다. 각자 만든 클라이언트 키를 입력하세요.\n"
-            f"로그인 토큰과 Client Secret은 {backend_name()}에 저장됩니다.\n"
+            "앱에 내장된 키는 없습니다. 각자 만든 클라이언트 키를 입력하세요.\n"
             "File → Open from Google Drive / OneDrive로 폴더를 탐색해 DICOM을 내려받아 엽니다.\n"
+            "목록에 없는 폴더(구글 드라이브 '다른 컴퓨터'에 백업된 PC 폴더 등)는 탐색 창의 🔍 칸에서 찾습니다.\n"
             "권한은 읽기 전용입니다 (Drive: drive.readonly, OneDrive: Files.Read.All)."))
         layout.addStretch()
         return page
@@ -661,6 +668,9 @@ class SettingsDialog(QDialog):
         cache.set_limit_gb(self._cache_limit.value())
         self._settings._qs.setValue("cache_enabled", self._cache_enabled.isChecked())
         from .cloud import google_drive
+        from .cloud.secure_store import set_use_keychain
+        # 저장 위치(키체인/설정 파일)를 먼저 정하고, 그 다음에 값을 써야 원하는 곳에 들어간다
+        set_use_keychain(self._settings._qs, self._use_keychain.isChecked())
         secret = self._google_secret.text().strip()
         if secret:
             self._secure.set(google_drive.SECRET_KEY, secret)

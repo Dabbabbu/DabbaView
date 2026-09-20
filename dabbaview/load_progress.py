@@ -35,7 +35,9 @@ class LoadProgressDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("불러오는 중")
         self.setMinimumWidth(520)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowCloseButtonHint)
+        # 대화상자가 아니라 '보통 창'으로 → 메인 창 위에 늘 붙어 있지 않고, 뒤로 보낼 수 있음
+        self.setWindowFlags(Qt.Window | Qt.CustomizeWindowHint | Qt.WindowTitleHint
+                            | Qt.WindowMinimizeButtonHint)
         self._start = time.monotonic()
         self._maximum = 100
         self._force_shown = False
