@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 사용 매뉴얼
+    url: https://github.com/Dabbabbu/DabbaView/blob/main/docs/manual.md
+    about: 기능별 사용법이 정리되어 있습니다.
+  - name: 🔬 ACR 분석 가이드
+    url: https://github.com/Dabbabbu/DabbaView/blob/main/docs/analysis_guide.md
+    about: ACR 팬텀 정도관리 절차와 판정 기준입니다.
+  - name: ⬇️ 최신 버전 내려받기
+    url: https://github.com/Dabbabbu/DabbaView/releases/latest
+    about: macOS · Windows 설치 파일입니다.
