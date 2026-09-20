@@ -328,9 +328,17 @@ VTK는 3D Volume Rendering에만 쓰이며, 없으면 3D 탭만 비활성화되�
 
 빌드된 앱은 서명되지 않았습니다. 처음 열 때 macOS는 우클릭 → 열기, Windows는 SmartScreen에서 "추가 정보 → 실행"을 선택하세요.
 
-### 미리 빌드된 앱 받기
-push할 때마다 GitHub Actions가 macOS와 Windows용으로 빌드하고, 앱이 실행되는지까지 확인합니다.
-[Actions](https://github.com/Dabbabbu/DabbaView/actions) → 최근 빌드 → **Artifacts**에서 zip을 받으세요 (GitHub 로그인 필요, 90일 보관).
+### 미리 빌드된 앱 받기 (권장)
+
+[**Releases**](https://github.com/Dabbabbu/DabbaView/releases/latest) 에서 받으세요 (GitHub 로그인 없이 가능).
+
+| 운영체제 | 파일 | 설치 |
+|---|---|---|
+| macOS | `DabbaView-macOS.zip` | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |
+| Windows | `DabbaView-Windows.zip` | 압축을 풀고 `DabbaView\DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |
+
+버전 태그(`v2.6.0` 등)를 올리면 GitHub Actions가 두 플랫폼을 빌드하고 실행되는지 확인한 뒤 Release를 만들고 zip을 붙입니다.
+태그 없이 main에 push한 빌드는 [Actions](https://github.com/Dabbabbu/DabbaView/actions) → 최근 빌드 → **Artifacts**에 남습니다 (GitHub 로그인 필요, 90일 보관).
 
 ## 프로젝트 구조
 
