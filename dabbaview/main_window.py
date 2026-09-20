@@ -61,6 +61,13 @@ from .dicom_info import orientation_name
 
 MAX_RECENT_PATHS = 10
 
+# Help ▸ 의견 보내기 - GitHub Issue 템플릿 (.github/ISSUE_TEMPLATE/)
+ISSUE_LINKS = [
+    ("🐛 버그 리포트", "bug_report.md", "동작이 이상하거나 오류가 날 때 알려주세요"),
+    ("💡 기능 요청", "feature_request.md", "있었으면 하는 기능을 제안해주세요"),
+    ("📋 질문하기", "question.md", "사용법이 궁금할 때 물어보세요"),
+]
+
 # 이름 변경 전(RadiantView)의 설정 저장소
 LEGACY_SETTINGS = ("RadiantView", "RadiantView")
 
@@ -620,6 +627,15 @@ class MainWindow(QMainWindow):
         github = QAction("GitHub 저장소 열기", self)
         github.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
         self._help_menu.addAction(github)
+        self._help_menu.addSeparator()
+        for label, template, tip in ISSUE_LINKS:
+            action = QAction(label, self)
+            url = f"{GITHUB_URL}/issues/new?template={template}"
+            action.setToolTip(tip)
+            action.setStatusTip(url)
+            action.triggered.connect(lambda _=False, u=url: QDesktopServices.openUrl(QUrl(u)))
+            self._help_menu.addAction(action)
+        self._help_menu.addSeparator()
         updates = QAction("🔄 새 버전 확인…", self)
         updates.setToolTip("GitHub Releases에서 최신 버전을 확인합니다")
         updates.triggered.connect(self.check_updates_now)
