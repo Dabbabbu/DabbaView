@@ -11,7 +11,7 @@ import os
 import traceback
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel,
+from PyQt5.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
                              QLineEdit, QMessageBox, QProgressBar, QPushButton, QStyle,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout)
 
@@ -127,9 +127,43 @@ class CloudBrowserDialog(QDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #999;")
         layout.addWidget(hint)
+        sum_row = QHBoxLayout()
+        self._summary_label = QLabel("")
+        self._summary_label.setStyleSheet("color:#cfe0f5;")
+        self._summary_label.setWordWrap(True)
+        self._summary_toggle = QPushButton("▸ 자세히")
+        self._summary_toggle.setToolTip("어떤 확장자의 파일이 몇 개씩 있는지 보여 줍니다")
+        self._summary_toggle.setCheckable(True)
+        self._summary_toggle.setVisible(False)
+        self._summary_toggle.toggled.connect(self._toggle_summary)
+        sum_row.addWidget(self._summary_label, 1)
+        sum_row.addWidget(self._summary_toggle)
+        layout.addLayout(sum_row)
+        self._summary_detail = QTreeWidget()
+        self._summary_detail.setColumnCount(3)
+        self._summary_detail.setHeaderLabels(["확장자", "개수", "용량"])
+        self._summary_detail.setMaximumHeight(150)
+        self._summary_detail.setVisible(False)
+        self._summary_detail.setRootIsDecorated(False)
+        layout.addWidget(self._summary_detail)
+
+        self._fast_open = QCheckBox(
+            "⚡ 빠른 열기 (권장) - 메타데이터만 먼저 받고, 보는 영상만 그때 받기")
+        self._fast_open.setChecked(True)
+        self._fast_open.setToolTip(
+            "인터넷이 되는 환경이라면 켜 두는 쪽이 항상 낫습니다.\n"
+            " · 파일 앞부분(64 KB)만 받아 시리즈 목록을 바로 띄웁니다\n"
+            " · 시리즈를 열면 나머지를 백그라운드로 미리 받아 스크롤이 끊기지 않습니다\n"
+            " · 안 보는 시리즈는 아예 받지 않습니다 (시간·디스크 절약)\n"
+            "끄면 예전처럼 전부 받은 뒤 열립니다.\n"
+            "(동기화 폴더로 열 때는 불가능하고, API로 연결했을 때만 됩니다)")
+        layout.addWidget(self._fast_open)
+        fast_hint = QLabel(
+            "    인터넷이 없는 곳에서 볼 계획이면, 연 뒤 File ▸ ☁ 클라우드 영상 전체 받기로 미리 받아 두세요.")
+        fast_hint.setStyleSheet("color:#8a9;font-size:11px;")
+        layout.addWidget(fast_hint)
         dest_row = QHBoxLayout()
-        self._dest_hint = QLabel(f"저장 위치: {self._download_dir()}")
-        self._dest_hint.setStyleSheet("color: #9ab;")
+        self._dest_hint = QLabel()
         self._dest_hint.setWordWrap(True)
         open_dest = QPushButton("폴더 열기")
         open_dest.setToolTip("받은 파일이 저장되는 폴더를 Finder/탐색기로 엽니다")
@@ -137,6 +171,7 @@ class CloudBrowserDialog(QDialog):
         change_dest = QPushButton("변경…")
         change_dest.setToolTip("Settings ▸ Cloud에서도 바꿀 수 있습니다")
         change_dest.clicked.connect(self._change_dest_folder)
+        self._refresh_dest_hint()
         dest_row.addWidget(self._dest_hint, 1)
         dest_row.addWidget(open_dest)
         dest_row.addWidget(change_dest)
@@ -185,6 +220,35 @@ class CloudBrowserDialog(QDialog):
         from ..app_settings import default_download_dir
         return default_download_dir()
 
+    def _disk_free(self, folder=None):
+        """저장 폴더가 있는 디스크의 (남은 용량, 전체 용량). 폴더가 아직 없으면 상위로 올라가며 확인"""
+        import shutil
+        path = folder or self._download_dir()
+        while path and not os.path.isdir(path):
+            parent = os.path.dirname(path)
+            if parent == path:
+                break
+            path = parent
+        try:
+            usage = shutil.disk_usage(path or os.path.expanduser("~"))
+            return usage.free, usage.total
+        except OSError:
+            return 0, 0
+
+    def _dest_text(self, prefix="저장 위치"):
+        folder = self._download_dir()
+        free, total = self._disk_free(folder)
+        text = f"{prefix}: {folder}"
+        if total:
+            text += f"  ·  남은 공간 {human_size(free)} / {human_size(total)}"
+        return text
+
+    def _refresh_dest_hint(self, prefix="저장 위치"):
+        free, _total = self._disk_free()
+        self._dest_hint.setText(self._dest_text(prefix))
+        low = free and free < 5 * 1024 ** 3        # 5 GB 미만이면 눈에 띄게
+        self._dest_hint.setStyleSheet("color:#ffb84d;" if low else "color:#9ab;")
+
     def _open_dest_folder(self):
         import subprocess
         import sys as _sys
@@ -206,9 +270,41 @@ class CloudBrowserDialog(QDialog):
         settings = getattr(self.main, "_app_settings", None)
         if settings is not None and hasattr(settings, "set_cloud_download_dir"):
             settings.set_cloud_download_dir(folder)
-        self._dest_hint.setText(f"저장 위치: {folder}")
+        self._refresh_dest_hint()
+
+    def _toggle_summary(self, on):
+        self._summary_toggle.setText("▾ 접기" if on else "▸ 자세히")
+        self._summary_detail.setVisible(on)
+
+    def _show_summary(self, summary):
+        """폴더 N개 · 파일 N개 · 용량 · (자세히: 확장자별 개수·용량)"""
+        self._summary = summary
+        parts = [f"폴더 {summary['folders']:,}개",
+                 f"파일 {summary['files']:,}개",
+                 f"용량 {human_size(summary['bytes'])}"]
+        if summary.get("mixed_images"):
+            parts.append(f"그림 {summary['mixed_images']:,}장 제외(DICOM과 섞임)")
+        elif summary.get("skipped"):
+            parts.append(f"지원 안 함 {summary['skipped']:,}개 제외")
+        self._summary_label.setText("선택한 폴더:  " + "  ·  ".join(parts))
+        self._summary_detail.clear()
+        for ext, (count, size) in sorted(summary.get("by_ext", {}).items(),
+                                         key=lambda kv: -kv[1][0]):
+            row = QTreeWidgetItem([ext, f"{count:,}개", human_size(size)])
+            row.setTextAlignment(1, Qt.AlignRight)
+            row.setTextAlignment(2, Qt.AlignRight)
+            self._summary_detail.addTopLevelItem(row)
+        for i in range(3):
+            self._summary_detail.resizeColumnToContents(i)
+        self._summary_toggle.setVisible(bool(summary.get("by_ext")))
 
     def _on_progress(self, value):
+        if isinstance(value, tuple) and value and value[0] == "summary":
+            self._show_summary(value[1])
+            return
+        self._on_progress_bar(value)
+
+    def _on_progress_bar(self, value):
         if isinstance(value, tuple) and value and value[0] == "count":
             _tag, done, total, text = value
             self._progress.setRange(0, max(total, 1))
@@ -398,6 +494,16 @@ class CloudBrowserDialog(QDialog):
                 return
             to_fetch = [i for _rel, i in files if not transfer.cached_path(provider, i)]
             size = sum(i.size for i in to_fetch)
+            if self._fast_open.isChecked() and hasattr(provider, "download_head"):
+                size = min(size, len(to_fetch) * transfer.HEAD_BYTES)   # 헤더만 받음
+            free, _total = self._disk_free()
+            if free and size > free * 0.95:
+                QMessageBox.warning(
+                    self, provider.name,
+                    f"받을 용량이 {human_size(size)}인데 저장 폴더의 남은 공간은 "
+                    f"{human_size(free)}뿐입니다.\n\n"
+                    "다른 폴더를 고르거나(변경… 버튼), 폴더를 나눠서 여세요.")
+                return
             if size > LARGE_DOWNLOAD and QMessageBox.question(
                     self, provider.name,
                     f"파일 {len(files)}개 중 {len(to_fetch)}개({human_size(size)})를 내려받아야 합니다. "
@@ -405,18 +511,27 @@ class CloudBrowserDialog(QDialog):
                 return
             self._skipped = skipped
             dest = self._download_dir()
-            self._dest_hint.setText(f"저장 위치: {dest}")
-            self._run(f"내려받는 중... 0/{len(files)} files",
-                      lambda progress, cancelled: transfer.fetch(provider, files, tops,
-                                                                 progress, cancelled,
-                                                                 dest_root=dest),
-                      fetched)
+            self._refresh_dest_hint()
+            fast = self._fast_open.isChecked() and hasattr(provider, "download_head")
+            if fast:
+                self._run(f"빠른 열기 - 메타데이터 받는 중... 0/{len(files)}",
+                          lambda progress, cancelled: transfer.fetch_heads(
+                              provider, files, tops, progress, cancelled, dest_root=dest),
+                          fetched)
+            else:
+                self._run(f"내려받는 중... 0/{len(files)} files",
+                          lambda progress, cancelled: transfer.fetch(provider, files, tops,
+                                                                     progress, cancelled,
+                                                                     dest_root=dest),
+                          fetched)
 
         def fetched(result):
             paths, stats = result
             self.downloaded = paths
             self.stats = dict(stats, skipped=getattr(self, "_skipped", 0))
-            self._dest_hint.setText(f"저장한 곳: {stats.get('folder', '')}")
+            self._dest_hint.setText(
+                f"저장한 곳: {stats.get('folder', '')}  ·  "
+                f"남은 공간 {human_size(self._disk_free()[0])}")
             self.accept()
         self._run("폴더 확인 중...", plan_task, planned)
 

@@ -110,18 +110,19 @@ class OneDriveProvider:
 
     # ─── Graph ───
 
-    def _get(self, url, stream=False):
+    def _get(self, url, stream=False, headers=None):
         import requests
         if not self._token:
             raise CloudError("로그인이 필요합니다.")
         if not url.startswith("http"):
             url = self.graph + url
-        resp = requests.get(url, headers={"Authorization": f"Bearer {self._token}"},
-                            stream=stream, timeout=60)
+
+        def head():
+            return dict({"Authorization": f"Bearer {self._token}"}, **(headers or {}))
+        resp = requests.get(url, headers=head(), stream=stream, timeout=60)
         if resp.status_code == 401:
             self.sign_in(interactive=False)   # 만료 → 조용히 갱신 후 한 번 더
-            resp = requests.get(url, headers={"Authorization": f"Bearer {self._token}"},
-                                stream=stream, timeout=60)
+            resp = requests.get(url, headers=head(), stream=stream, timeout=60)
         if resp.status_code >= 400:
             try:
                 message = resp.json().get("error", {}).get("message", resp.text[:200])
@@ -194,6 +195,18 @@ class OneDriveProvider:
             return target
         return self.download_file(item, os.path.join(dest_dir, safe_name(item.name)),
                                   progress, cancelled)
+
+    def download_head(self, item, path, length):
+        """파일 앞부분 length 바이트만 받아 저장 → 실제로 받은 바이트 수"""
+        drive = item.extra.get("drive_id")
+        url = (f"/drives/{drive}/items/{item.id}/content" if drive
+               else f"/me/drive/items/{item.id}/content")
+        resp = self._get(url, stream=True,
+                         headers={"Range": f"bytes=0-{max(0, int(length) - 1)}"})
+        data = resp.content
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return len(data)
 
     def download_file(self, item, path, progress=None, cancelled=None):
         """파일 하나를 path에 저장"""

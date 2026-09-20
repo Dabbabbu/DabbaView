@@ -288,11 +288,22 @@ def expand_frames(ds):
     return frames
 
 
+def _ensure_full_file(path):
+    """클라우드에서 헤더만 받아 둔 파일이면 전체를 내려받음 (아니면 아무 일도 안 함)"""
+    try:
+        from .cloud import lazy
+    except ImportError:
+        return
+    if lazy.pending_count():
+        lazy.ensure(path)
+
+
 def _decode_pixels(ds):
     """메타데이터 Dataset이 가리키는 파일에서 해당 프레임 픽셀만 디코딩"""
     from pydicom.pixels import pixel_array
     frame = frame_index(ds)
     path = ds.filename
+    _ensure_full_file(path)     # 빠른 열기: 헤더만 받아 둔 파일이면 지금 마저 받음
     try:
         return pixel_array(path, index=frame)
     except Exception:  # noqa: BLE001 - 파일 메타 없는 옛 파일 등은 전체를 읽어 재시도
@@ -469,7 +480,9 @@ class DicomSeries:
         self.sort_slices()
         if index < 0 or index >= len(self.slices):
             return None
-        return pydicom.dcmread(self.slices[index].filename, force=True)
+        path = self.slices[index].filename
+        _ensure_full_file(path)
+        return pydicom.dcmread(path, force=True)
 
     @staticmethod
     def _error_key(ds):
