@@ -265,15 +265,24 @@ def _sequence_meta(folder):
     return {}
 
 
-def read_image_sequence(paths, name=None):
+MAX_IMAGE_SEQUENCE = 3000   # 한 폴더를 한 시리즈로 읽는 이미지 장수 상한 (메모리 보호)
+
+
+def read_image_sequence(paths, name=None, progress=None):
     """이미지 파일들 → 크기별로 묶어 시리즈 (파일 이름 자연 정렬 = 슬라이스 순서)
 
     images/ 옆에 같은 파일 이름의 masks/ 폴더가 있으면 마스크로 함께 읽는다.
     meta.json이 있으면 간격·방향·16비트 값 오프셋을 되살린다.
+    progress(경로)가 False를 돌려주면 그 자리에서 멈춘다 (취소).
     """
     paths = sorted(paths, key=_natural_key)
+    if len(paths) > MAX_IMAGE_SEQUENCE:
+        raise ValueError(f"이미지가 {len(paths):,}장이라 한 시리즈로 열지 않습니다 "
+                         f"(최대 {MAX_IMAGE_SEQUENCE:,}장). 폴더를 나눠서 열어주세요.")
     groups = {}
     for p in paths:
+        if progress is not None and progress(p) is False:
+            return []
         try:
             arr = _read_image(p)
         except OSError:

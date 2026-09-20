@@ -45,6 +45,9 @@ FILE_TIMEOUT_S = 10.0
 # 읽는 순간 OS가 다운로드를 시작하는데, 동기화 앱이 멈춰 있으면 read()가 끝나지 않음.
 CLOUD_WORKERS = 4                 # 동시에 받을 파일 수 (동기화 앱에 요청이 몰리지 않게)
 CLOUD_TIMEOUT_S = 30.0            # 파일 하나 다운로드 대기 한도
+# DICOM과 같은 폴더에 이미지(JPG·PNG)가 이만큼 넘게 섞여 있으면 이미지는 건너뜀
+#  (논문 그림·캡처 자료가 섞인 폴더를 열면 수만 장을 읽다가 멈춘 것처럼 보임)
+MIXED_IMAGE_LIMIT = 300
 CLOUD_MAX_CONSECUTIVE_FAILS = 5   # 연속으로 이만큼 실패하면 나머지는 시도하지 않고 건너뜀
 _SF_DATALESS = 0x40000000         # macOS: 내용이 로컬에 없는 파일 (File Provider)
 _WIN_CLOUD_ATTRS = 0x00400000 | 0x00040000 | 0x00001000   # RECALL_ON_DATA_ACCESS/OPEN, OFFLINE
@@ -634,6 +637,7 @@ class DicomLoader:
         self.label_candidates = []   # 라벨맵으로 보이는 VolumeSeries (다른 시리즈 오버레이 후보)
         self.segmentations = []      # DICOM SEG 파일 경로
         self.meshes = []             # STL 경로
+        self.skipped_images = 0      # DICOM과 섞여 있어 건너뛴 이미지 장수
 
     @property
     def extra_count(self):
@@ -742,39 +746,57 @@ class DicomLoader:
         # 형식별 분류: DICOM은 병렬 메타데이터 읽기, 나머지는 형식별 reader
         others = [f for f in files if file_kind(f) != "dicom"]
         files = [f for f in files if file_kind(f) == "dicom"]
+        # DICOM과 이미지가 한 폴더에 섞여 있으면(논문 그림·캡처 자료) 이미지는 건너뜀 —
+        # 수만 장을 읽느라 멈춘 것처럼 보이던 문제. 이미지만 보려면 그 폴더만 열면 된다.
+        pictures = [f for f in others if file_kind(f) == "image"]
+        self.skipped_images = 0
+        if files and len(pictures) > MIXED_IMAGE_LIMIT:
+            picture_set = set(pictures)
+            others = [f for f in others if f not in picture_set]
+            self.skipped_images = len(pictures)
+            self.load_errors.append((
+                os.path.dirname(pictures[0]),
+                f"이미지 {len(pictures):,}장을 건너뜀 — DICOM {len(files):,}개와 같은 폴더에 있습니다"
+                f" (이미지만 보려면 그 폴더만 따로 여세요)"))
         total = len(files) + len(others)
         if total == 0:
             for series in self.series_dict.values():
                 series.sort_slices()
             return cached
 
-        loaded = self._load_other_formats(others, progress_callback, total) + cached
-        done = len(others)
-        if cancel_event is not None and cancel_event.is_set():
-            return loaded
         parsed, failed = {}, {}   # 폴더 캐시 저장용
         # 클라우드에만 있는 파일은 따로: 받을지 물어보고, 받더라도 천천히·실패가 이어지면 중단
+        # ★ 이미지·NIfTI 등도 읽으면 다운로드가 일어나므로 '읽기 전에' 다 함께 물어본다.
         cloud = [f for f in files if is_cloud_placeholder(f)]
         cloud_set = set(cloud)
         local = [f for f in files if f not in cloud_set] if cloud else files
-        self.cloud_placeholders = len(cloud)
+        cloud_others = [f for f in others if is_cloud_placeholder(f)]
+        self.cloud_placeholders = len(cloud) + len(cloud_others)
         provider = next((cloud_provider(p) for p in paths if cloud_provider(p)), None)
         self.cloud_provider = provider
         policy = "download"
-        if (cloud or provider) and files and placeholder_policy is not None:
+        if (cloud or cloud_others or provider) and placeholder_policy is not None:
             size = 0
-            for f in files:
+            for f in files + others:
                 try:
                     size += os.lstat(f).st_size   # lstat은 다운로드를 일으키지 않음
                 except OSError:
                     pass
-            policy = placeholder_policy({"provider": provider, "placeholders": len(cloud),
-                                         "total": len(files), "bytes": size,
+            policy = placeholder_policy({"provider": provider,
+                                         "placeholders": len(cloud) + len(cloud_others),
+                                         "total": total, "bytes": size,
                                          "roots": list(paths)})
             if policy == "cancel":
                 if cancel_event is not None:
                     cancel_event.set()
-                return loaded
+                return cached
+        if policy == "skip" and cloud_others:
+            others = [f for f in others if f not in set(cloud_others)]
+            total = len(files) + len(others)
+        loaded = self._load_other_formats(others, progress_callback, total, cancel_event) + cached
+        done = len(others)
+        if cancel_event is not None and cancel_event.is_set():
+            return loaded
         cloud_options = dict(max_workers=CLOUD_WORKERS, timeout=CLOUD_TIMEOUT_S + 10,
                              max_consecutive_failures=CLOUD_MAX_CONSECUTIVE_FAILS)
         if isinstance(policy, tuple) and policy[0] == "copy":
@@ -893,6 +915,15 @@ class DicomLoader:
                 if running_path == path:
                     del self._running[name]
 
+    def _mark_slow(self, path, key="image"):
+        """지금 읽고 있는 이미지 한 장을 기록 — 멈춤 감지(slow_files)에 쓰임"""
+        with self._running_lock:
+            self._running[key] = (path, time.monotonic())
+
+    def _clear_slow(self, key="image"):
+        with self._running_lock:
+            self._running.pop(key, None)
+
     def slow_files(self, min_seconds=0.0):
         """지금 읽는 중인 파일 중 min_seconds 이상 걸리는 것 [(경로, 경과 초)]"""
         now = time.monotonic()
@@ -992,13 +1023,21 @@ class DicomLoader:
         finally:
             stop.set()
 
-    def _load_other_formats(self, paths, progress_callback=None, total=0):
-        """NIfTI/NRRD/MetaImage/NumPy/이미지/STL. 불러온 항목 수 반환"""
+    def _load_other_formats(self, paths, progress_callback=None, total=0, cancel_event=None):
+        """NIfTI/NRRD/MetaImage/NumPy/이미지/STL. 불러온 항목 수 반환
+
+        이미지는 폴더별로 한 시리즈가 되는데 장수가 많으면 오래 걸리므로
+        한 장 읽을 때마다 진행률을 알리고, 취소하면 그 자리에서 멈춘다.
+        """
         from .formats.readers import (file_kind, read_volume_file, read_image_sequence,
                                       is_mask_image_folder)
+        cancelled = lambda: cancel_event is not None and cancel_event.is_set()   # noqa: E731
         loaded = 0
         images = {}
+        self.phase = "파일 형식 확인 중"
         for i, path in enumerate(paths):
+            if cancelled():
+                return loaded
             kind = file_kind(path)
             if kind == "mesh":
                 self.meshes.append(path)
@@ -1006,19 +1045,35 @@ class DicomLoader:
             elif kind == "image":
                 images.setdefault(os.path.dirname(path), []).append(path)
             else:
+                self.phase = "볼륨 파일 읽는 중"
                 try:
                     loaded += self._add_volumes(read_volume_file(path))
                 except Exception as e:  # noqa: BLE001 - 형식 오류는 목록에만 기록
                     self.load_errors.append((path, str(e)))
             if progress_callback and total:
                 progress_callback(i + 1, total)
+        done = len(paths)
+        shot = sum(len(v) for v in images.values())
         for folder, files in images.items():
+            if cancelled():
+                return loaded
             if is_mask_image_folder(folder):
                 continue  # images/ 시리즈의 마스크로 함께 읽음
+            self.phase = f"이미지 읽는 중 ({os.path.basename(folder) or folder})"
+            step = [0]
+
+            def tick(_path, _n=len(files)):     # 이미지 한 장을 읽을 때마다
+                step[0] += 1
+                self._mark_slow(_path)
+                if progress_callback and total and shot:
+                    progress_callback(min(total, done + step[0] * done // max(1, shot)), total)
+                return not cancelled()
             try:
-                loaded += self._add_volumes(read_image_sequence(files))
+                loaded += self._add_volumes(read_image_sequence(files, progress=tick))
             except Exception as e:  # noqa: BLE001
                 self.load_errors.append((folder, str(e)))
+            self._clear_slow()
+        self.phase = ""
         return loaded
 
     def _add_volumes(self, volumes):
