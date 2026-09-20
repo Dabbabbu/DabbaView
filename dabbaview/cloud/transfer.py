@@ -59,7 +59,7 @@ def _drop_mixed_images(files):
     return [f for i, f in enumerate(files) if i not in drop], len(pictures)
 
 
-def plan(provider, items, progress=None, cancelled=None):
+def plan(provider, items, progress=None, cancelled=None, drop_mixed=False):
     """→ (files [(상대 경로, CloudItem)], 건너뛴 파일 수, 최상위 경로 목록)
 
     폴더를 너비 우선으로 훑으며 '확인한 폴더 / 찾은 폴더'와 파일 수를 알린다.
@@ -111,8 +111,10 @@ def plan(provider, items, progress=None, cancelled=None):
                 note(child.name, getattr(child, "size", 0))
         listed += 1
         report(rel)
-    files, mixed = _drop_mixed_images(files)
-    skipped += mixed
+    mixed = 0
+    if drop_mixed:
+        files, mixed = _drop_mixed_images(files)
+        skipped += mixed
     summary = {"folders": listed, "files": len(files), "skipped": skipped,
                "bytes": sum(getattr(i, "size", 0) or 0 for _rel, i in files),
                "all_bytes": seen_bytes[0], "by_ext": seen,

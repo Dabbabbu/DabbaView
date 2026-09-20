@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QDialog
 
 from .. import cache
 from . import CloudError, NotConfigured, transfer
+from .transfer import _human_time
 
 LARGE_DOWNLOAD = 2 * 1024 ** 3   # 2 GB 넘으면 확인
 
@@ -144,11 +145,25 @@ class CloudBrowserDialog(QDialog):
         layout.addLayout(sum_row)
         self._summary_detail = QTreeWidget()
         self._summary_detail.setColumnCount(3)
-        self._summary_detail.setHeaderLabels(["확장자", "개수", "용량"])
+        self._summary_detail.setHeaderLabels(["받을 유형 (체크)", "개수", "용량"])
         self._summary_detail.setMaximumHeight(150)
         self._summary_detail.setVisible(False)
         self._summary_detail.setRootIsDecorated(False)
+        self._summary_detail.itemChanged.connect(self._on_ext_toggled)
         layout.addWidget(self._summary_detail)
+        choice_row = QHBoxLayout()
+        self._choice_label = QLabel("")
+        self._choice_label.setStyleSheet("color:#cfe0f5;")
+        only_dicom = QPushButton("DICOM만")
+        only_dicom.setToolTip("같은 환자의 그림(JPG·PNG)은 빼고 DICOM만 받습니다")
+        only_dicom.clicked.connect(self._choose_dicom_only)
+        all_kinds = QPushButton("전부")
+        all_kinds.clicked.connect(self._choose_all_exts)
+        choice_row.addWidget(self._choice_label, 1)
+        choice_row.addWidget(only_dicom)
+        choice_row.addWidget(all_kinds)
+        self._choice_row = choice_row
+        layout.addLayout(choice_row)
 
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("열기 방식:"))
@@ -294,6 +309,9 @@ class CloudBrowserDialog(QDialog):
 
     def _update_mode_hint(self):
         """고른 폴더를 훑고 나면 각 방식의 예상 용량을 버튼 이름에 붙여 준다"""
+        if getattr(self, "_by_ext", None):
+            self._update_choice()      # 고른 유형 기준으로 계산 (아래 계산보다 정확)
+            return
         summary = getattr(self, "_summary", None)
         total = (summary or {}).get("bytes", 0)
         files = (summary or {}).get("files", 0)
@@ -373,16 +391,79 @@ class CloudBrowserDialog(QDialog):
         self._start_ticker()
         self._tick_progress()
 
+    DICOM_EXTS = (".dcm", ".dicom", ".ima", "(확장자 없음)")
+
     def _fill_ext_table(self, by_ext):
-        """확장자별 개수·용량 표 (빈도순)"""
+        """확장자별 개수·용량 표 (빈도순) — 체크로 받을 유형을 고른다"""
+        self._by_ext = dict(by_ext)
+        self._summary_detail.blockSignals(True)
         self._summary_detail.clear()
+        chosen = getattr(self, "_ext_chosen", None)
+        if chosen is None:      # 처음엔 DICOM만 (그림은 중복이라 빼 둠)
+            dicoms = [e for e in by_ext if e in self.DICOM_EXTS or e[1:].isdigit()]
+            chosen = set(dicoms) if dicoms else set(by_ext)
+            self._ext_chosen = chosen
         for ext, (count, size) in sorted(by_ext.items(), key=lambda kv: (-kv[1][0], kv[0])):
             row = QTreeWidgetItem([ext, f"{count:,}개", human_size(size)])
+            row.setFlags(row.flags() | Qt.ItemIsUserCheckable)
+            row.setCheckState(0, Qt.Checked if ext in chosen else Qt.Unchecked)
+            row.setData(0, Qt.UserRole, ext)
             row.setTextAlignment(1, Qt.AlignRight)
             row.setTextAlignment(2, Qt.AlignRight)
             self._summary_detail.addTopLevelItem(row)
         for i in range(3):
             self._summary_detail.resizeColumnToContents(i)
+        self._summary_detail.blockSignals(False)
+        self._update_choice()
+
+    def _on_ext_toggled(self, *_args):
+        chosen = set()
+        for i in range(self._summary_detail.topLevelItemCount()):
+            row = self._summary_detail.topLevelItem(i)
+            if row.checkState(0) == Qt.Checked:
+                chosen.add(row.data(0, Qt.UserRole))
+        self._ext_chosen = chosen
+        self._update_choice()
+
+    def _chosen_counts(self):
+        """고른 유형의 (개수, 용량)"""
+        by_ext = getattr(self, "_by_ext", {}) or {}
+        chosen = getattr(self, "_ext_chosen", None)
+        if chosen is None:
+            chosen = set(by_ext)
+        count = sum(v[0] for k, v in by_ext.items() if k in chosen)
+        size = sum(v[1] for k, v in by_ext.items() if k in chosen)
+        return count, size
+
+    def _update_choice(self):
+        """고른 유형의 개수·용량·예상 시간을 요약 줄과 버튼에 반영"""
+        by_ext = getattr(self, "_by_ext", {}) or {}
+        if not by_ext:
+            return
+        count, size = self._chosen_counts()
+        total_count = sum(v[0] for v in by_ext.values())
+        speed = self._known_speed()
+        full_eta = f"  ·  예상 {_human_time(size / speed)}" if size and speed else ""
+        head = min(size, count * transfer.HEAD_BYTES)
+        head_eta = f"  ·  예상 {_human_time(head / speed)}" if head and speed else ""
+        self._choice_label.setText(
+            f"받을 유형: {count:,}개 / 전체 {total_count:,}개  ·  {human_size(size)}"
+            + (f"  ·  {', '.join(sorted(self._ext_chosen))}" if getattr(self, "_ext_chosen", None) else ""))
+        self._fast_open.setText(f"⚡ 빠른 열기 (권장 · 약 {human_size(head)}{head_eta})")
+        self._full_open.setText(f"⬇ 전체 다운로드 (오프라인 대비 · {human_size(size)}{full_eta})")
+
+    def _known_speed(self):
+        """최근에 관찰한 다운로드 속도 (없으면 8 MB/s로 어림)"""
+        return getattr(self, "_speed_hint", 0) or 8 * 1024 * 1024
+
+    def _choose_dicom_only(self):
+        self._ext_chosen = {e for e in getattr(self, "_by_ext", {})
+                            if e in self.DICOM_EXTS or e[1:].isdigit()}
+        self._fill_ext_table(getattr(self, "_by_ext", {}))
+
+    def _choose_all_exts(self):
+        self._ext_chosen = set(getattr(self, "_by_ext", {}))
+        self._fill_ext_table(getattr(self, "_by_ext", {}))
 
     def _show_listing_summary(self, items):
         """지금 보고 있는 폴더의 내용 요약 (하위 폴더는 들어가야 알 수 있음)
@@ -452,7 +533,6 @@ class CloudBrowserDialog(QDialog):
         self._spin = (getattr(self, "_spin", 0) + 1) % len(self.SPINNER)
         mark = self.SPINNER[self._spin]
         import time as _t
-        from .transfer import _human_time
         elapsed = _t.monotonic() - state["start"]
         done, total = state["done"], state["total"]
         if state["kind"] == "count":
@@ -671,9 +751,25 @@ class CloudBrowserDialog(QDialog):
         picked = [i for i in self._selected_items() if i.is_folder or i.downloadable]
         self._open.setEnabled(bool(picked))
         if picked:
+            names = ", ".join(i.name for i in picked[:3])
+            if len(picked) > 3:
+                names += f" 외 {len(picked) - 3}개"
             self._open.setText(f"선택 항목 열기 ({len(picked)}개)")
+            self._open.setToolTip(f"고른 항목만 엽니다: {names}")
         else:
             self._open.setText("선택 항목 열기")
+            self._open.setToolTip("위 목록에서 폴더·파일을 고르면 그것만 엽니다")
+        # '이 폴더 전체 열기'가 어디를 말하는지 이름으로 분명히
+        here = self._stack[-1].name if self._stack else ""
+        folders = [i.name for i in self._items if i.is_folder]
+        if here:
+            self._open_here.setText(f"📂 '{here}' 폴더 전체 열기")
+            inside = ", ".join(folders[:3]) + (f" 외 {len(folders) - 3}개" if len(folders) > 3 else "")
+            self._open_here.setToolTip(
+                f"지금 들어와 있는 '{here}' 폴더를 하위까지 통째로 엽니다"
+                + (f"\n포함되는 하위 폴더: {inside}" if folders else ""))
+        else:
+            self._open_here.setText("📂 이 폴더 전체 열기")
 
     def _selected_items(self):
         return [r.data(0, Qt.UserRole) for r in self._tree.selectedItems()]
@@ -699,6 +795,14 @@ class CloudBrowserDialog(QDialog):
 
         def planned(result):
             files, skipped, tops = result
+            chosen = getattr(self, "_ext_chosen", None)
+            if chosen:      # 고른 확장자만 내려받음 (중복 형식 제외)
+                def keep(rel):
+                    ext = (os.path.splitext(rel)[1] or "(확장자 없음)").lower()
+                    return ext in chosen
+                before = len(files)
+                files = [(rel, item) for rel, item in files if keep(rel)]
+                skipped += before - len(files)
             if not files:
                 QMessageBox.information(self, provider.name,
                                         "불러올 DICOM 파일이 없습니다." +
@@ -739,6 +843,11 @@ class CloudBrowserDialog(QDialog):
 
         def fetched(result):
             paths, stats = result
+            state = getattr(self, "_prog", None) or {}
+            import time as _t
+            elapsed = _t.monotonic() - (state.get("start") or _t.monotonic())
+            if stats.get("bytes") and elapsed > 2:
+                self._speed_hint = stats["bytes"] / elapsed
             self.downloaded = paths
             self.stats = dict(stats, skipped=getattr(self, "_skipped", 0))
             self._dest_hint.setText(

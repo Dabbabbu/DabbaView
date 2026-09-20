@@ -270,6 +270,7 @@ class MainWindow(QMainWindow):
         self._setup_worksave()
         self._setup_update_check()
         self._setup_lazy_cloud()
+        self._install_popup_watcher()
         # 다른 앱에 갔다 돌아왔을 때 팝업이 뒤로 숨어 먹통이 되지 않게
         self._modal_raiser = _ModalRaiser()
         QApplication.instance().installEventFilter(self._modal_raiser)
@@ -1333,6 +1334,8 @@ class MainWindow(QMainWindow):
         """팝업(클라우드 탐색·진행 창 등)을 메인 창 오른쪽 탭에 등록 — 눌러서 다시 앞으로"""
         if not hasattr(self, "_popups"):
             self._popups = []
+        if any(w is widget for w, _i in self._popups):
+            return
         self._popups.append((widget, icon))
         widget.destroyed.connect(lambda *_: self._update_side_tabs())
         if not hasattr(self, "_side_tab_timer"):
@@ -1365,7 +1368,7 @@ class MainWindow(QMainWindow):
             self._side_tab.setCursor(Qt.PointingHandCursor)
             self._side_tab.setStyleSheet(
                 "QPushButton{background:#2b3a55;color:#dbe5f5;border:1px solid #3d8bfd;"
-                "border-right:none;border-top-left-radius:8px;border-bottom-left-radius:8px;"
+                "border-top-left-radius:8px;border-top-right-radius:8px;"
                 "padding:8px 12px;font-size:12px;text-align:left}"
                 "QPushButton:hover{background:#35507a}")
             self._side_tab.clicked.connect(self._raise_popup)
@@ -1384,10 +1387,20 @@ class MainWindow(QMainWindow):
         self._side_tab.raise_()
 
     def _place_side_tab(self):
+        """탭 줄(2D View … 3D Volume) 오른쪽 끝에 붙인다"""
         if not hasattr(self, "_side_tab") or not self._side_tab.isVisible():
             return
         width = self._side_tab.width()
-        self._side_tab.move(self.width() - width, 150)
+        x, y = self.width() - width - 8, 150
+        bar = getattr(getattr(self, "_tab_widget", None), "tabBar", None)
+        if bar is not None:
+            tab_bar = self._tab_widget.tabBar()
+            last = tab_bar.tabRect(tab_bar.count() - 1)       # 3D Volume 탭
+            point = tab_bar.mapTo(self, last.topRight())
+            y = point.y()
+            self._side_tab.setFixedHeight(max(24, last.height()))
+            x = min(self.width() - width - 8, point.x() + 12)  # 3D Volume 바로 오른쪽
+        self._side_tab.move(max(0, x), max(0, y))
 
     def _raise_popup(self):
         alive = self._live_popups()
@@ -1401,6 +1414,35 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._place_side_tab()
+
+    def _install_popup_watcher(self):
+        """새로 열리는 창(팝업)을 자동으로 옆 탭에 등록 — 기능마다 따로 손댈 필요 없이"""
+        main = self
+
+        class _PopupWatcher(QObject):
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Show and isinstance(obj, QWidget) \
+                        and obj.isWindow() and obj is not main:
+                    try:
+                        if obj.windowTitle() and not obj.isModal():
+                            main.register_popup(obj, main._popup_icon(obj))
+                    except RuntimeError:
+                        pass
+                return False
+        self._popup_watcher = _PopupWatcher()
+        QApplication.instance().installEventFilter(self._popup_watcher)
+
+    @staticmethod
+    def _popup_icon(widget):
+        title = (widget.windowTitle() or "").lower()
+        name = type(widget).__name__.lower()
+        if "drive" in title or "onedrive" in title or "cloud" in name:
+            return "☁"
+        if "불러오는" in title or "progress" in name:
+            return "⏳"
+        if "설정" in title or "settings" in name:
+            return "⚙"
+        return "🪟"
 
     def _setup_lazy_cloud(self):
         """빠른 열기: 볼 때 나머지를 받는 동안 상태바에 알림 (다른 스레드에서 오므로 시그널로)"""
