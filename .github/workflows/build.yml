@@ -144,3 +144,15 @@ jobs:
             --notes-file notes.md \
             "DabbaView-$GITHUB_REF_NAME-macOS.zip" "DabbaView-$GITHUB_REF_NAME-Windows.zip"
 
+      - name: 이전 Release 정리 (최신 하나만 남김)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 태그는 남겨 두고 Release(내려받기 파일)만 지움 - 늘 최신 하나만 보이게
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
+            | grep -vx "$GITHUB_REF_NAME" \
+            | while read -r old; do
+                echo "이전 Release 삭제: $old"
+                gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes
+              done
+
