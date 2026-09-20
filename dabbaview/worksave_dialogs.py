@@ -31,6 +31,11 @@ class ExitSaveDialog(QDialog):
         detail = QLabel("현재 작업: " + ", ".join(f"{name} {n}개" for name, n in items))
         detail.setWordWrap(True)
         layout.addWidget(detail)
+        note = QLabel("세그멘테이션 마스크는 편집할 때마다 자동으로 저장됩니다 "
+                      "(지우려면 Tools ▸ 작업 되돌리기 · 원본 복구).")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #9aa7b5;")
+        layout.addWidget(note)
         layout.addSpacing(6)
         buttons = QDialogButtonBox()
         save = buttons.addButton("저장 후 종료", QDialogButtonBox.AcceptRole)
@@ -101,6 +106,50 @@ class SaveChoiceDialog(QDialog):
 
     def folder(self):
         return self.path.text().strip()
+
+
+class RevertDialog(QDialog):
+    """작업 되돌리기 (원본 복구): 무엇을 지울지 고름"""
+
+    def __init__(self, info, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("작업 되돌리기 · 원본 복구")
+        self.setMinimumWidth(560)
+        layout = QVBoxLayout(self)
+        title = QLabel("지울 작업을 고르세요. 원본 DICOM은 .bak 백업으로 되돌립니다.")
+        title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(title)
+        self.checks = {}
+        rows = [
+            ("annotations", f"화면의 ROI · 측정 · 주석 지우기 ({info['annotations']}개)", info["annotations"]),
+            ("masks", f"세그멘테이션 마스크 지우기 (저장된 시리즈 {info['masks']}개)", info["masks"]),
+            ("sidecars", f"자동 저장 파일 삭제 ({info['sidecars']}개 검사)", info["sidecars"]),
+            ("dicom", f"원본 DICOM 복구 (.bak {info['backups']}개 · 주석 태그가 있는 파일 {info['tagged']}개)",
+             max(info["backups"], info["tagged"])),
+        ]
+        from PyQt5.QtWidgets import QCheckBox
+        for key, text, count in rows:
+            box = QCheckBox(text)
+            box.setEnabled(bool(count))
+            box.setChecked(bool(count))
+            layout.addWidget(box)
+            self.checks[key] = box
+        note = QLabel("· 되돌린 내용은 복구할 수 없습니다.\n"
+                      "· 원본 DICOM 복구는 백업이 있는 파일만 완전히 되돌립니다. 백업이 없으면 넣었던 주석 태그만 지웁니다.\n"
+                      "· 마스크를 지우면 저장된 npz 파일도 함께 지웁니다.")
+        note.setStyleSheet("color: #9aa7b5;")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        buttons = QDialogButtonBox()
+        run = buttons.addButton("되돌리기", QDialogButtonBox.AcceptRole)
+        buttons.addButton("취소", QDialogButtonBox.RejectRole)
+        run.setStyleSheet("color: #ff8a8a;")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def picked(self):
+        return {k: b.isChecked() and b.isEnabled() for k, b in self.checks.items()}
 
 
 class RestoreDialog(QDialog):

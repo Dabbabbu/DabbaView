@@ -575,6 +575,12 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(clear_meas)
         self._init_roi_actions(tools_menu)
 
+        revert = QAction("↩︎ 작업 되돌리기 · 원본 복구…", self)
+        revert.setToolTip("ROI · 측정 · 주석 · 세그멘테이션 마스크 · 자동 저장 파일을 지우고, "
+                          "원본에 덮어쓴 DICOM을 .bak 백업으로 되돌립니다")
+        revert.triggered.connect(self._revert_work)
+        tools_menu.addAction(revert)
+
         tools_menu.addSeparator()
         apply_hp = QAction("Apply Hanging Protocol", self)
         apply_hp.triggered.connect(lambda: self._apply_hanging(auto=False))
@@ -2345,6 +2351,62 @@ class MainWindow(QMainWindow):
         if dialog.choice == ExitSaveDialog.SAVE:
             return self._save_work_interactive()
         return True
+
+    def _revert_work(self):
+        """작업 되돌리기 · 원본 복구 (Tools 메뉴)"""
+        from . import worksave
+        from .worksave_dialogs import RevertDialog
+        series_list = self._loader.get_series_list()
+        studies = sorted({s.study_uid for s in series_list if s.study_uid})
+        tagged, backups = worksave.dicom_status(series_list)
+        info = {"annotations": self._annotation_store.count(),
+                "masks": len(worksave.mask_files(series_list)),
+                "sidecars": len(worksave.sidecar_for_studies(studies)),
+                "tagged": tagged, "backups": backups}
+        if not any(info.values()):
+            QMessageBox.information(self, "작업 되돌리기", "되돌릴 작업이 없습니다.")
+            return
+        dialog = RevertDialog(info, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        picked = dialog.picked()
+        done = []
+        if picked.get("annotations"):
+            n = self._annotation_store.count()
+            for key, ann in list(self._annotation_store.all_items()):
+                self._annotation_store.remove(key, ann["id"])
+            self._annotation_store.clear_key_images()
+            done.append(f"ROI · 측정 · 주석 {n}개 지움")
+        if picked.get("masks"):
+            for series in series_list:
+                try:
+                    self._seg.clear_label(series)
+                except Exception:  # noqa: BLE001 - 편집할 수 없는 시리즈는 건너뜀
+                    pass
+            removed = 0
+            for path in worksave.mask_files(series_list):
+                try:
+                    os.remove(path)
+                    removed += 1
+                except OSError:
+                    pass
+            self._seg._cases.clear()
+            self._seg.changed.emit("")
+            done.append(f"세그멘테이션 마스크 {removed}개 시리즈 지움")
+        if picked.get("sidecars"):
+            done.append(f"자동 저장 파일 {worksave.delete_sidecars(studies)}개 삭제")
+            self._restored_studies.update(studies)
+        if picked.get("dicom"):
+            restored, cleaned, errors = worksave.restore_originals(series_list)
+            done.append(f"원본 DICOM 복구 {restored}개" + (f" · 태그만 지움 {cleaned}개" if cleaned else "")
+                        + (f" · 실패 {len(errors)}개" if errors else ""))
+        for vp in self._all_viewports():
+            vp.update()
+        self._statusbar.showMessage("되돌리기: " + " · ".join(done), 12000)
+        QMessageBox.information(self, "작업 되돌리기",
+                                "되돌렸습니다.\n\n" + "\n".join("· " + d for d in done)
+                                + ("\n\n원본 DICOM을 복구했으면 폴더를 다시 열어야 화면에 반영됩니다."
+                                   if picked.get("dicom") else ""))
 
     def _save_annotations(self):
         if self._annotation_store.count() == 0 and not self._annotation_store.key_images():
