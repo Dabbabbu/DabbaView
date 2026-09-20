@@ -191,6 +191,92 @@ def collect_from_dicom(series_list, store=None):
     return found
 
 
+# ─── 원본 되돌리기 ───
+
+def dicom_status(series_list):
+    """원본에 쓴 흔적 → (개인 태그가 있는 파일 수, .bak 백업이 있는 파일 수)"""
+    tagged = backups = 0
+    for series in series_list or []:
+        for ds in getattr(series, "slices", []) or []:
+            path = getattr(ds, "filename", None)
+            if not path:
+                continue
+            if os.path.exists(path + ".bak"):
+                backups += 1
+            if read_from_dicom(ds) is not None:
+                tagged += 1
+    return tagged, backups
+
+
+def restore_originals(series_list, keep_backup=False):
+    """.bak으로 원본 복구 (백업이 없으면 개인 태그만 지움) → (복구 수, 태그만 지운 수, [실패])"""
+    import pydicom
+    restored, cleaned, errors = 0, 0, []
+    seen = set()
+    for series in series_list or []:
+        for ds in getattr(series, "slices", []) or []:
+            path = getattr(ds, "filename", None)
+            if not path or path in seen or not os.path.exists(path):
+                continue
+            seen.add(path)
+            backup = path + ".bak"
+            try:
+                if os.path.exists(backup):
+                    shutil.copy2(backup, path)
+                    if not keep_backup:
+                        os.remove(backup)
+                    restored += 1
+                elif read_from_dicom(ds) is not None:
+                    disk = pydicom.dcmread(path)
+                    if remove_tag(disk):
+                        disk.save_as(path)
+                        cleaned += 1
+            except Exception as e:  # noqa: BLE001 - 파일 하나가 실패해도 나머지는 진행
+                errors.append(f"{os.path.basename(path)}: {e}")
+    return restored, cleaned, errors
+
+
+def remove_tag(ds):
+    """개인 태그(주석) 제거. 지웠으면 True"""
+    removed = False
+    for block_tag in list(ds.keys()):
+        if block_tag.group == PRIVATE_GROUP and block_tag.element == 0x0010 \
+                and str(ds[block_tag].value).strip() == PRIVATE_CREATOR:
+            base = block_tag.element << 8
+            for tag in list(ds.keys()):
+                if tag.group == PRIVATE_GROUP and (tag.element & 0xFF00) == base:
+                    del ds[tag]
+                    removed = True
+            del ds[block_tag]
+            removed = True
+    return removed
+
+
+def delete_sidecars(study_uids):
+    """자동 저장(사이드카) JSON 삭제 → 지운 파일 수"""
+    n = 0
+    for study in study_uids or []:
+        path = sidecar_path(study)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
+def mask_files(series_list):
+    """세그멘테이션 마스크로 저장된 파일 → [경로]"""
+    from .ai.segmentation import _mask_file
+    out = []
+    for series in series_list or []:
+        path = _mask_file(series.series_uid)
+        if os.path.exists(path):
+            out.append(path)
+    return out
+
+
 def save_copy(store, series_list, dest):
     """사본 폴더에 DICOM + annotations.json → (복사한 파일 수, annotations.json 경로)"""
     os.makedirs(dest, exist_ok=True)
