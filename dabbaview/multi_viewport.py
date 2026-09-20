@@ -74,6 +74,7 @@ class MultiViewport(QWidget):
         self._sync_window = False
         self._reference_lines = False
         self._selected = set()                 # 활성 칸 외에 함께 움직이는 칸
+        self._crosslink = False                # Crosslink: 다른 시리즈 전체 스캔 범위 표시
         self._compare_offsets = {}  # (i, j) → j 슬라이스 - i 슬라이스
         self._syncing = False
         self._maximized = False  # Space: 활성 칸만 크게
@@ -433,9 +434,18 @@ class MultiViewport(QWidget):
         finally:
             self._syncing = False
 
+    def set_crosslink(self, enabled):
+        """Crosslink: 다른 칸 시리즈의 전체 스캔 범위를 이 영상 위에 점선으로"""
+        self._crosslink = enabled
+        self._refresh_reference_lines()
+
     def _reference_sources_for(self, viewport):
-        """viewport에 그릴 다른 칸들의 현재 슬라이스 (같은 환자 + 같은 좌표계)"""
-        if not self._reference_lines or viewport.series is None:
+        """viewport에 그릴 다른 칸들의 선 (같은 환자 + 같은 좌표계)
+
+        Crosslink ON → 그 시리즈 전체 슬라이스(점선) + 현재 슬라이스(노란 실선)
+        Ref Lines ON → 현재 슬라이스 한 줄만
+        """
+        if not (self._reference_lines or self._crosslink) or viewport.series is None:
             return []
         own = viewport.sync_geometry()
         if own is None:
@@ -449,11 +459,12 @@ class MultiViewport(QWidget):
                     or vp.series.patient_id != viewport.series.patient_id):
                 continue
             label = f"S{vp.series.series_number or ''}:{vp.current_slice + 1}"
-            # 칸마다 다른 색 (전체 커버리지 점선) - 현재 슬라이스는 노란 실선
-            sources.append((geom, vp.current_slice, label, COVERAGE_COLORS[i % len(COVERAGE_COLORS)]))
+            # 칸마다 다른 색 (커버리지 점선) - 현재 슬라이스는 노란 실선
+            sources.append((geom, vp.current_slice, label, COVERAGE_COLORS[i % len(COVERAGE_COLORS)],
+                            self._crosslink))
         return sources
 
     def _refresh_reference_lines(self):
-        if self._reference_lines:
+        if self._reference_lines or self._crosslink:
             for vp in self.visible_viewports:
                 vp.update()

@@ -57,7 +57,8 @@ COLOR_ANGLE = QColor(0, 255, 255)
 COLOR_ROI = QColor(255, 140, 0)
 COLOR_AREA = QColor(120, 220, 255)
 COLOR_ARROW = QColor(255, 80, 200)
-COLOR_CURSOR3D = QColor(255, 60, 60)
+COLOR_CURSOR3D = QColor(255, 60, 60)          # 직접 찍은 3D Cursor
+COLOR_CURSOR3D_LINKED = QColor(60, 220, 120)  # 다른 시리즈에서 대응된 3D Cursor
 COLOR_ELLIPSE = QColor(80, 255, 120)
 COLOR_COBB = QColor(255, 200, 60)
 COLOR_REFLINE = QColor(255, 230, 0)
@@ -1207,16 +1208,30 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self.update()
 
     def show_cursor3d(self, point):
-        """다른 뷰에서 찍은 3D Cursor를 표시 (가장 가까운 슬라이스로 이동)"""
+        """다른 뷰에서 찍은 3D Cursor: 가장 가까운 슬라이스로 이동해 표시.
+
+        좌표가 이 시리즈의 스캔 범위 밖(슬라이스 사이 간격을 크게 벗어나거나 영상 밖)이면
+        커서를 놓지 않고 False를 반환한다.
+        """
         geom = self._series.geometry if self._series else None
         if geom is None:
             self.clear_cursor3d()
-            return
-        index, _ = geom.nearest_slice(point)
+            return False
+        index, distance = geom.nearest_slice(point)
+        spacing = geom.slice_spacing()
+        limit = (spacing if spacing else 5.0) + 0.5   # 스캔 범위: 가장 가까운 슬라이스에서 한 칸 안
+        col, row, _d = geom.patient_to_pixel(index, point)
+        arr = self._series.get_pixel_array(index)
+        h, w = np.shape(arr)[:2]
+        inside = -0.5 <= col <= w - 0.5 and -0.5 <= row <= h - 0.5
+        if abs(distance) > limit or not inside:
+            self.clear_cursor3d()
+            return False
         self._go_to_slice(index)
         self._cursor3d = {"type": "cursor3d", "key": None, "pts": [],
                           "patient": np.asarray(point, dtype=float), "value": ""}
         self.update()
+        return True
 
     def clear_cursor3d(self):
         if self._cursor3d is not None:
@@ -1249,9 +1264,12 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         tolerance = (spacing / 2 if spacing else 1.0) + 0.5
         img_pos = (col + 0.5, row + 0.5)
         # 이 시리즈의 해당 위치 픽셀 값 (다른 시리즈면 값이 다름)
+        mine = c.get("key") == self._image_key()
         return {"type": "cursor3d", "pts": [img_pos], "patient": c["patient"],
                 "value": self.format_value(self.pixel_info(img_pos)),
-                "delta": None if abs(dist) <= tolerance else dist}
+                # 찍은 영상은 빨강 · 다른 시리즈로 옮겨온 커서는 초록 + 슬라이스까지 거리(Δ)
+                "mine": mine, "delta": None if mine else dist,
+                "off_plane": abs(dist) > tolerance}
 
     # ─── 측정 완료 처리 ───
 
@@ -1563,7 +1581,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             self._draw_analysis(painter)
             for fn in self._overlay_painters:
                 fn(self, painter)
-        self._draw_reference_cursor(painter)
+        if self._current_tool == self.TOOL_CURSOR3D:   # 3D Cursor 모드일 때만 십자선·좌표
+            self._draw_reference_cursor(painter)
         self._draw_wl_roi(painter)
 
         if self._show_overlay:
@@ -1684,7 +1703,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     def _draw_annotations(self, painter):
         occupied = []
         items = list(self.annotations_here())
-        cursor3d = self._cursor3d_for_drawing()
+        cursor3d = self._cursor3d_for_drawing() if self._current_tool == self.TOOL_CURSOR3D else None
         if cursor3d is not None:
             items.append(cursor3d)
         for ann in items:
@@ -1782,15 +1801,15 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 painter.drawText(p, ann["text"])
             elif kind == "cursor3d":
                 p = pts[0]
-                off_plane = ann.get("delta") is not None
-                painter.setPen(QPen(COLOR_CURSOR3D, 2, Qt.DashLine if off_plane
-                                    else Qt.SolidLine))
+                off_plane = bool(ann.get("off_plane"))
+                color = COLOR_CURSOR3D if ann.get("mine", True) else COLOR_CURSOR3D_LINKED
+                painter.setPen(QPen(color, 2, Qt.DashLine if off_plane else Qt.SolidLine))
                 painter.drawLine(QPointF(p.x() - 10, p.y()), QPointF(p.x() - 3, p.y()))
                 painter.drawLine(QPointF(p.x() + 3, p.y()), QPointF(p.x() + 10, p.y()))
                 painter.drawLine(QPointF(p.x(), p.y() - 10), QPointF(p.x(), p.y() - 3))
                 painter.drawLine(QPointF(p.x(), p.y() + 3), QPointF(p.x(), p.y() + 10))
                 self._draw_label(painter, QPoint(int(p.x()) + 12, int(p.y()) + 6),
-                                 lines, COLOR_CURSOR3D, occupied)
+                                 lines, color, occupied)
             if kind != "cursor3d":
                 self.draw_selection(painter, ann, custom or QColor(roi_tools.color_of(ann)))
 
@@ -1854,12 +1873,13 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         for source in self._reference_sources():
             source_geom, index, label = source[:3]
             color = QColor(source[3]) if len(source) > 3 else QColor(200, 200, 200)
-            # 전체 커버리지: 모든 슬라이스 (가는 점선)
+            coverage = source[4] if len(source) > 4 else True
+            # Crosslink: 그 시리즈 전체 슬라이스를 가는 점선으로 (Ref Lines만 켜면 현재 슬라이스 한 줄)
             dash = QPen(color, 1, Qt.CustomDashLine)
             dash.setDashPattern([3, 4])
             dash.setCosmetic(True)
             painter.setPen(dash)
-            show_coverage = self._show_overlay and self._overlay_items.get("coverage", True)
+            show_coverage = coverage and self._show_overlay and self._overlay_items.get("coverage", True)
             for seg in (self._coverage_segments(source_geom, geom) if show_coverage else []):
                 if seg[0] == index:
                     continue

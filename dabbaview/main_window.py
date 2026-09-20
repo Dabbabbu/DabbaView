@@ -756,10 +756,12 @@ class MainWindow(QMainWindow):
         self._sync_action.setCheckable(True)
         self._sync_action.setShortcut(QKeySequence("C"))
         self._sync_action.setToolTip(
-            "크로스 레퍼런스 (C)\n"
-            "Select/W/L 도구에서 좌클릭/드래그 위치가 같은 좌표계(Frame of Reference)의\n"
-            "다른 뷰포트·MPR에 십자선으로 표시되고 가장 가까운 슬라이스로 이동합니다.")
+            "Crosslink (C) — 스캔 범위 보기\n"
+            "Multi View의 다른 칸 시리즈가 덮는 전체 슬라이스 위치를 이 영상 위에 점선으로,\n"
+            "그 칸이 지금 보고 있는 슬라이스는 노란 실선으로 표시합니다 (스크롤하면 실선이 따라 움직임).\n"
+            "3D Cursor·클릭 위치도 같은 좌표계의 다른 칸에 전파됩니다.")
         self._sync_action.toggled.connect(self._cursor_sync.set_enabled)
+        self._sync_action.toggled.connect(self._multi_viewport.set_crosslink)
         view_bar.addAction(self._sync_action)
         for action in (self._act_ref_lines, self._act_sync_scroll,
                        self._act_sync_window, self._act_value_lens):
@@ -863,7 +865,10 @@ class MainWindow(QMainWindow):
         self._act_capture = make("📷 Capture", "Ctrl+Shift+S",
                                  "현재 화면을 오버레이·측정선 포함해 이미지로 저장",
                                  self._capture_image)
-        self._act_ref_lines = make("Ref Lines", "", "Reference Line: Multi View 다른 칸의 슬라이스 위치 표시",
+        self._act_ref_lines = make("Ref Lines", "",
+                                   "Reference Line — 현재 슬라이스 한 줄\n"
+                                   "다른 칸이 보고 있는 슬라이스가 이 영상의 어디인지 한 줄(노란 실선)로만 표시합니다.\n"
+                                   "전체 스캔 범위를 보려면 Crosslink(C)를 켜세요.",
                                    self._multi_viewport.set_reference_lines, checkable=True)
         self._act_sync_scroll = make("Sync Scroll", "", "Multi View 동기화 스크롤 (보이는 모든 칸)\n"
                                      "같은 좌표계·평행한 시리즈는 위치 기준, 다른 시리즈는 장수 비율로, "
@@ -950,6 +955,7 @@ class MainWindow(QMainWindow):
             self._cursor_sync.add_view(vp)
         self._cursor_sync.add_view(self._mpr_widget)
         self._cursor_sync.synced.connect(self._on_cursor_synced)
+        self._cursor_sync.cursor3d_result.connect(self._on_cursor3d_result)
 
         # Multi View 드래그 앤 드롭
         self._multi_viewport.series_dropped.connect(self._on_series_dropped)
@@ -2832,6 +2838,14 @@ class MainWindow(QMainWindow):
                 "(빈 곳을 그냥 클릭하면 해제)", 8000)
         else:
             self._statusbar.showMessage("칸 선택 해제 — 활성 칸만 움직입니다", 4000)
+
+    def _on_cursor3d_result(self, linked, out_of_range):
+        """3D Cursor 전파 결과: 대응된 칸 수 · 스캔 범위 밖이라 표시 못 한 칸 수"""
+        if out_of_range and not linked:
+            self._statusbar.showMessage("⚠ 대응되는 좌표가 없습니다 (스캔 범위 밖)", 6000)
+        elif out_of_range:
+            self._statusbar.showMessage(
+                f"3D Cursor: {linked}개 칸에 표시 · {out_of_range}개 칸은 스캔 범위 밖", 6000)
 
     def _toggle_overlay(self):
         """환자 정보 오버레이 + 측정/주석 표시 토글 (T / O)"""

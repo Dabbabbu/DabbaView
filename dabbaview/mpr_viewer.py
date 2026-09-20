@@ -606,8 +606,9 @@ class MPRWidget(QWidget):
         pass
 
     def show_cursor3d(self, point):
-        """다른 뷰의 3D Cursor 위치로 세 평면 이동"""
+        """다른 뷰의 3D Cursor 위치로 세 평면 이동 (항상 표시 가능)"""
         self.set_reference_point(point)
+        return True
 
     def clear_cursor3d(self):
         pass

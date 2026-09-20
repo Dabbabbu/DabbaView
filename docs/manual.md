@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 2.7.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 2.8.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -162,7 +162,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 2. 왼쪽 시리즈 카드를 원하는 칸으로 끌어다 놓습니다 (예: SAX cine · 4CH · 2CH · LGE를 한 화면에 두고 판독).
 3. 칸을 클릭하면 그 칸이 활성(노란 테두리)이 되고, 도구와 W/L은 활성 칸에 적용됩니다.
 4. **Space**를 누르면 활성 칸만 크게 보고, 다시 누르면 돌아옵니다.
-5. 같은 좌표계의 시리즈끼리는 **Sync Scroll / Sync W/L / Crosslink(C) / Ref Lines**로 함께 움직일 수 있습니다.
+5. 같은 좌표계의 시리즈끼리는 **Sync Scroll / Sync W/L / Crosslink(C) / Ref Lines**로 연동됩니다 (아래 표 참고).
 
 ### 여러 칸 함께 움직이기
 
@@ -180,17 +180,30 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 - 칸을 고르면 Sync Scroll 버튼보다 **선택이 우선**입니다 (고른 칸끼리만 움직임).
 6. 레이아웃 `Default`는 Hanging Protocol로 자동 배치하고, `ALL`은 검사의 모든 시리즈를 띄웁니다.
 
-### Ref Lines — 스캔 커버리지
+### 세 가지 연동 기능 구분
 
-![Ref Lines — 4CH · SAX · 2CH · LGE](images/m08b_reflines.jpg)
+| 기능 | 하는 일 |
+|---|---|
+| **Crosslink (C)** | 다른 칸 시리즈가 덮는 **전체 스캔 범위**를 이 영상 위에 점선으로, 그 칸이 보고 있는 슬라이스는 **노란 실선**으로 |
+| **Ref Lines** | 다른 칸이 보고 있는 **현재 슬라이스 한 줄만** (1:1 대응, 가벼움) |
+| **Sync Scroll** | 여러 칸을 **함께 스크롤** (같은 좌표계는 위치 기준, 다른 시리즈는 비례) |
 
-1. 도구 막대 **Ref Lines**를 켭니다 (Multi View).
-2. 다른 칸 시리즈의 **전체 슬라이스 위치**가 가는 점선으로, **지금 보고 있는 슬라이스**는 노란 실선(2 px)으로 그려집니다.
-   - 예: 4CH · 2CH 칸에 SAX cine의 슬라이스 10개가 점선으로 나와, 단축 스택이 심장을 어디부터 어디까지 덮는지 한눈에 보입니다.
-   - SAX 칸을 휠로 넘기면 노란 선이 따라 움직입니다.
+#### Crosslink — 스캔 범위 보기
+
+![Crosslink — 4CH · SAX · 2CH · LGE](images/m08b_reflines.jpg)
+
+1. 도구 막대 **Crosslink** (또는 **C**)를 켭니다 (Multi View).
+2. 다른 칸 시리즈의 **전체 슬라이스 위치**가 가는 점선으로, **그 칸이 지금 보고 있는 슬라이스**는 노란 실선(2 px)으로 그려집니다.
+   - 예: 4CH · 2CH 칸에 SAX cine 슬라이스 10개가 점선으로 나와, 단축 스택이 심장을 어디부터 어디까지 덮는지 한눈에 보입니다.
+   - SAX 칸을 휠로 넘기면 노란 실선이 따라 움직입니다.
 3. 점선 색은 칸마다 다릅니다: 1번 칸 파랑, 2번 초록, 3번 주황, 4번 보라 …. 선 끝의 `S6:136`은 시리즈 번호 : 슬라이스입니다.
 4. cine처럼 한 위치에 위상이 여러 장이면 위치마다 한 번만 그립니다.
-5. 점선만 끄려면 **View ▸ 오버레이 항목 ▸ 스캔 커버리지 선** (T 키로 오버레이를 끄면 점선도 숨김, 노란 선은 남음).
+5. 점선만 끄려면 **View ▸ 오버레이 항목 ▸ 스캔 커버리지 선** (T 키로 오버레이를 끄면 점선도 숨김, 노란 실선은 남음).
+6. Crosslink를 켜면 3D Cursor와 클릭 위치도 같은 좌표계의 다른 칸으로 전파됩니다.
+
+#### Reference Line — 현재 슬라이스 한 줄
+
+**Ref Lines**만 켜면 전체 범위 없이, 다른 칸이 보고 있는 슬라이스가 이 영상의 어디인지 **한 줄**로만 표시합니다. 예: 왼쪽 SA CINE의 5번 슬라이스가 오른쪽 2CH 영상에서 어느 높이인지 한 줄로 확인.
 
 ## 7. MPR
 
@@ -209,6 +222,19 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 2. **Preset**에서 CT Bone / Skin / Soft Tissue / Lung / Angiography 중 하나를 고릅니다.
 3. 마우스를 끌어 돌리고, 휠로 확대하고, 가운데 버튼으로 이동합니다. **Reset Camera**를 누르면 처음 보기로 돌아갑니다.
 4. **Quality** 슬라이더로 속도와 화질을 조절합니다.
+
+### 3D Cursor
+
+**6** 키(또는 도구 막대 3D Cursor)로 고른 뒤 영상을 클릭하면 그 지점의 환자 좌표(L/P/S mm)와 신호값(SI)이 표시됩니다.
+
+| 보이는 곳 | 색 | 표시 |
+|---|---|---|
+| 직접 찍은 영상 | **빨강** 십자선 | 좌표 + SI |
+| 같은 좌표계의 다른 시리즈 | **초록** 십자선 | 좌표 + SI + `Δ ○○ mm` (그 슬라이스와 좌표 사이 거리, 0에 가까울수록 정확히 대응) |
+| 좌표가 스캔 범위 밖 | 표시 없음 | 상태 막대에 "⚠ 대응되는 좌표가 없습니다 (스캔 범위 밖)" |
+
+- 대응되는 칸은 좌표에 가장 가까운 슬라이스로 자동으로 이동합니다.
+- 커서와 좌표는 **3D Cursor 도구일 때만** 영상에 그려집니다. 다른 도구로 바꾸면 화면이 깨끗해집니다 (상태 막대의 좌표·HU 표시는 그대로).
 
 ## 9. 측정 도구
 
@@ -367,7 +393,7 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | 0 | 화살표 | A | 텍스트 메모 |
 | V / H | 상하 / 좌우 반전 | [ / ] | 왼쪽 / 오른쪽 90° 회전 |
 | I | 흑백 반전 | Shift+R | 회전·반전 초기화 |
-| C | Crosslink | L | HU Lens |
+| C | Crosslink (스캔 범위) | L | HU Lens |
 | K | Key Image 표시/해제 | Shift+K | Key Image 모아보기 |
 | Shift+T | Stack ↔ Tile | T / O | 오버레이 표시/숨김 |
 | Space | Multi View 칸 최대화 | P | 시네 재생/정지 (▶ Play ↔ ■ Stop) |
