@@ -1,0 +1,149 @@
+# Copyright (c) 2026 Park Seongho (Dabbabbu)
+# This file is part of DabbaView, licensed under GPL-3.0.
+# See LICENSE for details.
+"""
+불러오기 진행 창 - 얼마나 남았는지 보이고, 기다리다 그만둘 수 있게
+
+- 단계 이름 · 파일 수 · 퍼센트 · 경과 시간 · 속도 · 남은 시간 예상
+- 응답이 없는 파일이 있으면 파일 이름과 몇 초째인지 표시
+- [취소] 지금까지 읽은 영상만 열기   [강제 중단] 기다리지 않고 바로 닫기
+"""
+import time
+
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import (QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+                             QVBoxLayout)
+
+
+def human_time(seconds):
+    """12 → '12초', 90 → '1분 30초', 3700 → '1시간 1분'"""
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{seconds}초"
+    if seconds < 3600:
+        return f"{seconds // 60}분 {seconds % 60}초"
+    return f"{seconds // 3600}시간 {(seconds % 3600) // 60}분"
+
+
+class LoadProgressDialog(QDialog):
+    """QProgressDialog 대신 쓰는 진행 창 (같은 이름의 메서드를 제공해 그대로 바꿔 낄 수 있음)"""
+
+    canceled = pyqtSignal()        # 취소: 지금까지 읽은 것으로 진행
+    force_stopped = pyqtSignal()   # 강제 중단: 기다리지 않고 바로 끝냄
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("불러오는 중")
+        self.setMinimumWidth(520)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowCloseButtonHint)
+        self._start = time.monotonic()
+        self._maximum = 100
+        self._force_shown = False
+
+        layout = QVBoxLayout(self)
+        self.label = QLabel("Loading DICOM files...")
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        layout.addWidget(self.bar)
+
+        self.stats = QLabel("")
+        self.stats.setStyleSheet("color:#9ab;font-size:12px")
+        layout.addWidget(self.stats)
+
+        self.detail = QLabel("")
+        self.detail.setWordWrap(True)
+        self.detail.setStyleSheet("color:#ffb84d;font-size:12px")
+        self.detail.setVisible(False)
+        layout.addWidget(self.detail)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.force_button = QPushButton("강제 중단")
+        self.force_button.setToolTip("기다리지 않고 바로 닫습니다 (읽던 파일은 버립니다)")
+        self.force_button.clicked.connect(self._on_force)
+        self.force_button.setVisible(False)
+        self.cancel_button = QPushButton("취소")
+        self.cancel_button.setToolTip("여기까지 읽은 영상만 열립니다")
+        self.cancel_button.clicked.connect(self._on_cancel)
+        row.addWidget(self.force_button)
+        row.addWidget(self.cancel_button)
+        layout.addLayout(row)
+
+    # ─── QProgressDialog와 같은 이름의 메서드들 ───
+    def setLabelText(self, text):                      # noqa: N802 - Qt 이름 그대로
+        first, _, rest = str(text).partition("\n")
+        self.label.setText(first)
+        self.detail.setText(rest.strip())
+        self.detail.setVisible(bool(rest.strip()))
+
+    def setValue(self, value):                         # noqa: N802
+        self.bar.setValue(int(value))
+
+    def setRange(self, low, high):                     # noqa: N802
+        self._maximum = high
+        self.bar.setRange(low, high)
+
+    def maximum(self):
+        return self._maximum
+
+    def setMinimumDuration(self, _ms):                 # noqa: N802 - 호환용(바로 띄움)
+        pass
+
+    def setAutoClose(self, _on):                       # noqa: N802 - 호환용
+        pass
+
+    # ─── 진행 상황 ───
+    def update_load(self, phase, current, total):
+        """단계 이름 · 개수 · 퍼센트 · 속도 · 남은 시간"""
+        self.label.setText(f"{phase or '불러오는 중'}…")
+        if total <= 0:
+            self.bar.setRange(0, 0)
+            self.stats.setText("파일을 찾는 중입니다…")
+            return
+        if self.bar.maximum() == 0:
+            self.bar.setRange(0, 100)
+            self._maximum = 100
+        percent = current * 100 // total
+        self.bar.setValue(percent)
+        elapsed = time.monotonic() - self._start
+        parts = [f"{current:,} / {total:,} 파일 ({percent}%)", f"경과 {human_time(elapsed)}"]
+        if current >= 5 and elapsed > 1:
+            speed = current / elapsed
+            parts.append(f"{speed:.1f}개/초")
+            if speed > 0 and current < total:
+                parts.append(f"남은 시간 약 {human_time((total - current) / speed)}")
+        self.stats.setText("  ·  ".join(parts))
+        # 5초 넘게 걸리는 작업이면 강제 중단 버튼을 보여 줌
+        if not self._force_shown and elapsed > 5:
+            self._force_shown = True
+            self.force_button.setVisible(True)
+
+    def show_force_button(self):
+        """멈춤이 감지되면 바로 보여 줌"""
+        self._force_shown = True
+        self.force_button.setVisible(True)
+
+    def set_warning(self, text):
+        self.detail.setText(text or "")
+        self.detail.setVisible(bool(text))
+
+    # ─── 버튼 ───
+    def _on_cancel(self):
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setText("정리하는 중…")
+        self.show_force_button()
+        self.canceled.emit()
+
+    def _on_force(self):
+        self.force_stopped.emit()
+
+    def reject(self):
+        """ESC = 취소 (창은 닫지 않음 — 정리 후 닫힘)"""
+        self._on_cancel()
+
+    def wasCanceled(self):                             # noqa: N802 - 호환용
+        return not self.cancel_button.isEnabled()

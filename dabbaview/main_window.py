@@ -1102,12 +1102,10 @@ class MainWindow(QMainWindow):
         if isinstance(paths, str):
             paths = [paths]
 
-        progress = QProgressDialog("Loading DICOM files...",
-                                   "Cancel", 0, 100, self)
+        from .load_progress import LoadProgressDialog
+        progress = LoadProgressDialog(self)
         progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(500)
         progress.setValue(0)
-        progress.setMinimumWidth(460)
 
         worker = DirectoryLoadWorker(paths, target_viewport, remember, self)
         worker.progress.connect(self._on_load_progress)
@@ -1115,6 +1113,8 @@ class MainWindow(QMainWindow):
         worker.placeholders_found.connect(self._on_placeholders_found)
         worker.finished.connect(worker.deleteLater)
         progress.canceled.connect(worker.cancel)
+        progress.force_stopped.connect(self._force_stop_load)
+        progress.show()
 
         self._load_worker = worker
         self._load_progress = progress
@@ -1256,21 +1256,21 @@ class MainWindow(QMainWindow):
         memory_warning = self._update_ram()
         idle = time.monotonic() - worker.last_progress
         if idle < self.LOAD_STALL_S or not worker.loader.slow_files(1):
-            progress.setLabelText(self._load_label + (f"\n\n{memory_warning}" if memory_warning else ""))
+            progress.set_warning(memory_warning)
             return
         if not progress.isVisible():
             progress.show()
+        progress.show_force_button()      # 멈췄을 때는 바로 그만둘 수 있게
         slow = worker.loader.slow_files(self.LOAD_STALL_S)
-        lines = [self._load_label, "",
-                 f"⚠ {idle:.0f}초째 진행이 없습니다."]
+        lines = [f"⚠ {idle:.0f}초째 진행이 없습니다."]
         for path, seconds in slow[:3]:
             lines.append(f"   {os.path.basename(path)} — {seconds:.0f}초째 응답 없음")
         from .dicom_loader import FILE_TIMEOUT_S
         lines.append(f"{FILE_TIMEOUT_S:.0f}초가 지난 파일은 자동으로 건너뜁니다. "
-                     "기다리기 싫으면 '취소'를 누르세요 — 지금까지 읽은 영상은 열립니다.")
+                     "'취소'는 지금까지 읽은 영상을 열고, '강제 중단'은 기다리지 않고 바로 닫습니다.")
         if memory_warning:
-            lines += ["", memory_warning]
-        progress.setLabelText("\n".join(lines))
+            lines.append(memory_warning)
+        progress.set_warning("\n".join(lines))
 
     def _on_load_progress(self, current, total):
         # 모달 진행창의 setValue가 이벤트를 처리하는 동안 완료 처리로 _load_progress가 None이 될 수 있음
@@ -1278,16 +1278,45 @@ class MainWindow(QMainWindow):
         if progress is None:
             return
         if total <= 0:
-            self._load_label = "파일 목록 확인 중..."
-            progress.setLabelText(self._load_label)
-            progress.setRange(0, 0)   # 개수를 모르는 단계: 움직이는 막대
+            self._load_label = "파일 목록 확인 중"
+            progress.update_load(self._load_label, 0, 0)
             return
-        if progress.maximum() == 0:
-            progress.setRange(0, 100)
         phase = self._load_worker.loader.phase if self._load_worker is not None else ""
-        self._load_label = f"{phase or 'Loading DICOM files'}... ({current}/{total})"
-        progress.setLabelText(self._load_label)
-        progress.setValue(current * 100 // total)
+        self._load_label = phase or "DICOM 파일 읽는 중"
+        progress.update_load(self._load_label, current, total)
+
+    def _force_stop_load(self):
+        """강제 중단: 읽던 파일을 기다리지 않고 바로 끝냄
+
+        클라우드 파일 하나가 응답하지 않으면 '취소'도 최대 40초 걸리므로,
+        스레드는 뒤에서 스스로 끝나게 두고(참조만 남겨 둠) 화면은 즉시 정리한다.
+        """
+        worker = self._load_worker
+        if worker is None:
+            return
+        worker.cancel()
+        worker.answer_placeholders("cancel")   # 클라우드 질문을 기다리는 중이면 풀어 줌
+        watchdog = getattr(self, "_load_watchdog", None)
+        if watchdog is not None:
+            watchdog.stop()
+        for signal in (worker.progress, worker.finished_loading, worker.placeholders_found):
+            try:
+                signal.disconnect()
+            except TypeError:
+                pass
+        if not worker.isFinished():
+            # 아직 도는 스레드는 끝날 때까지 참조 유지 (지우면 Qt가 비정상 종료)
+            _ORPHAN_THREADS.append(worker)
+            worker.finished.connect(
+                lambda w=worker: w in _ORPHAN_THREADS and _ORPHAN_THREADS.remove(w))
+        self._load_worker = None
+        if self._load_progress is not None:
+            self._load_progress.close()
+            self._load_progress = None
+        self._status_ram.setVisible(False)
+        self._statusbar.showMessage(
+            "불러오기를 강제로 중단했습니다. (이미 시작된 클라우드 다운로드는 "
+            "운영체제가 뒤에서 마저 받을 수 있습니다)", 15000)
 
     def _on_load_finished(self, loader, loaded):
         cancelled = self._load_worker.was_cancelled()
@@ -3189,9 +3218,19 @@ class MainWindow(QMainWindow):
                 border: 1px solid #555;
                 padding: 2px;
             }
-            QProgressDialog {
+            QProgressDialog, QDialog {
                 background-color: #2d2d2d;
                 color: #d4d4d4;
+            }
+            QProgressBar {
+                background-color: #3d3d3d;
+                border: 1px solid #4d4d4d;
+                border-radius: 3px;
+                height: 16px;
+            }
+            QProgressBar::chunk {
+                background-color: #3d8bfd;
+                border-radius: 2px;
             }
             QSplitter::handle {
                 background-color: #3d3d3d;
