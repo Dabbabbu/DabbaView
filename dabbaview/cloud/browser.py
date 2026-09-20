@@ -88,11 +88,20 @@ class CloudBrowserDialog(QDialog):
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("이름 필터")
         self._filter.setClearButtonEnabled(True)
-        self._filter.setMaximumWidth(180)
+        self._filter.setMaximumWidth(150)
         self._filter.textChanged.connect(self._apply_filter)
+        # 전체 검색: '다른 컴퓨터(백업된 PC)' 폴더처럼 목록에 안 나오는 곳도 이름으로 찾음
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("🔍 폴더 이름으로 전체 검색 (Enter)")
+        self._search.setToolTip("드라이브 전체에서 폴더 이름을 찾습니다.\n"
+                                "'다른 컴퓨터'(백업된 PC)에 있는 폴더도 이렇게 찾을 수 있습니다.")
+        self._search.setClearButtonEnabled(True)
+        self._search.setMaximumWidth(260)
+        self._search.returnPressed.connect(self._do_search)
         for w in (self._up, self._home, self._refresh):
             nav.addWidget(w)
         nav.addWidget(self._path, 1)
+        nav.addWidget(self._search)
         nav.addWidget(self._filter)
         layout.addLayout(nav)
 
@@ -111,6 +120,8 @@ class CloudBrowserDialog(QDialog):
         hint = QLabel("폴더는 더블클릭으로 들어갑니다. 파일·폴더를 골라(여러 개 가능) '열기'를 누르면 "
                       "내려받아 불러옵니다. 폴더를 고르면 하위 폴더까지 DICOM 파일을 모두 받습니다 "
                       "(로컬 Open Folder와 같은 기준).\n"
+                      "목록에 없는 폴더(구글 드라이브 '다른 컴퓨터'에 백업된 PC 폴더 등)는 "
+                      "위쪽 🔍 칸에 이름을 넣고 Enter로 찾으세요.\n"
                       f"한 번 받은 파일은 캐시에 보관되어 다시 열 때 내려받지 않습니다: {cache.cache_root()}")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #999;")
@@ -230,6 +241,28 @@ class CloudBrowserDialog(QDialog):
         for i in range(self._tree.topLevelItemCount()):
             row = self._tree.topLevelItem(i)
             row.setHidden(bool(text) and text not in row.text(0).lower())
+
+    def _do_search(self):
+        """폴더 이름으로 드라이브 전체 검색 (목록에 안 나오는 '다른 컴퓨터' 폴더도 찾음)"""
+        text = self._search.text().strip()
+        if len(text) < 2:
+            self._status.setText("두 글자 이상 입력하세요.")
+            return
+        provider = self.provider
+        if not hasattr(provider, "search"):
+            self._status.setText("이 서비스는 검색을 지원하지 않습니다.")
+            return
+
+        def task(progress, cancelled):
+            progress(f"'{text}' 검색 중...")
+            return provider.search(text)
+
+        def done(items):
+            self._stack.clear()          # 검색 결과는 경로가 없으므로 처음으로 되돌림
+            self._show(items, f"검색 결과: '{text}' — 폴더 {len(items)}개 (더블클릭해서 열기)")
+            if not items:
+                self._status.setText(f"'{text}' 이름의 폴더를 찾지 못했습니다.")
+        self._run(f"'{text}' 검색 중...", task, done)
 
     def _open_folder(self, folder, push=True):
         provider = self.provider

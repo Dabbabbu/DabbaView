@@ -159,6 +159,31 @@ class DirectoryLoadWorker(QThread):
 _ORPHAN_THREADS = []   # 종료할 때 끝나지 않은 로더 (지우면 Qt가 비정상 종료)
 
 
+class _ModalRaiser(QObject):
+    """다른 앱에 갔다 돌아왔을 때 떠 있는 팝업(모달 창)을 다시 앞으로 올림
+
+    macOS에서는 앱을 다시 활성화하면 메인 창이 앞으로 오는데,
+    모달 팝업이 떠 있으면 메인 창은 입력을 받지 못해 앱 전체가 먹통처럼 보인다.
+    (설정 창·경고창을 열어 둔 채 다른 앱을 쓰다 돌아오면 아무것도 눌리지 않던 문제)
+    """
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.ApplicationActivate, QEvent.ApplicationStateChange,
+                            QEvent.WindowActivate):
+            QTimer.singleShot(0, self.raise_modal)
+        return False
+
+    @staticmethod
+    def raise_modal():
+        app = QApplication.instance()
+        if app is None:
+            return
+        window = app.activeModalWidget()
+        if window is not None and window.isVisible():
+            window.raise_()
+            window.activateWindow()
+
+
 class _QuitWatcher(QObject):
     """경고창이 떠 있는 동안 앱 종료(macOS ⌘Q · Dock 종료 = 앱에 Close 이벤트)를 가로채
     경고창을 먼저 닫음 - 모달 창이 떠 있으면 Qt가 창을 닫지 못해 종료가 막힘"""
@@ -240,6 +265,9 @@ class MainWindow(QMainWindow):
         self._restored_studies = set()
         self._setup_worksave()
         self._setup_update_check()
+        # 다른 앱에 갔다 돌아왔을 때 팝업이 뒤로 숨어 먹통이 되지 않게
+        self._modal_raiser = _ModalRaiser()
+        QApplication.instance().installEventFilter(self._modal_raiser)
         self._report_library.set_folder(self._app_settings.report_folder())
 
         # 다크 테마

@@ -145,6 +145,21 @@ class GoogleDriveProvider:
             pass
         return items
 
+    def search(self, text, folders_only=True, limit=200):
+        """이름으로 드라이브 전체 검색 — '다른 컴퓨터(백업된 PC)' 안의 폴더도 찾는다
+
+        내 드라이브 목록에는 컴퓨터 백업 폴더가 나오지 않아서, 이름으로 직접 찾는다.
+        """
+        safe = str(text or "").replace("\\", "\\\\").replace("'", "\\'")
+        query = f"name contains '{safe}' and trashed = false"
+        if folders_only:
+            query += f" and mimeType = '{FOLDER}'"
+        result = self._service().files().list(
+            q=query, fields=FIELDS, pageSize=min(1000, limit),
+            orderBy="folder,name_natural", supportsAllDrives=True,
+            includeItemsFromAllDrives=True).execute()
+        return [self._item(f) for f in result.get("files", [])]
+
     def list_children(self, folder):
         if folder.extra.get("root") == "shared":
             query = "sharedWithMe and trashed = false"

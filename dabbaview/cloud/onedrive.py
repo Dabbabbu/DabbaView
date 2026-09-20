@@ -143,6 +143,21 @@ class OneDriveProvider:
         base = f"/drives/{drive}/items/{folder.id}" if drive else f"/me/drive/items/{folder.id}"
         return f"{base}/children?$top=999&$select={SELECT}"
 
+    def search(self, text, folders_only=True, limit=200):
+        """이름으로 OneDrive 전체 검색"""
+        from urllib.parse import quote
+        url = f"{GRAPH}/me/drive/root/search(q='{quote(str(text or ''))}')?$top={min(200, limit)}"
+        items = []
+        while url and len(items) < limit:
+            data = self._get(url).json()
+            for entry in data.get("value", []):
+                item = self._item(entry)
+                if not folders_only or item.is_folder:
+                    items.append(item)
+            url = data.get("@odata.nextLink")
+        items.sort(key=lambda i: (not i.is_folder, i.name.lower()))
+        return items
+
     def list_children(self, folder):
         url = self._children_url(folder)
         items = []
