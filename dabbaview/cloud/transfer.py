@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import threading
+import time
 
 from .. import cache
 from . import CloudError, safe_name
@@ -27,6 +28,15 @@ def wanted(name):
     from ..dicom_loader import is_candidate_file
     from ..formats.readers import file_kind
     return is_candidate_file(name) or (not name.startswith(".") and file_kind(name) != "dicom")
+
+
+def _human_time(seconds):
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{seconds}초"
+    if seconds < 3600:
+        return f"{seconds // 60}분 {seconds % 60}초"
+    return f"{seconds // 3600}시간 {(seconds % 3600) // 60}분"
 
 
 def _drop_mixed_images(files):
@@ -46,31 +56,43 @@ def _drop_mixed_images(files):
 
 
 def plan(provider, items, progress=None, cancelled=None):
-    """→ (files [(상대 경로, CloudItem)], 건너뛴 파일 수, 최상위 경로 목록)"""
-    files, skipped, tops = [], 0, []
+    """→ (files [(상대 경로, CloudItem)], 건너뛴 파일 수, 최상위 경로 목록)
 
-    def walk(folder, rel):
-        nonlocal skipped
-        for child in provider.list_children(folder):
-            if cancelled and cancelled():
-                raise CloudError("취소했습니다.")
-            child_rel = os.path.join(rel, safe_name(child.name))
-            if child.is_folder:
-                walk(child, child_rel)
-            elif child.downloadable and wanted(child.name):
-                files.append((child_rel, child))
-            else:
-                skipped += 1
+    폴더를 너비 우선으로 훑으며 '확인한 폴더 / 찾은 폴더'와 파일 수를 알린다.
+    (하위 폴더는 들어가 봐야 알 수 있어서 전체 수가 점점 늘어난다 — 그대로 보여 준다)
+    """
+    files, skipped, tops = [], 0, []
+    queue = []          # [(folder, rel)]
+    listed = 0
+    start = time.monotonic()
+
+    def report(where=""):
         if progress:
-            progress(f"폴더 확인 중... 파일 {len(files)}개 찾음 ({rel})")
+            progress(("scan", listed, listed + len(queue), len(files),
+                      time.monotonic() - start, where))
 
     for item in items:
         rel = safe_name(item.name)
         tops.append(rel)
         if item.is_folder:
-            walk(item, rel)
+            queue.append((item, rel))
         elif item.downloadable:
             files.append((rel, item))
+    report()
+    while queue:
+        if cancelled and cancelled():
+            raise CloudError("취소했습니다.")
+        folder, rel = queue.pop(0)
+        for child in provider.list_children(folder):
+            child_rel = os.path.join(rel, safe_name(child.name))
+            if child.is_folder:
+                queue.append((child, child_rel))
+            elif child.downloadable and wanted(child.name):
+                files.append((child_rel, child))
+            else:
+                skipped += 1
+        listed += 1
+        report(rel)
     files, mixed = _drop_mixed_images(files)
     skipped += mixed
     return files, skipped, tops
@@ -122,19 +144,43 @@ def _link(src, dst):
         shutil.copy2(src, dst)
 
 
-def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS):
-    """계획한 파일들을 캐시를 거쳐 세션 폴더로 → (불러올 경로 목록, 통계 dict)"""
-    session = cache.new_session_dir(provider.key)
+def session_dir(provider_key, dest_root=None):
+    """이번에 받을 파일을 둘 폴더. dest_root를 주면 그 아래에 날짜 폴더로 만든다"""
+    if not dest_root:
+        return cache.new_session_dir(provider_key)
+    name = time.strftime(f"{provider_key}_%Y%m%d_%H%M%S")
+    path = os.path.join(os.path.expanduser(dest_root), name)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
+          dest_root=None):
+    """계획한 파일들을 캐시를 거쳐 저장 폴더로 → (불러올 경로 목록, 통계 dict)"""
+    session = session_dir(provider.key, dest_root)
     total = len(files)
     lock = threading.Lock()
-    stats = {"done": 0, "hits": 0, "bytes": 0, "total": total}
+    stats = {"done": 0, "hits": 0, "bytes": 0, "total": total, "folder": session}
     in_flight = {}
 
+    total_bytes = sum(getattr(i, "size", 0) or 0 for _rel, i in files)
+    start = time.monotonic()
+
     def report():
-        text = (f"다운로드 중... {stats['done']}/{total} files · "
-                f"{cache.human_size(stats['bytes'])} 받음 · 캐시 {stats['hits']}개")
+        elapsed = max(0.001, time.monotonic() - start)
+        got = stats["bytes"]
+        speed = got / elapsed
+        parts = [f"{stats['done']:,}/{total:,} 파일 ({stats['done'] * 100 // max(1, total)}%)",
+                 f"{cache.human_size(got)} / {cache.human_size(total_bytes)}"]
+        if speed > 0:
+            parts.append(f"{cache.human_size(speed)}/s")
+            left = total_bytes - got
+            if left > 0 and stats["done"] < total:
+                parts.append(f"남은 시간 약 {_human_time(left / speed)}")
+        if stats["hits"]:
+            parts.append(f"캐시 {stats['hits']}개")
         if progress:
-            progress(("count", stats["done"], total, text))
+            progress(("count", stats["done"], total, "내려받는 중  ·  " + "  ·  ".join(parts)))
 
     def task(rel, item):
         def on_bytes(_name, done_bytes):

@@ -11,6 +11,7 @@
 """
 import copy
 import json
+import os
 
 
 # ─── 마우스 매핑 ───
@@ -143,6 +144,17 @@ DEFAULT_HANGING_PROTOCOLS = [
 DEFAULT_LOCAL_AE = "DABBAVIEW"
 
 
+def default_download_dir():
+    """운영체제 기본 다운로드 폴더 아래 DabbaView 폴더
+
+    macOS·Windows·Linux 모두 QStandardPaths가 각 OS의 '다운로드' 폴더를 알려준다.
+    """
+    from PyQt5.QtCore import QStandardPaths
+    base = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation) \
+        or os.path.expanduser("~/Downloads")
+    return os.path.join(base, "DabbaView")
+
+
 class AppSettings:
     """QSettings 래퍼. 복합 값은 JSON 문자열로 저장 (플랫폼별 타입 차이 방지)"""
 
@@ -261,6 +273,14 @@ class AppSettings:
         self._qs.setValue("update/skip", str(tag or ""))
 
     # Reading (기록)
+    def cloud_download_dir(self):
+        """클라우드에서 받은 파일을 저장할 폴더 (기본: 운영체제 기본 다운로드 폴더/DabbaView)"""
+        value = self._qs.value("cloud_download_dir", "", type=str)
+        return value or default_download_dir()
+
+    def set_cloud_download_dir(self, folder):
+        self._qs.setValue("cloud_download_dir", folder or "")
+
     def report_folder(self):
         return self._qs.value("report_folder", "", type=str)
 

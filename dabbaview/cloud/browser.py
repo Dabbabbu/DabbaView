@@ -7,6 +7,7 @@
 로그인 → 폴더 탐색 → 파일/폴더 선택(폴더는 하위 폴더까지) → 캐시를 거쳐 내려받기 → 불러오기
 네트워크 작업은 모두 백그라운드 스레드에서.
 """
+import os
 import traceback
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
@@ -126,6 +127,20 @@ class CloudBrowserDialog(QDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #999;")
         layout.addWidget(hint)
+        dest_row = QHBoxLayout()
+        self._dest_hint = QLabel(f"저장 위치: {self._download_dir()}")
+        self._dest_hint.setStyleSheet("color: #9ab;")
+        self._dest_hint.setWordWrap(True)
+        open_dest = QPushButton("폴더 열기")
+        open_dest.setToolTip("받은 파일이 저장되는 폴더를 Finder/탐색기로 엽니다")
+        open_dest.clicked.connect(self._open_dest_folder)
+        change_dest = QPushButton("변경…")
+        change_dest.setToolTip("Settings ▸ Cloud에서도 바꿀 수 있습니다")
+        change_dest.clicked.connect(self._change_dest_folder)
+        dest_row.addWidget(self._dest_hint, 1)
+        dest_row.addWidget(open_dest)
+        dest_row.addWidget(change_dest)
+        layout.addLayout(dest_row)
         self._progress = QProgressBar()
         self._progress.setRange(0, 0)
         self._progress.setVisible(False)
@@ -162,12 +177,55 @@ class CloudBrowserDialog(QDialog):
         self._set_busy(True)
         worker.start()
 
+    # ─── 저장 폴더 ───
+    def _download_dir(self):
+        settings = getattr(self.main, "_app_settings", None)
+        if settings is not None and hasattr(settings, "cloud_download_dir"):
+            return settings.cloud_download_dir()
+        from ..app_settings import default_download_dir
+        return default_download_dir()
+
+    def _open_dest_folder(self):
+        import subprocess
+        import sys as _sys
+        folder = self._download_dir()
+        os.makedirs(folder, exist_ok=True)
+        if _sys.platform == "darwin":
+            subprocess.Popen(["open", folder])
+        elif _sys.platform == "win32":
+            os.startfile(folder)   # noqa: S606 - 사용자가 고른 폴더 열기
+        else:
+            subprocess.Popen(["xdg-open", folder])
+
+    def _change_dest_folder(self):
+        from PyQt5.QtWidgets import QFileDialog
+        folder = QFileDialog.getExistingDirectory(self, "받은 파일을 저장할 폴더",
+                                                  self._download_dir())
+        if not folder:
+            return
+        settings = getattr(self.main, "_app_settings", None)
+        if settings is not None and hasattr(settings, "set_cloud_download_dir"):
+            settings.set_cloud_download_dir(folder)
+        self._dest_hint.setText(f"저장 위치: {folder}")
+
     def _on_progress(self, value):
         if isinstance(value, tuple) and value and value[0] == "count":
             _tag, done, total, text = value
             self._progress.setRange(0, max(total, 1))
             self._progress.setValue(done)
-            self._progress.setFormat(f"{done}/{total} files")
+            self._progress.setFormat(f"{done:,}/{total:,} 파일 (%p%)")
+            self._status.setText(text)
+        elif isinstance(value, tuple) and value and value[0] == "scan":
+            # 폴더 훑는 중: 확인한 폴더 / 지금까지 찾은 폴더 (하위로 들어가며 전체가 늘어남)
+            _tag, listed, found, files, elapsed, where = value
+            from .transfer import _human_time
+            self._progress.setRange(0, max(found, 1))
+            self._progress.setValue(listed)
+            self._progress.setFormat(f"폴더 {listed:,}/{found:,} (%p%)")
+            text = (f"폴더 확인 중  ·  {listed:,}/{found:,} 폴더  ·  파일 {files:,}개 찾음  ·  "
+                    f"경과 {_human_time(elapsed)}")
+            if where:
+                text += f"  ·  {where}"
             self._status.setText(text)
         else:
             self._status.setText(str(value))
@@ -346,15 +404,19 @@ class CloudBrowserDialog(QDialog):
                     "계속할까요?") != QMessageBox.Yes:
                 return
             self._skipped = skipped
+            dest = self._download_dir()
+            self._dest_hint.setText(f"저장 위치: {dest}")
             self._run(f"내려받는 중... 0/{len(files)} files",
                       lambda progress, cancelled: transfer.fetch(provider, files, tops,
-                                                                 progress, cancelled),
+                                                                 progress, cancelled,
+                                                                 dest_root=dest),
                       fetched)
 
         def fetched(result):
             paths, stats = result
             self.downloaded = paths
             self.stats = dict(stats, skipped=getattr(self, "_skipped", 0))
+            self._dest_hint.setText(f"저장한 곳: {stats.get('folder', '')}")
             self.accept()
         self._run("폴더 확인 중...", plan_task, planned)
 
