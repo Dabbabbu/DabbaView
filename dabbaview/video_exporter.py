@@ -383,9 +383,8 @@ class VideoExportDialog(QDialog):
     def _export(self):
         fmt = self._format_combo.currentText()
         ext = FORMATS[fmt][0]
-        default_name = (self._series.description or "series").strip()
-        default_name = "".join(c if c.isalnum() or c in "-_ " else "_"
-                               for c in default_name) or "series"
+        from .batch_video import safe_name   # 일괄 내보내기와 같은 이름 규칙 (단일은 번호 없음)
+        default_name = safe_name(self._series.description)
         filepath, _ = QFileDialog.getSaveFileName(
             self, "Export Video", default_name + ext, f"{fmt} (*{ext})")
         if not filepath:

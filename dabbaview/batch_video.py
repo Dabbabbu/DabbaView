@@ -4,7 +4,8 @@
 """
 일괄 동영상 내보내기 - 불러온 시리즈를 골라 한 번에 MP4 · AVI · GIF로
 
-파일 이름: {SeriesDescription}_{SeriesNumber}.mp4 (같은 이름이 있으면 뒤에 _2, _3 …)
+파일 이름: {SeriesDescription}_{순번}.mp4 (순번은 이번 내보내기 순서 001, 002 …)
+단일 시리즈 내보내기(Export as Video…)는 번호 없이 설명만 쓴다.
 """
 import os
 import re
@@ -23,14 +24,18 @@ FORMATS = ["MP4", "AVI", "GIF"]
 
 
 def safe_name(text):
-    text = re.sub(r"[\\/:*?\"<>|]+", "_", str(text or "").strip())
-    return re.sub(r"\s+", " ", text)[:60] or "series"
+    text = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", str(text or "").strip())
+    return re.sub(r"\s+", " ", text).strip(" .")[:60] or "series"
 
 
-def output_path(folder, series, fmt):
-    """{설명}_{시리즈번호}.{확장자} (겹치면 _2, _3 …)"""
-    number = series.series_number if series.series_number is not None else ""
-    stem = f"{safe_name(series.description)}_{number}".strip("_") or "series"
+def output_path(folder, series, fmt, order=None):
+    """{설명}_{순번}.{확장자} — order가 없으면 설명만 (겹치면 _2, _3 …)
+
+    order는 이번 일괄 내보내기의 순서(1 → 001)이며 DICOM 시리즈 번호가 아니다.
+    """
+    stem = safe_name(series.description) or "series"
+    if order is not None:
+        stem = f"{stem}_{int(order):03d}"
     ext = fmt.lower()
     path = os.path.join(folder, f"{stem}.{ext}")
     n = 2
@@ -197,7 +202,7 @@ class BatchVideoDialog(QDialog):
                 QMessageBox.warning(self, "일괄 동영상 내보내기", f"폴더를 만들 수 없습니다:\n{e}")
                 return
         fmt = self.format.currentText()
-        jobs = [(s, output_path(folder, s, fmt)) for s in picked]
+        jobs = [(s, output_path(folder, s, fmt, order)) for order, s in enumerate(picked, start=1)]
         options = {"fmt": fmt, "duration": self.duration.value(),
                    "size": self.size.currentData(),
                    "window": self._window if self.use_window.isChecked() else None,
