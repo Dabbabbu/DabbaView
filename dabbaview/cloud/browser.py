@@ -402,10 +402,10 @@ class CloudBrowserDialog(QDialog):
         elapsed = value[4] if len(value) > 4 else 0
         by_ext = value[6] if len(value) > 6 else {}
         all_bytes = value[7] if len(value) > 7 else 0
-        self._fill_ext_table(by_ext)
         import time as _t
         self._prog = {"kind": "scan", "done": listed, "total": found, "files": files,
                       "bytes": all_bytes, "start": _t.monotonic() - elapsed}
+        self._fill_ext_table(by_ext)          # 표 맨 밑에 진행률 줄이 함께 그려짐
         self._start_ticker()
         self._tick_progress()
 
@@ -436,14 +436,42 @@ class CloudBrowserDialog(QDialog):
             self._summary_detail.addTopLevelItem(row)
         for i in range(3):
             self._summary_detail.resizeColumnToContents(i)
+        self._add_scan_row()
         self._summary_detail.blockSignals(False)
         self._update_choice()
+
+    def _add_scan_row(self):
+        """훑는 중이면 표 맨 밑에 진행률을 한 줄 넣는다 (얼마나 남았는지 바로 보이게)"""
+        state = getattr(self, "_prog", None)
+        scanning = getattr(self, "_scan_worker", None) is not None
+        if not scanning or not state or state.get("kind") != "scan":
+            return
+        done, total = state.get("done", 0), state.get("total", 0)
+        percent = (done * 100.0 / total) if total else 0.0
+        from .transfer import _human_time
+        elapsed = state.get("start")
+        import time as _t
+        secs = (_t.monotonic() - elapsed) if elapsed else 0
+        left = ""
+        if done and done < total and secs > 1:
+            left = f" · 남은 시간 약 {_human_time((total - done) * secs / done)}"
+        row = QTreeWidgetItem([f"⏳ 확인 중… {percent:.0f}%",
+                               f"폴더 {done:,}/{total:,}",
+                               f"파일 {state.get('files', 0):,}개{left}"])
+        row.setFlags(Qt.ItemIsEnabled)
+        from PyQt5.QtGui import QBrush, QColor
+        for col in range(3):
+            row.setForeground(col, QBrush(QColor("#8fb3e0")))
+        self._summary_detail.addTopLevelItem(row)
+        self._summary_detail.scrollToItem(row)
 
     def _on_ext_toggled(self, *_args):
         chosen, excluded = set(), set(getattr(self, "_ext_excluded", set()))
         for i in range(self._summary_detail.topLevelItemCount()):
             row = self._summary_detail.topLevelItem(i)
             ext = row.data(0, Qt.UserRole)
+            if ext is None:      # 진행률 줄
+                continue
             if row.checkState(0) == Qt.Checked:
                 chosen.add(ext)
                 excluded.discard(ext)
@@ -621,14 +649,14 @@ class CloudBrowserDialog(QDialog):
             elapsed = value[4] if len(value) > 4 else 0
             by_ext = value[6] if len(value) > 6 else None
             all_bytes = value[7] if len(value) > 7 else 0
-            if by_ext:
-                self._fill_ext_table(by_ext)
             self._progress.setRange(0, max(found, 1))
             self._progress.setValue(listed)
             self._progress.setFormat(f"폴더 {listed:,}/{found:,} (%p%)")
             import time as _t
             self._prog = {"kind": "scan", "done": listed, "total": found, "files": files,
                           "bytes": all_bytes, "start": _t.monotonic() - elapsed}
+            if by_ext:
+                self._fill_ext_table(by_ext)
             self._start_ticker()
             self._tick_progress()
         else:
