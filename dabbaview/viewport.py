@@ -20,6 +20,7 @@ DICOM 이미지 뷰포트 위젯
   측정/주석은 이미지 좌표로 저장하므로 회전·반전 후에도 영상에 붙어 있음
 """
 import math
+import time
 import os
 
 import numpy as np
@@ -80,7 +81,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     status_message = pyqtSignal(str)  # 측정 결과 등
     scrolled = pyqtSignal(int)  # 사용자가 슬라이스를 넘김 (동기화 스크롤용)
     cine_state_changed = pyqtSignal(bool)  # 시네 재생 중이면 True (Play/Stop 버튼 표시)
-    stepped = pyqtSignal(str, int)         # 방향키 이동 ("position"|"phase", +1/-1) - 함께 고른 칸 동기화
+    stepped = pyqtSignal(str, int)         # 방향키 이동 ("sequence"|"position"|"phase", +1/-1) - 함께 고른 칸 동기화
     window_adjusted = pyqtSignal(float, float)  # 사용자가 W/L 변경 (동기화 윈도잉용)
     profile_measured = pyqtSignal(object)  # 라인 프로파일 결과 dict (하단 패널 그래프)
     selection_changed = pyqtSignal(list)   # 선택한 주석 id 목록 (ROI Manager 동기화)
@@ -626,7 +627,86 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             return self._mouse.get("middle_drag")
         return "none"
 
+    # 좌+우 버튼을 함께 누른 채 끌기: 위아래 = 슬라이스, 좌우 = 위상 (빨리 끌수록 많이 넘어감)
+    CHORD_PX_PER_SLICE = 6.0     # 천천히 끌 때: 6px마다 한 장 (보통 드래그 넘기기 8px보다 민감)
+    CHORD_ACCEL_START = 0.25     # 이 속도(px/ms)를 넘으면 가속 시작
+    CHORD_ACCEL_GAIN = 5.0       # 속도가 0.1 px/ms 빨라질 때마다 +0.5배
+    CHORD_ACCEL_MAX = 12.0       # 최대 12배
+
+    @staticmethod
+    def chord_gain(speed):
+        """끄는 속도(px/ms) → 넘김 배율 (천천히 1배 … 급하게 최대 12배)"""
+        extra = max(0.0, speed - DicomViewport.CHORD_ACCEL_START) * DicomViewport.CHORD_ACCEL_GAIN
+        return min(DicomViewport.CHORD_ACCEL_MAX, 1.0 + extra)
+
+    def _begin_chord_scroll(self, event):
+        """먼저 누른 버튼의 동작은 멈추고 '양쪽 버튼 넘기기'로 바꾼다"""
+        previous = self._drag_action
+        if previous == "seg":
+            self._seg.release()
+        elif previous == "tool":
+            if self._edit is not None:
+                self.edit_release()
+            if self._draft is not None and not self._draft.get("quick"):
+                self._draft = None                # 그리다 만 주석은 버림
+        elif previous == "roi_window":
+            self._wl_roi = None
+        self._placing_cursor = False
+        self._magnifying = False
+        self._mouse_pressed = True
+        self._drag_action = "chord_scroll"
+        self._last_mouse_pos = event.pos()
+        self._scroll_accum = 0.0
+        self._phase_accum = 0.0
+        self._chord_time = time.monotonic()
+        self.setCursor(Qt.SizeVerCursor)
+        self.update()
+
+    def _chord_scroll_move(self, dx, dy):
+        """위아래 = 슬라이스 (위상 영상은 위치), 좌우 = 위상 (위상 영상만). 크게 움직인 쪽만 씀"""
+        now = time.monotonic()
+        dt_ms = max(1.0, (now - getattr(self, "_chord_time", now)) * 1000.0)
+        self._chord_time = now
+        if self._series is None:
+            return
+        phases = self._phase_map()
+        horizontal = abs(dx) > abs(dy)
+        if horizontal and phases is None:
+            return                                # 위상이 없는 영상: 좌우는 쓰지 않음
+        delta = dx if horizontal else dy
+        gain = self.chord_gain(abs(delta) / dt_ms)
+        if horizontal:
+            self._phase_accum = getattr(self, "_phase_accum", 0.0) \
+                + delta / self.CHORD_PX_PER_SLICE * gain
+            steps = int(self._phase_accum)
+            self._phase_accum -= steps
+            for _ in range(min(abs(steps), phases.n_phases)):
+                self.step_slice("phase", 1 if steps > 0 else -1)
+            return
+        self._scroll_accum += delta / self.CHORD_PX_PER_SLICE * gain
+        steps = int(self._scroll_accum)
+        if not steps:
+            return
+        self._scroll_accum -= steps
+        if phases is not None:                    # 위상 고정한 채 슬라이스 위치만
+            for _ in range(min(abs(steps), phases.n_positions)):
+                before = self._current_slice
+                self.step_slice("position", 1 if steps > 0 else -1)
+                if self._current_slice == before:
+                    self._scroll_accum = 0.0
+                    break
+            return
+        last = self._series.num_slices - 1
+        target = max(0, min(last, self._current_slice + steps))
+        if target in (0, last):
+            self._scroll_accum = 0.0              # 끝에 닿으면 남은 이동량은 버림
+        self._go_to_slice(target, user=True)
+
     def mousePressEvent(self, event):
+        both = Qt.LeftButton | Qt.RightButton
+        if (event.buttons() & both) == both and event.button() in (Qt.LeftButton, Qt.RightButton):
+            self._begin_chord_scroll(event)
+            return
         if (self._seg_active() and event.button() == Qt.LeftButton
                 and not event.modifiers() & (Qt.AltModifier | CTRL_MODIFIERS)):
             # 세그멘테이션 도구: 좌클릭 드래그 = 칠하기 (Alt/Ctrl 드래그는 기존 동작)
@@ -780,6 +860,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         elif action == "roi_window":
             if self._wl_roi is not None and img_pos:
                 self._wl_roi[1] = img_pos
+        elif action == "chord_scroll":
+            self._chord_scroll_move(dx, dy)
         elif action == "scroll":
             # 세로 드래그 8px마다 한 장
             self._scroll_accum += dy / 8.0
@@ -839,6 +921,15 @@ class DicomViewport(AnnotationEditMixin, QWidget):
 
     def mouseReleaseEvent(self, event):
         action = self._drag_action
+        if action == "chord_scroll":
+            if event.buttons() & (Qt.LeftButton | Qt.RightButton):
+                return                            # 한쪽만 뗐음 → 남은 버튼으로 계속 넘김
+            self._mouse_pressed = False
+            self._mouse_button = Qt.NoButton
+            self._drag_action = None
+            self.set_tool_cursor()
+            self.update()
+            return
         self._mouse_pressed = False
         self._mouse_button = Qt.NoButton
         self._drag_action = None
@@ -1033,15 +1124,29 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 self.clear_cursor3d()
             self._draft = None
             self.update()
-        elif key in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right):
-            # ←→ 슬라이스 위치, ↑↓ 위상 (위상이 없는 시리즈는 넷 다 슬라이스 이동)
-            direction = 1 if key in (Qt.Key_Down, Qt.Key_Right) else -1
-            self.step_slice("phase" if key in (Qt.Key_Up, Qt.Key_Down) else "position", direction)
+        elif key in (Qt.Key_Up, Qt.Key_Down):
+            # ↑↓ 슬라이스 이동. 위상 영상(heart cine 등)은 기본 '슬라이스 위치' (위상 고정)
+            # View ▸ ↕ 방향키 메뉴에서 잠시 '전체 순서' · '위상만'으로 바꿀 수 있음
+            self.step_slice(DicomViewport.arrow_mode, 1 if key == Qt.Key_Down else -1)
+        elif key in (Qt.Key_Left, Qt.Key_Right):
+            # ←→ 위상 영상에서만: 이 슬라이스의 위상 (위상이 없는 영상에서는 쓰지 않음)
+            if self._phase_map() is not None:
+                self.step_slice("phase", 1 if key == Qt.Key_Right else -1)
         else:
             super().keyPressEvent(event)
 
+    # ↑↓ 방향키 동작 (모든 칸 공통, 앱을 다시 켜면 기본값으로) — View ▸ ↕ 방향키
+    ARROW_MODES = {"position": "슬라이스 위치", "sequence": "전체 순서", "phase": "위상"}
+    arrow_mode = "position"
+
+    def _phase_map(self):
+        if self._series is None:
+            return None
+        from .phases import phase_map
+        return phase_map(self._series)
+
     def step_slice(self, kind, direction, user=True):
-        """kind: 'position' (슬라이스 위치) | 'phase' (같은 위치의 위상)
+        """kind: 'sequence' (전체 순서) | 'position' (슬라이스 위치) | 'phase' (같은 위치의 위상)
 
         Phase 띠가 없는 뷰포트(Multi View 칸 등)도 시리즈에서 위상 표를 바로 만들어 씀.
         """
@@ -1052,6 +1157,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             phases = phase_map(self._series)
             if phases is not None:
                 target = (phases.step_phase(self._current_slice, direction) if kind == "phase"
+                          else phases.step_sequence(self._current_slice, direction)
+                          if kind == "sequence"
                           else phases.step_position(self._current_slice, direction))
         # 이동 자체는 scrolled를 내보내지 않음 (같은 동작을 stepped로만 전파 → 두 번 움직이지 않게)
         self._go_to_slice(target if target is not None else self._current_slice + direction, user=False)

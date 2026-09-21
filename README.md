@@ -45,7 +45,7 @@ Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 
 | 🔌 **PACS · 연동** | C-STORE(DICOM Send) · DICOM Print, 익명화, Google Drive · OneDrive 열기, 포맷 변환(NIfTI ↔ DICOM 등) |
 | 🎬 **내보내기** | 화면 캡처, 동영상(MP4 · AVI · GIF), **여러 시리즈 일괄 동영상**, PNG 시퀀스 |
 
-<!-- version -->**Version** 3.4.1 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
+<!-- version -->**Version** 3.5.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
 
 > ⚠️ 진단용으로 인증된 의료기기가 아닙니다. 학습·연구·참고용으로 사용하세요.
 
@@ -276,6 +276,7 @@ ACR 대형 MRI 팬텀의 7개 검사를 자동으로 분석합니다. 기준값�
 | Alt(⌥) + 좌클릭 드래그 | Pan (도구 무관) |
 | 휠 | 슬라이스 이동 (위 = 이전, 아래 = 다음) |
 | Shift + 휠 | 5장씩 빠르게 이동 |
+| **좌 + 우클릭 함께 누르고 드래그** | **위아래 = 슬라이스, 좌우 = 위상**(heart cine 등) — 천천히 한 장씩, 빠르게 끌수록 많이 (최대 12배) |
 | Ctrl(⌘) + 휠 | Zoom (위 = 확대, 커서 위치 기준) |
 | 좌측 더블클릭 | 화면에 맞춤 (Fit to Window) |
 | 우측 더블클릭 | W/L을 DICOM 기본값으로 리셋 |
@@ -314,7 +315,9 @@ macOS에서는 표의 `Ctrl` 자리에 **⌘ (Command)** 와 **Control** 키 모
 | Ctrl+D | 현재 스터디를 Library(즐겨찾기)에 추가 | ⌘B / ⌘I (메모 입력 중) | 굵게 / 기울임 |
 | Ctrl+M | Measure (선택 ROI 통계 표) | Delete | 선택한 ROI/측정 삭제 (선택 없으면 마지막 것) |
 | F | Landmark (점 찍기) | Shift+L | Line Profile |
-| F3 | Python 콘솔 | | |
+| F3 | Python 콘솔 | **Ctrl(⌘)+F** | **🔍 기능 찾기** — 한글·영어·비슷한 말로 메뉴 기능 검색 (`동영상`, `내보내기`, `export`, `ㄷㅇㅅ` …) |
+| ↑ / ↓ | 슬라이스 (위상 영상: 위상 고정) | ← / → | 위상 (위상 영상만, 그 밖에는 동작 없음) |
+| Ctrl(⌘)+Shift+↑ | ↑↓ 동작 잠시 바꾸기: 슬라이스 위치 → 전체 순서 → 위상 (View ▸ ↕ 방향키) | | |
 
 ## 설정 (File → Settings, macOS ⌘,)
 - **Mouse**: 버튼·휠·더블클릭 동작 매핑

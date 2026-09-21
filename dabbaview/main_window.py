@@ -579,6 +579,7 @@ class MainWindow(QMainWindow):
         view_menu = menubar.addMenu("&View")
         self._view_menu = view_menu
         self._init_ui_scale_menu(view_menu)
+        self._init_arrow_menu(view_menu)
         view_menu.addSeparator()
 
         # 툴바와 같은 QAction을 공유 (단축키 중복 시 Qt가 둘 다 무시함)
@@ -662,6 +663,12 @@ class MainWindow(QMainWindow):
         self._init_ai_menu(menubar)
         self._preset_menu = menubar.addMenu("&Presets")
         self._help_menu = menubar.addMenu("&Help")
+        self._act_find = QAction("🔍 기능 찾기…", self)
+        self._act_find.setShortcut(QKeySequence.Find)        # ⌘F (macOS) / Ctrl+F
+        self._act_find.setToolTip("기능 이름으로 찾아 바로 실행 (⌘F / Ctrl+F) — 한글·영어·비슷한 말 모두")
+        self._act_find.triggered.connect(self.open_command_palette)
+        self._help_menu.addAction(self._act_find)
+        self._help_menu.addSeparator()
         about = QAction(f"About {APP_NAME}", self)
         about.setMenuRole(QAction.AboutRole)  # macOS: 앱 메뉴(DabbaView → About)로 이동
         about.triggered.connect(lambda: AboutDialog(self).exec_())
@@ -854,6 +861,11 @@ class MainWindow(QMainWindow):
         self._act_library_panel.setToolTip("Library 탭 열기 / 닫기 (Ctrl+Shift+L) · "
                                            "현재 스터디 추가는 Ctrl+D")
         self._act_library_panel.triggered.connect(lambda: self._toggle_left_tab(self._library_panel))
+        output_bar.addAction(self._act_find)
+        find_button = output_bar.widgetForAction(self._act_find)
+        if find_button is not None:
+            find_button.setText("🔍 찾기")
+        output_bar.addSeparator()
         for action in (self._act_library_panel, self._act_reading, self._act_capture,
                        self._act_image_panel, self._act_anonymize, self._act_ai, self._act_send,
                        self._act_print, self._act_settings):
@@ -1330,6 +1342,16 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage(
                 f"같은 폴더에서 텍스트 {skipped}개를 찾았지만 이미 기록이 있어 두었습니다.", 8000)
 
+    def open_command_palette(self):
+        """⌘F 기능 찾기 창 — 메뉴·도구 막대의 기능을 이름(한글·영어·비슷한 말)으로 찾아 실행"""
+        from .command_palette import CommandPalette
+        if getattr(self, "_palette", None) is None:
+            self._palette = CommandPalette(self)
+            self._palette.setModal(True)          # 잠깐 쓰고 닫는 창 → 옆 탭에 올리지 않음
+            self._palette.ran.connect(
+                lambda name: self._statusbar.showMessage(f"🔍 실행: {name}", 4000))
+        self._palette.open_palette()
+
     # ─── 열려 있는 보조 창을 메인 창 옆 탭으로 표시 ───
     def register_popup(self, widget, icon="☁"):
         """팝업(클라우드 탐색·진행 창 등)을 메인 창 오른쪽 탭에 등록 — 눌러서 다시 앞으로"""
@@ -1477,6 +1499,48 @@ class MainWindow(QMainWindow):
         nearest = min(range(len(steps)), key=lambda i: abs(steps[i] - current))
         index = min(len(steps) - 1, max(0, nearest + direction))
         self._apply_ui_scale(steps[index])
+
+    def _init_arrow_menu(self, menu):
+        """View ▸ ↕ 방향키 ↑↓ — 위상 영상에서 ↑↓가 무엇을 넘길지 잠시 바꾸기 (다시 켜면 기본)
+
+        기본: ↑↓ 슬라이스 위치 · ←→ 위상 (heart cine 등)
+        """
+        from PyQt5.QtWidgets import QActionGroup
+        from .viewport import DicomViewport
+        sub = menu.addMenu("↕ 방향키 ↑↓ 동작 (위상 영상)")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        labels = {"position": "슬라이스 위치 — 위상은 그대로 (기본)",
+                  "sequence": "전체 순서 — 위상 1→끝, 다음 슬라이스의 위상 1 …",
+                  "phase": "위상 — 이 슬라이스에서 위상 넘기기"}
+        self._arrow_actions = {}
+        for mode, text in labels.items():
+            action = sub.addAction(text)
+            action.setCheckable(True)
+            action.setChecked(mode == DicomViewport.arrow_mode)
+            action.setToolTip("위상이 없는 영상에서는 어느 쪽이든 한 장씩 넘어갑니다. "
+                              "← →는 늘 위상입니다. 앱을 다시 켜면 '슬라이스 위치'로 돌아갑니다")
+            action.triggered.connect(lambda _c=False, m=mode: self.set_arrow_mode(m))
+            group.addAction(action)
+            self._arrow_actions[mode] = action
+        sub.addSeparator()
+        cycle = sub.addAction("다음 동작으로 바꾸기")
+        cycle.setShortcut(QKeySequence("Ctrl+Shift+Up"))
+        cycle.triggered.connect(self._cycle_arrow_mode)
+
+    def set_arrow_mode(self, mode):
+        from .viewport import DicomViewport
+        DicomViewport.arrow_mode = mode
+        action = getattr(self, "_arrow_actions", {}).get(mode)
+        if action is not None:
+            action.setChecked(True)
+        self._phase_bar.refresh()
+        self._statusbar.showMessage(f"↑↓ 방향키: {DicomViewport.ARROW_MODES[mode]}", 4000)
+
+    def _cycle_arrow_mode(self):
+        from .viewport import DicomViewport
+        modes = list(DicomViewport.ARROW_MODES)
+        self.set_arrow_mode(modes[(modes.index(DicomViewport.arrow_mode) + 1) % len(modes)])
 
     def _init_ui_scale_menu(self, menu):
         sub = menu.addMenu("🔍 화면 크기")
