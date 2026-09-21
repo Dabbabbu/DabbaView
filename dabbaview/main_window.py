@@ -1138,7 +1138,7 @@ class MainWindow(QMainWindow):
         clear.triggered.connect(self._clear_recent_paths)
 
     def load_directory_async(self, paths, target_viewport=None,
-                             remember=True, merge=False, quiet=False):
+                             remember=True, merge=False, quiet=False, cloud_batch=False):
         """백그라운드 스레드에서 로딩. UI는 시그널로만 갱신"""
         if self._load_worker is not None:
             self._statusbar.showMessage("이미 불러오는 중입니다.", 3000)
@@ -1154,6 +1154,7 @@ class MainWindow(QMainWindow):
         worker = DirectoryLoadWorker(paths, target_viewport, remember, self)
         worker.merge = merge          # True: 지금 목록에 더하기 (클라우드에서 한 시리즈씩 도착할 때)
         worker.quiet = quiet          # True: 진행 창 없이 상태바로만
+        worker.cloud_batch = cloud_batch   # True: 클라우드에서 받는 중 도착한 묶음 (경고창 띄우지 않음)
         worker.progress.connect(self._on_load_progress)
         worker.finished_loading.connect(self._on_load_finished)
         worker.placeholders_found.connect(self._on_placeholders_found)
@@ -1185,13 +1186,32 @@ class MainWindow(QMainWindow):
         self._update_ready_status()
 
     def add_ready_series(self, paths, done, total):
-        """한 폴더(≈시리즈)를 다 받음 → 곧바로 불러와 볼 수 있게 (나머지는 뒤에서 계속 받음)"""
+        """한 폴더(≈시리즈)를 다 받음 → 곧바로 불러와 볼 수 있게 (나머지는 뒤에서 계속 받음)
+
+        판독 텍스트만 있는 폴더처럼 볼 영상이 없으면 불러오지 않고(→ 'No DICOM' 경고 방지)
+        다음에 영상이 도착할 때 함께 넘겨, 그 검사의 기록으로 연결되게 한다.
+        """
         if not hasattr(self, "_ready_queue"):
             self.begin_cloud_session(total)
-        self._ready_queue.append(list(paths))
         self._ready_state = (done, total)
+        viewable = [p for p in paths if self._is_viewable_file(p)]
+        if viewable:
+            extra, self._ready_text = getattr(self, "_ready_text", []), []
+            self._ready_queue.append(list(paths) + extra)
+        else:
+            self._ready_text = getattr(self, "_ready_text", []) + list(paths)
         self._update_ready_status()
         self._drain_ready_queue()
+
+    @staticmethod
+    def _is_viewable_file(path):
+        """영상으로 열 수 있는 파일인지 (DICOM 후보 또는 지원 형식). 텍스트 판독문은 아님"""
+        from .dicom_loader import TEXT_REPORT_EXTENSIONS, is_candidate_file
+        from .formats.readers import file_kind
+        name = os.path.basename(path)
+        if name.startswith(".") or name.lower().endswith(TEXT_REPORT_EXTENSIONS):
+            return False
+        return is_candidate_file(name) or file_kind(name) != "dicom"
 
     def _drain_ready_queue(self):
         queue = getattr(self, "_ready_queue", None)
@@ -1201,8 +1221,8 @@ class MainWindow(QMainWindow):
         while queue:                          # 그사이 도착한 폴더들을 한 번에
             batch.extend(queue.pop(0))
         first = getattr(self, "_ready_first", True)
-        self._ready_first = False
-        self.load_directory_async(batch, remember=False, merge=not first, quiet=not first)
+        self.load_directory_async(batch, remember=False, merge=not first, quiet=not first,
+                                  cloud_batch=True)
 
     def _update_ready_status(self):
         done, total = getattr(self, "_ready_state", (0, 0))
@@ -1226,34 +1246,33 @@ class MainWindow(QMainWindow):
 
         이미 기록이 있으면 덮어쓰지 않고, 상태바로만 알린다.
         """
-        files = list(getattr(loader, "text_files", []) or [])
+        # 이번에 온 텍스트 + 앞서 짝을 못 찾아 기다리던 텍스트 (영상보다 먼저 도착한 경우)
+        files = list(getattr(loader, "text_files", []) or []) + list(getattr(self, "_pending_texts", []))
+        self._pending_texts = []
         if not files:
             return
-        study_of_dir = {}
-        for series in loader.get_series_list():
-            uid = getattr(series, "study_uid", "") or ""
+        # 지금까지 열린 전체 시리즈의 위치 → 검사 (클라우드에서 나눠 도착해도 전체 기준)
+        source = self._loader if (self._loader is not None and self._loader.series_dict) else loader
+        series_dirs = []
+        for series in source.get_series_list():
             for sl in getattr(series, "slices", [])[:1]:
                 folder = os.path.dirname(getattr(sl, "filename", "") or "")
-                while folder and folder not in study_of_dir:
-                    study_of_dir.setdefault(folder, uid)
-                    parent = os.path.dirname(folder)
-                    if parent == folder:
-                        break
-                    folder = parent
+                if folder:
+                    series_dirs.append((os.path.abspath(folder), getattr(series, "study_uid", "") or ""))
         attached, skipped = [], 0
         for path in files:
-            folder = os.path.dirname(path)
-            uid = None
-            while folder:
-                uid = study_of_dir.get(folder)
-                if uid:
-                    break
-                parent = os.path.dirname(folder)
-                if parent == folder:
-                    break
-                folder = parent
-            if not uid:
+            # ★ 텍스트가 있는 폴더 '안쪽'의 영상만 짝으로 본다 (상위 폴더로 거슬러 올라가지 않음)
+            #   → 여러 증례가 같은 상위 폴더에 있어도 다른 환자의 검사에 붙지 않는다
+            home = os.path.abspath(os.path.dirname(path))
+            studies = {uid for folder, uid in series_dirs
+                       if uid and (folder == home or folder.startswith(home + os.sep))}
+            if not studies:
+                self._pending_texts.append(path)      # 짝이 될 영상이 아직 안 옴 → 다음에 다시
                 continue
+            if len(studies) > 1:
+                skipped += 1                          # 한 폴더에 여러 검사 → 어느 것인지 모르므로 연결 안 함
+                continue
+            uid = next(iter(studies))
             try:
                 with open(path, encoding="utf-8", errors="replace") as f:
                     text = f.read().strip()
@@ -1651,6 +1670,7 @@ class MainWindow(QMainWindow):
         cancelled = self._load_worker.was_cancelled()
         target_viewport = self._load_worker.target_viewport
         merge_quiet = getattr(self._load_worker, "merge", False)
+        cloud_batch = getattr(self._load_worker, "cloud_batch", False)
         loaded_paths = getattr(loader, "opened_paths", None) or self._load_worker.paths   # 로컬 복사본이면 그 경로
         remember = self._load_worker.remember
         self._load_worker = None
@@ -1665,6 +1685,11 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage("Loading cancelled", 5000)
             return
 
+        if loaded == 0 and cloud_batch:
+            # 클라우드에서 아직 받는 중: 이 묶음에 볼 영상이 없어도 오류가 아님
+            self._statusbar.showMessage("아직 다운로드 중입니다. 받은 시리즈부터 표시합니다.", 6000)
+            QTimer.singleShot(0, self._drain_ready_queue)
+            return
         if loaded == 0:
             if loader.load_errors:
                 self._load_errors.reset(loader.load_errors)
@@ -1702,6 +1727,8 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage(f"새 시리즈 {len(new_uids)}개가 준비되었습니다 — 바로 볼 수 있습니다", 6000)
             QTimer.singleShot(0, self._drain_ready_queue)
             return
+        if cloud_batch:
+            self._ready_first = False          # 이후 도착분은 목록에 더함
         if target_viewport is None:
             self._loader = loader
             self._load_errors.reset(loader.load_errors)

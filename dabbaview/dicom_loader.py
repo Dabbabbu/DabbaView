@@ -751,7 +751,10 @@ class DicomLoader:
                 pending[path] = (signature, dicom_files)
                 files.extend(dir_files)
             elif os.path.isfile(path):
-                files.append(path)
+                if path.lower().endswith(TEXT_REPORT_EXTENSIONS):
+                    self.text_files.append(path)      # 텍스트는 영상으로 읽지 않음 (⚠ 오류 방지)
+                else:
+                    files.append(path)
         self.cached_count = cached
         # 형식별 분류: DICOM은 병렬 메타데이터 읽기, 나머지는 형식별 reader
         others = [f for f in files if file_kind(f) != "dicom"]
