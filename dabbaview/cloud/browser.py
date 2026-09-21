@@ -13,8 +13,9 @@ import traceback
 from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
                              QLineEdit, QMessageBox, QProgressBar, QPushButton,
-                             QRadioButton, QStyle,
+                             QRadioButton, QShortcut, QStyle,
                              QTreeWidget, QTreeWidgetItem, QVBoxLayout)
+from PyQt5.QtGui import QColor, QKeySequence
 
 from .. import cache
 from . import CloudError, NotConfigured, transfer
@@ -90,9 +91,15 @@ class CloudBrowserDialog(QDialog):
         self._home = QPushButton(style.standardIcon(QStyle.SP_DirHomeIcon), "")
         self._home.setToolTip("처음 (내 드라이브 / 공유)")
         self._home.clicked.connect(self._go_home)
-        self._refresh = QPushButton(style.standardIcon(QStyle.SP_BrowserReload), "")
-        self._refresh.setToolTip("새로 고침")
+        self._refresh = QPushButton(style.standardIcon(QStyle.SP_BrowserReload), " 새로 고침")
+        self._refresh.setToolTip("지금 폴더를 다시 읽어 그사이 클라우드에 추가 · 삭제된 파일을 반영합니다 (F5 · ⌘R)\n"
+                                 "다른 창에 갔다가 20초 넘게 지나 돌아오면 자동으로 다시 확인합니다.\n"
+                                 "새로 생긴 항목은 🆕 초록색으로 표시됩니다.")
         self._refresh.clicked.connect(self._reload)
+        for key in (QKeySequence.Refresh, QKeySequence("Ctrl+R")):
+            QShortcut(key, self, activated=self._reload)
+        self._listed_at = 0.0
+        self._prev_ids = None
         self._path = QLabel()
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("이름 필터")
@@ -738,6 +745,10 @@ class CloudBrowserDialog(QDialog):
         return True
 
     def _show(self, items, path, search=False):
+        import time as _t
+        prev, self._prev_ids = self._prev_ids, None     # 새로 고침이면 전 목록과 비교
+        new_ids = {i.id for i in items} - prev if prev is not None else set()
+        self._listed_at = _t.monotonic()
         self._items = items
         self._path.setText(path)
         self._tree.clear()
@@ -751,6 +762,10 @@ class CloudBrowserDialog(QDialog):
             if where:
                 row.setToolTip(0, f"{where}/{item.name}")
                 row.setToolTip(3, f"{where}/{item.name}")
+            if item.id in new_ids:                    # 새로 고침으로 새로 보인 항목
+                row.setText(0, f"🆕 {item.name}")
+                for col in range(4):
+                    row.setForeground(col, QColor("#6fdc8c"))
             row.setIcon(0, folder_icon if item.is_folder else file_icon)
             row.setData(0, Qt.UserRole, item)
             if not item.is_folder and not item.downloadable:
@@ -770,6 +785,12 @@ class CloudBrowserDialog(QDialog):
         self._status.setText(
             "▸ 자세히를 누르면 하위 폴더 내용(확장자·용량)까지 확인합니다" if folders
             else "")
+        if prev is not None:
+            gone = len(prev - {i.id for i in items})
+            how = "자동으로 다시 확인함" if getattr(self, "_auto_refresh", False) else "새로 고침"
+            change = (f"새 항목 {len(new_ids)}개 (🆕 초록색)" if new_ids else "새 항목 없음") \
+                + (f" · 없어진 항목 {gone}개" if gone else "")
+            self._status.setText(f"🔄 {how} — {change}")
         if self._summary_toggle.isChecked():
             self._scan_current()
 
@@ -838,7 +859,24 @@ class CloudBrowserDialog(QDialog):
         self._stack = []
         self._run("불러오는 중...", lambda p, c: provider.roots(), lambda roots: self._show(roots, "/"))
 
-    def _reload(self):
+    AUTO_REFRESH_AFTER = 20      # 초: 창에 다시 돌아왔을 때 이보다 오래됐으면 자동으로 다시 확인
+
+    def changeEvent(self, event):
+        from PyQt5.QtCore import QEvent
+        super().changeEvent(event)
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            import time as _t
+            idle = (self._worker is None and getattr(self, "_scan_worker", None) is None)
+            if (idle and self._stack and self._listed_at
+                    and _t.monotonic() - self._listed_at > self.AUTO_REFRESH_AFTER):
+                self._reload(auto=True)
+
+    def _reload(self, auto=False):
+        """지금 폴더를 다시 읽음 — 새로 생긴 항목은 표시해 줌"""
+        if self._worker is not None:
+            return                          # 받는 중 · 읽는 중에는 하지 않음
+        self._prev_ids = {i.id for i in getattr(self, "_items", []) or []}
+        self._auto_refresh = auto
         if self._stack:
             self._open_folder(self._stack.pop())
         else:
