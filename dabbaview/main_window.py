@@ -1183,6 +1183,9 @@ class MainWindow(QMainWindow):
         self._ready_queue = []
         self._ready_first = True
         self._ready_state = (0, total_groups)
+        self._ready_loaded = 0           # 이번 세션에서 실제로 열린 영상 수
+        self._ready_errors = []          # 이번 세션에서 읽지 못한 파일
+        self._ready_checked = False      # 끝났을 때 '영상 없음' 확인을 한 번만
         self._update_ready_status()
 
     def add_ready_series(self, paths, done, total):
@@ -1215,6 +1218,8 @@ class MainWindow(QMainWindow):
 
     def _drain_ready_queue(self):
         queue = getattr(self, "_ready_queue", None)
+        if self._load_worker is None and not queue:
+            self._finish_cloud_session()
         if not queue or self._load_worker is not None:
             return
         batch = []
@@ -1223,6 +1228,34 @@ class MainWindow(QMainWindow):
         first = getattr(self, "_ready_first", True)
         self.load_directory_async(batch, remember=False, merge=not first, quiet=not first,
                                   cloud_batch=True)
+
+    def _finish_cloud_session(self):
+        """모든 폴더를 다 받고 다 불러온 뒤 한 번: 영상이 하나도 없었으면 그때 알린다
+
+        받는 중에는 폴더마다 경고를 띄우지 않으므로(텍스트만 있는 폴더 등),
+        전체가 끝났는데도 영상이 0개면 진짜로 없거나 읽지 못한 것이다.
+        """
+        done, total = getattr(self, "_ready_state", (0, 0))
+        if total == 0 or done < total or getattr(self, "_ready_checked", True):
+            return
+        self._ready_checked = True
+        if getattr(self, "_ready_loaded", 0) > 0:
+            return
+        errors = getattr(self, "_ready_errors", [])
+        if errors:
+            self._load_errors.reset(errors)
+            QMessageBox.warning(
+                self, "Warning",
+                f"받은 폴더 {total}개에서 영상을 하나도 불러오지 못했습니다. "
+                f"{len(errors)}개 파일을 건너뛰었습니다.\n\n"
+                f"예: {os.path.basename(errors[0][0])} — {errors[0][1]}\n\n"
+                "상태바 오른쪽 아래 ⚠ 버튼으로 전체 목록을 볼 수 있습니다.")
+        else:
+            QMessageBox.warning(
+                self, "Warning",
+                f"받은 폴더 {total}개에서 볼 수 있는 영상(DICOM)을 찾지 못했습니다.\n\n"
+                "· 파일이 영상이 아니거나 손상됐을 수 있습니다.\n"
+                "· 받을 파일 유형에서 영상 형식(.dcm 등)을 체크했는지 확인해 주세요.")
 
     def _update_ready_status(self):
         done, total = getattr(self, "_ready_state", (0, 0))
@@ -1696,8 +1729,12 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage("Loading cancelled", 5000)
             return
 
+        if cloud_batch:
+            self._ready_loaded = getattr(self, "_ready_loaded", 0) + loaded
+            self._ready_errors = getattr(self, "_ready_errors", []) + list(loader.load_errors)
         if loaded == 0 and cloud_batch:
             # 클라우드에서 아직 받는 중: 이 묶음에 볼 영상이 없어도 오류가 아님
+            # (전부 끝났는데도 0개면 _finish_cloud_session이 그때 알림)
             self._statusbar.showMessage("아직 다운로드 중입니다. 받은 시리즈부터 표시합니다.", 6000)
             QTimer.singleShot(0, self._drain_ready_queue)
             return
