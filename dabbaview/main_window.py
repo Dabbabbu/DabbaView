@@ -271,6 +271,7 @@ class MainWindow(QMainWindow):
         self._setup_update_check()
         self._setup_lazy_cloud()
         self._install_popup_watcher()
+        QTimer.singleShot(0, self._apply_ui_scale)      # 저장해 둔 화면 크기 적용
         # 다른 앱에 갔다 돌아왔을 때 팝업이 뒤로 숨어 먹통이 되지 않게
         self._modal_raiser = _ModalRaiser()
         QApplication.instance().installEventFilter(self._modal_raiser)
@@ -585,6 +586,8 @@ class MainWindow(QMainWindow):
         # View 메뉴
         view_menu = menubar.addMenu("&View")
         self._view_menu = view_menu
+        self._init_ui_scale_menu(view_menu)
+        view_menu.addSeparator()
 
         # 툴바와 같은 QAction을 공유 (단축키 중복 시 Qt가 둘 다 무시함)
         view_menu.addAction(self._act_reset)
@@ -1443,6 +1446,52 @@ class MainWindow(QMainWindow):
         if "설정" in title or "settings" in name:
             return "⚙"
         return "🪟"
+
+    UI_SCALES = (0.9, 1.0, 1.1, 1.25, 1.5, 1.75)
+
+    def _apply_ui_scale(self, scale=None):
+        """도구 막대·탭·메뉴 글자 크기를 배율에 맞게 (작게 보이거나 눈이 불편할 때)"""
+        from PyQt5.QtGui import QFont
+        settings = self._app_settings
+        if scale is not None:
+            settings.set_ui_scale(scale)
+        scale = settings.ui_scale()
+        if not hasattr(self, "_base_font_pt"):
+            self._base_font_pt = QApplication.instance().font().pointSizeF() or 13.0
+        font = QFont(QApplication.instance().font())
+        font.setPointSizeF(max(8.0, self._base_font_pt * scale))
+        QApplication.instance().setFont(font)
+        for widget in (self, self.menuBar(), getattr(self, "_tab_widget", None)):
+            if widget is not None:
+                widget.setFont(font)
+        for bar in self.findChildren(QToolBar):
+            bar.setFont(font)
+            for child in bar.findChildren(QWidget):
+                child.setFont(font)
+        if getattr(self, "_tab_widget", None) is not None:
+            self._tab_widget.tabBar().setFont(font)
+        self._statusbar.showMessage(f"화면 크기 {scale * 100:.0f}%", 3000)
+        QTimer.singleShot(0, self._place_side_tab)
+
+    def _step_ui_scale(self, direction):
+        current = self._app_settings.ui_scale()
+        steps = list(self.UI_SCALES)
+        nearest = min(range(len(steps)), key=lambda i: abs(steps[i] - current))
+        index = min(len(steps) - 1, max(0, nearest + direction))
+        self._apply_ui_scale(steps[index])
+
+    def _init_ui_scale_menu(self, menu):
+        sub = menu.addMenu("🔍 화면 크기")
+        bigger = sub.addAction("크게")
+        bigger.setShortcut(QKeySequence("Ctrl+Shift+="))
+        bigger.triggered.connect(lambda: self._step_ui_scale(+1))
+        smaller = sub.addAction("작게")
+        smaller.setShortcut(QKeySequence("Ctrl+Shift+-"))
+        smaller.triggered.connect(lambda: self._step_ui_scale(-1))
+        sub.addSeparator()
+        for value in self.UI_SCALES:
+            action = sub.addAction(f"{value * 100:.0f}%" + ("  (기본)" if value == 1.0 else ""))
+            action.triggered.connect(lambda _c=False, v=value: self._apply_ui_scale(v))
 
     def _setup_lazy_cloud(self):
         """빠른 열기: 볼 때 나머지를 받는 동안 상태바에 알림 (다른 스레드에서 오므로 시그널로)"""

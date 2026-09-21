@@ -273,6 +273,17 @@ class AppSettings:
         self._qs.setValue("update/skip", str(tag or ""))
 
     # Reading (기록)
+    def ui_scale(self):
+        """도구 막대·탭 등 화면 요소 크기 배율 (1.0 = 기본)"""
+        try:
+            value = float(self._qs.value("ui_scale", 1.0))
+        except (TypeError, ValueError):
+            value = 1.0
+        return min(2.0, max(0.8, value))
+
+    def set_ui_scale(self, value):
+        self._qs.setValue("ui_scale", round(min(2.0, max(0.8, float(value))), 2))
+
     def cloud_download_dir(self):
         """클라우드에서 받은 파일을 저장할 폴더 (기본: 운영체제 기본 다운로드 폴더/DabbaView)"""
         value = self._qs.value("cloud_download_dir", "", type=str)
