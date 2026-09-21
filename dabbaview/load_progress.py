@@ -11,8 +11,20 @@
 import time
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtWidgets import (QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton,
-                             QVBoxLayout)
+from PyQt5.QtCore import QSettings
+from PyQt5.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QLabel, QProgressBar,
+                             QPushButton, QVBoxLayout)
+
+AUTO_CLOSE_KEY = "ui/auto_close_progress"
+
+
+def auto_close_setting():
+    """진행 창을 끝나면 자동으로 닫을지 (기본: 닫음) — 앱 전체에서 같은 값"""
+    return QSettings("DabbaView", "DabbaView").value(AUTO_CLOSE_KEY, True, type=bool)
+
+
+def set_auto_close_setting(on):
+    QSettings("DabbaView", "DabbaView").setValue(AUTO_CLOSE_KEY, bool(on))
 
 
 def human_time(seconds):
@@ -80,7 +92,16 @@ class LoadProgressDialog(QDialog):
         layout.addWidget(self.detail)
 
         row = QHBoxLayout()
+        self.auto_close = QCheckBox("끝나면 자동으로 닫기")
+        self.auto_close.setToolTip("끄면 다 끝난 뒤에도 창이 남아 결과를 보여 주고, '닫기'로 직접 닫습니다")
+        self.auto_close.setChecked(auto_close_setting())
+        self.auto_close.toggled.connect(set_auto_close_setting)
+        row.addWidget(self.auto_close)
         row.addStretch(1)
+        self.close_button = QPushButton("닫기")
+        self.close_button.setEnabled(False)           # 끝나기 전에는 비활성
+        self.close_button.setToolTip("작업이 끝나면 누를 수 있습니다")
+        self.close_button.clicked.connect(self.close)
         self.force_button = QPushButton("강제 중단")
         self.force_button.setToolTip("기다리지 않고 바로 닫습니다 (읽던 파일은 버립니다)")
         self.force_button.clicked.connect(self._on_force)
@@ -90,7 +111,9 @@ class LoadProgressDialog(QDialog):
         self.cancel_button.clicked.connect(self._on_cancel)
         row.addWidget(self.force_button)
         row.addWidget(self.cancel_button)
+        row.addWidget(self.close_button)
         layout.addLayout(row)
+        self._finished = False
         from PyQt5.QtWidgets import QSizePolicy
         for label in (self.label, self.stats, self.detail):
             label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -203,7 +226,10 @@ class LoadProgressDialog(QDialog):
         self.force_stopped.emit()
 
     def reject(self):
-        """ESC = 취소 (창은 닫지 않음 — 정리 후 닫힘)"""
+        """ESC = 취소 (창은 닫지 않음 — 정리 후 닫힘). 끝난 뒤에는 닫기"""
+        if self._finished:
+            self.close()
+            return
         self._on_cancel()
 
     def closeEvent(self, event):
@@ -220,3 +246,25 @@ class LoadProgressDialog(QDialog):
 
     def wasCanceled(self):                             # noqa: N802 - 호환용
         return not self.cancel_button.isEnabled()
+
+    def finish(self, summary="", ok=True):
+        """작업이 끝남: 결과를 보여 주고, 설정에 따라 자동으로 닫거나 '닫기'를 활성화"""
+        if self._finished:
+            return
+        self._finished = True
+        self._ticker.stop()
+        elapsed = time.monotonic() - self._start
+        self.bar.setRange(0, 100)
+        self.bar.setValue(100 if ok else self.bar.value())
+        self.spinner.setText("✓" if ok else "!")
+        self.label.setText(("완료" if ok else "중단됨") + (f" — {summary}" if summary else ""))
+        self.stats.setText(f"걸린 시간 {human_time(elapsed)}")
+        self.detail.setVisible(False)
+        self.force_button.setVisible(False)
+        self.cancel_button.setVisible(False)
+        self.close_button.setEnabled(True)
+        self.close_button.setDefault(True)
+        self.close_button.setToolTip("")
+        self.setWindowTitle("불러오기 완료" if ok else "불러오기 중단")
+        if self.auto_close.isChecked():
+            QTimer.singleShot(1200, self.close)   # '완료'를 잠깐 보여 주고 닫음

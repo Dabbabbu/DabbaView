@@ -1677,9 +1677,20 @@ class MainWindow(QMainWindow):
         self._load_watchdog.stop()
         self._update_ram()
         QTimer.singleShot(8000, lambda: self._load_worker is None and self._status_ram.setVisible(False))
-        if self._load_progress is not None:
-            self._load_progress.close()
-            self._load_progress = None
+        # 진행 창: 결과를 보여 준 뒤 설정에 따라 자동으로 닫거나 '닫기' 버튼을 켬
+        progress, self._load_progress = self._load_progress, None
+        if progress is not None:
+            if not progress.isVisible():          # 조용한 불러오기(클라우드 도착분 등)
+                progress.close()
+            else:
+                nseries = len(loader.series_dict)
+                if cancelled:
+                    summary, ok = f"취소 — 여기까지 읽은 영상 {loaded:,}개", nseries > 0
+                elif loaded == 0:
+                    summary, ok = "불러올 영상이 없습니다", False
+                else:
+                    summary, ok = f"{loaded:,}개 파일 · 시리즈 {nseries}개", True
+                progress.finish(summary, ok)
 
         if cancelled and not loader.series_dict:
             self._statusbar.showMessage("Loading cancelled", 5000)

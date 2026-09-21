@@ -10,7 +10,7 @@
 import os
 import traceback
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel,
                              QLineEdit, QMessageBox, QProgressBar, QPushButton,
                              QRadioButton, QStyle,
@@ -65,6 +65,8 @@ class CloudBrowserDialog(QDialog):
         self._stack = []          # 들어간 폴더들 (CloudItem)
         self._items = []
         self.downloaded = []
+        self.on_downloaded = None        # 다 받았을 때 부를 함수 (영상 불러오기)
+        self._downloaded_handled = False
         self._base_title = f"Open from {provider.name}"
         self.setWindowTitle(self._base_title)
         self.resize(760, 560)
@@ -199,6 +201,12 @@ class CloudBrowserDialog(QDialog):
         status_row.addWidget(self._status, 1)
         layout.addLayout(status_row)
         buttons = QHBoxLayout()
+        from ..load_progress import auto_close_setting, set_auto_close_setting
+        self._auto_close = QCheckBox("끝나면 자동으로 닫기")
+        self._auto_close.setToolTip("끄면 다 받은 뒤에도 창이 남아 결과를 보여 주고, '닫기'로 직접 닫습니다")
+        self._auto_close.setChecked(auto_close_setting())
+        self._auto_close.toggled.connect(set_auto_close_setting)
+        buttons.addWidget(self._auto_close)
         buttons.addStretch()
         self._open_here = QPushButton("📂 이 폴더 전체 열기")
         self._open_here.setToolTip("지금 들어와 있는 폴더를 하위 폴더까지 통째로 엽니다 (고를 필요 없음)")
@@ -935,8 +943,29 @@ class CloudBrowserDialog(QDialog):
             self._dest_hint.setText(
                 f"저장한 곳: {stats.get('folder', '')}  ·  "
                 f"남은 공간 {human_size(self._disk_free()[0])}")
-            self.accept()
+            self._complete(stats)
         self._run("폴더 확인 중...", plan_task, planned)
+
+    def _complete(self, stats):
+        """다 받음 → 불러오기를 시작하고, '끝나면 자동으로 닫기'면 닫고 아니면 결과를 남겨 둠"""
+        from ..load_progress import auto_close_setting
+        if self.on_downloaded is not None:
+            self.on_downloaded(self)                 # 영상 불러오기 (창을 닫지 않아도 바로)
+        self._downloaded_handled = True
+        self._spinner.setText("✓")
+        self._progress.setRange(0, 1)
+        self._progress.setValue(1)
+        self._progress.setFormat("완료")
+        self._status.setText(
+            f"완료 — 파일 {stats.get('done', 0):,}개"
+            + (f" (캐시 {stats['hits']:,}개)" if stats.get("hits") else "")
+            + f" · {human_size(stats.get('bytes', 0))} 받음 · 폴더 {stats.get('groups', 1)}개")
+        self.setWindowTitle(f"{self._base_title} — 완료")
+        self._cancel.setText("닫기")
+        self._cancel.setEnabled(True)
+        self._cancel.setDefault(True)
+        if self._auto_close.isChecked() and auto_close_setting():
+            QTimer.singleShot(1200, self.accept)
 
     def _close(self):
         if self._worker is not None:
@@ -986,23 +1015,26 @@ def open_from_cloud(main_window, provider):
     except NotConfigured:
         return
 
-    def finished(result):
-        # 창을 닫은 뒤 처리 (모달이 아니므로 탐색·다운로드 중에도 뷰어를 쓸 수 있음)
-        main_window._cloud_dialog = None
-        dialog.deleteLater()
-        if result != QDialog.Accepted or not dialog.downloaded:
+    def load_downloaded(dlg):
+        """다 받은 즉시 불러오기 (창을 남겨 둬도 영상은 바로 열림)"""
+        if not dlg.downloaded:
             return
-        stats = getattr(dialog, "stats", {})
+        stats = getattr(dlg, "stats", {})
         main_window.statusBar().showMessage(
             f"{provider.name}: 파일 {stats.get('total', 0)}개 (캐시 {stats.get('hits', 0)}개, "
             f"내려받음 {cache.human_size(stats.get('bytes', 0))}"
             + (f", 건너뜀 {stats['skipped']}개" if stats.get("skipped") else "") + ") 불러오는 중...",
             10000)
-        if getattr(dialog, "_progressive", False):
+        if getattr(dlg, "_progressive", False):
             return                      # 폴더마다 이미 불러왔음 (다시 불러오지 않음)
         # 로컬 Open Folder와 같은 방식으로 (세션 폴더는 최근 목록에 남기지 않음)
-        main_window.load_paths(dialog.downloaded, remember=False)
+        main_window.load_paths(dlg.downloaded, remember=False)
 
+    def finished(_result):
+        main_window._cloud_dialog = None
+        dialog.deleteLater()
+
+    dialog.on_downloaded = load_downloaded
     dialog.finished.connect(finished)
     main_window._cloud_dialog = dialog      # 참조 유지 (없으면 바로 사라짐)
     dialog.setModal(False)                  # 창을 띄워 둔 채 다른 작업 가능
