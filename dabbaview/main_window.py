@@ -1193,6 +1193,7 @@ class MainWindow(QMainWindow):
     def begin_cloud_session(self, total_groups):
         """클라우드에서 여러 폴더를 받기 시작 — 첫 폴더는 목록을 새로 채우고, 이후는 더한다"""
         self._ready_queue = []
+        self._cloud_progress = None
         self._ready_first = True
         self._ready_state = (0, total_groups)
         self._ready_loaded = 0           # 이번 세션에서 실제로 열린 영상 수
@@ -1251,6 +1252,15 @@ class MainWindow(QMainWindow):
         if total == 0 or done < total or getattr(self, "_ready_checked", True):
             return
         self._ready_checked = True
+        progress, self._cloud_progress = getattr(self, "_cloud_progress", None), None
+        if progress is not None:
+            try:
+                files = getattr(self, "_ready_loaded", 0)
+                nseries = len(self._loader.series_dict) if self._loader is not None else 0
+                progress.finish(f"전체 {files:,}개 파일 · 시리즈 {nseries}개 · 폴더 {total}개",
+                                files > 0)
+            except RuntimeError:
+                pass
         if getattr(self, "_ready_loaded", 0) > 0:
             return
         errors = getattr(self, "_ready_errors", [])
@@ -1269,6 +1279,21 @@ class MainWindow(QMainWindow):
                 "· 파일이 영상이 아니거나 손상됐을 수 있습니다.\n"
                 "· 받을 파일 유형에서 영상 형식(.dcm 등)을 체크했는지 확인해 주세요.")
 
+    def _refresh_cloud_progress(self):
+        """클라우드 세션 진행 창에 지금까지 불러온 누적 숫자 표시"""
+        progress = getattr(self, "_cloud_progress", None)
+        if progress is None:
+            return
+        try:
+            done, total = getattr(self, "_ready_state", (0, 0))
+            files = getattr(self, "_ready_loaded", 0)
+            nseries = len(self._loader.series_dict) if self._loader is not None else 0
+            progress.show_ongoing(
+                f"지금까지 {files:,}개 파일 · 시리즈 {nseries}개 열림 — 나머지 폴더는 받는 대로 추가",
+                f"받은 폴더 {done}/{total}", done, total)
+        except RuntimeError:
+            self._cloud_progress = None
+
     def _update_ready_status(self):
         done, total = getattr(self, "_ready_state", (0, 0))
         if not hasattr(self, "_status_ready"):
@@ -1284,6 +1309,7 @@ class MainWindow(QMainWindow):
         else:
             self._status_ready.setText(f"☁ 준비된 폴더 {done}/{total} · 나머지 받는 중")
         self._status_ready.setToolTip("다 받은 폴더(시리즈)는 왼쪽 목록에 바로 나타나 볼 수 있습니다")
+        self._refresh_cloud_progress()
         self._status_ready.setVisible(True)
 
     def _attach_text_reports(self, loader):
@@ -1384,52 +1410,65 @@ class MainWindow(QMainWindow):
         except RuntimeError:      # 창이 이미 지워진 뒤에 알림이 오면 무시
             pass
 
+    SIDE_TAB_STYLE = ("QPushButton{background:#2b3a55;color:#dbe5f5;border:1px solid #3d8bfd;"
+                      "border-top-left-radius:8px;border-top-right-radius:8px;"
+                      "padding:8px 12px;font-size:12px;text-align:left}"
+                      "QPushButton:hover{background:#35507a}")
+
     def _refresh_side_tab(self):
+        """열린 창마다 탭 하나씩 (3D Volume 탭 오른쪽에 나란히)"""
         alive = self._live_popups()
-        if not hasattr(self, "_side_tab"):
-            self._side_tab = QPushButton(self)
-            self._side_tab.setCursor(Qt.PointingHandCursor)
-            self._side_tab.setStyleSheet(
-                "QPushButton{background:#2b3a55;color:#dbe5f5;border:1px solid #3d8bfd;"
-                "border-top-left-radius:8px;border-top-right-radius:8px;"
-                "padding:8px 12px;font-size:12px;text-align:left}"
-                "QPushButton:hover{background:#35507a}")
-            self._side_tab.clicked.connect(self._raise_popup)
-            self._side_tab.hide()
-        if not alive:
-            self._side_tab.hide()
-            return
-        widget, icon = alive[0]
-        title = widget.windowTitle() or "열린 창"
-        more = f"  +{len(alive) - 1}" if len(alive) > 1 else ""
-        self._side_tab.setText(f"{icon}  {title}{more}")
-        self._side_tab.setToolTip("누르면 그 창을 앞으로 가져옵니다")
-        self._side_tab.adjustSize()
+        tabs = getattr(self, "_side_tabs", [])
+        while len(tabs) < len(alive):
+            button = QPushButton(self)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setStyleSheet(self.SIDE_TAB_STYLE)
+            button.setToolTip("누르면 그 창을 앞으로 가져옵니다")
+            button.clicked.connect(lambda _c=False, b=button: self._raise_popup(b.property("popup_index")))
+            tabs.append(button)
+        self._side_tabs = tabs
+        for i, button in enumerate(tabs):
+            if i >= len(alive):
+                button.hide()
+                continue
+            widget, icon = alive[i]
+            title = widget.windowTitle() or "열린 창"
+            button.setProperty("popup_index", i)
+            button.setText(f"{icon}  {title}")
+            button.show()
+            button.raise_()
         self._place_side_tab()
-        self._side_tab.show()
-        self._side_tab.raise_()
 
     def _place_side_tab(self):
-        """탭 줄(2D View … 3D Volume) 오른쪽 끝에 붙인다"""
-        if not hasattr(self, "_side_tab") or not self._side_tab.isVisible():
+        """탭 줄(2D View … 3D Volume) 오른쪽에 붙여 나란히 놓는다 (자리가 모자라면 글자를 줄임)"""
+        tabs = [b for b in getattr(self, "_side_tabs", []) if b.isVisible()]
+        if not tabs:
             return
-        width = self._side_tab.width()
-        x, y = self.width() - width - 8, 150
+        x, y, height = 8, 150, None
         bar = getattr(getattr(self, "_tab_widget", None), "tabBar", None)
         if bar is not None:
             tab_bar = self._tab_widget.tabBar()
             last = tab_bar.tabRect(tab_bar.count() - 1)       # 3D Volume 탭
             point = tab_bar.mapTo(self, last.topRight())
-            y = point.y()
-            self._side_tab.setFixedHeight(max(24, last.height()))
-            x = min(self.width() - width - 8, point.x() + 12)  # 3D Volume 바로 오른쪽
-        self._side_tab.move(max(0, x), max(0, y))
+            x, y, height = point.x() + 12, point.y(), max(24, last.height())
+        room = max(120, self.width() - 8 - x - 4 * (len(tabs) - 1))
+        each = max(90, room // len(tabs))
+        for button in tabs:
+            if height:
+                button.setFixedHeight(height)
+            button.setMinimumWidth(0)
+            button.setMaximumWidth(16777215)
+            button.adjustSize()
+            if button.width() > each:
+                button.setFixedWidth(each)
+            button.move(max(0, min(x, self.width() - button.width() - 8)), max(0, y))
+            x += button.width() + 4
 
-    def _raise_popup(self):
+    def _raise_popup(self, index=0):
         alive = self._live_popups()
         if not alive:
             return
-        widget = alive[0][0]
+        widget = alive[min(int(index or 0), len(alive) - 1)][0]
         widget.showNormal()
         widget.raise_()
         widget.activateWindow()
@@ -1787,7 +1826,12 @@ class MainWindow(QMainWindow):
                     summary, ok = "불러올 영상이 없습니다", False
                 else:
                     summary, ok = f"{loaded:,}개 파일 · 시리즈 {nseries}개", True
-                progress.finish(summary, ok)
+                if cloud_batch and not cancelled and getattr(self, "_ready_state", (0, 0))[1] > 1:
+                    # 클라우드 여러 폴더: 첫 묶음만 연 것 → '완료'가 아니라 받는 대로 누적해서 보여 줌
+                    self._cloud_progress = progress
+                    QTimer.singleShot(0, self._refresh_cloud_progress)
+                else:
+                    progress.finish(summary, ok)
 
         if cancelled and not loader.series_dict:
             self._statusbar.showMessage("Loading cancelled", 5000)
@@ -1837,6 +1881,7 @@ class MainWindow(QMainWindow):
             self._report_library.set_studies(self._studies_for_matching())
             self._attach_text_reports(loader)
             self._statusbar.showMessage(f"새 시리즈 {len(new_uids)}개가 준비되었습니다 — 바로 볼 수 있습니다", 6000)
+            self._refresh_cloud_progress()
             QTimer.singleShot(0, self._drain_ready_queue)
             return
         if cloud_batch:
@@ -3233,8 +3278,8 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass
         self._popups = []
-        if hasattr(self, "_side_tab"):
-            self._side_tab.hide()
+        for button in getattr(self, "_side_tabs", []):
+            button.hide()
 
     def _sync_volume_tabs(self):
         """현재 탭이 MPR/3D일 때만 볼륨 구성 (전체 슬라이스 픽셀 로딩 필요)"""

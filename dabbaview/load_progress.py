@@ -189,6 +189,9 @@ class LoadProgressDialog(QDialog):
         mark = self.SPINNER[self._spin]
         self.spinner.setText(mark)
         numbers = getattr(self, "_last_numbers", None)
+        if getattr(self, "_ongoing", False):
+            self.stats.setText(f"{self._last_stats}  ·  경과 {human_time(elapsed)}")
+            return
         if numbers:                      # 경과 시간은 지금 기준으로 다시 계산
             done, total = numbers
             percent = (done * 100.0 / total) if total else 0.0
@@ -227,7 +230,7 @@ class LoadProgressDialog(QDialog):
 
     def reject(self):
         """ESC = 취소 (창은 닫지 않음 — 정리 후 닫힘). 끝난 뒤에는 닫기"""
-        if self._finished:
+        if self._finished or getattr(self, "_ongoing", False):
             self.close()
             return
         self._on_cancel()
@@ -244,6 +247,26 @@ class LoadProgressDialog(QDialog):
         event.accept()
         self.hide()
 
+    def show_ongoing(self, text, stats, done, total):
+        """클라우드: 첫 묶음은 열었고 나머지 폴더는 받는 대로 더하는 중 — 누적 숫자로 계속 갱신"""
+        self._ongoing = True
+        self._last_numbers = None
+        self.label.setText(text)
+        self._last_stats = stats
+        self._last_update = time.monotonic()
+        self.stats.setText(stats)
+        if total > 0:
+            self.bar.setRange(0, total)
+            self.bar.setValue(done)
+        self.detail.setVisible(False)
+        self.force_button.setVisible(False)
+        self.cancel_button.setVisible(False)
+        self.close_button.setEnabled(True)          # 창만 닫음 — 받기·불러오기는 계속됨
+        self.close_button.setToolTip("창만 닫습니다. 받기와 불러오기는 뒤에서 계속됩니다")
+        self.setWindowTitle("불러오는 중 — 받는 대로 추가")
+        if not self._ticker.isActive():
+            self._ticker.start()
+
     def wasCanceled(self):                             # noqa: N802 - 호환용
         return not self.cancel_button.isEnabled()
 
@@ -252,6 +275,7 @@ class LoadProgressDialog(QDialog):
         if self._finished:
             return
         self._finished = True
+        self._ongoing = False
         self._ticker.stop()
         elapsed = time.monotonic() - self._start
         self.bar.setRange(0, 100)
