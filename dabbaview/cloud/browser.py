@@ -118,7 +118,17 @@ class CloudBrowserDialog(QDialog):
         from .recent_searches import attach as attach_recent
         self._recent, self._recent_popup = attach_recent(self._search, self._do_search)
         self._search.setToolTip(self._search.toolTip() + "\n검색칸을 누르면 최근 검색어가 나옵니다 (✕로 지우기).")
-        for w in (self._up, self._home, self._refresh):
+        # 키보드 없이 여러 개 고르기: 켜면 항목 앞에 체크 상자, 누를 때마다 체크/해제
+        self._check_mode = QPushButton("☑ 여러 개 선택")
+        self._check_mode.setCheckable(True)
+        self._check_mode.setToolTip("켜면 폴더 · 파일 앞에 체크 상자가 생기고, 누를 때마다 체크/해제됩니다\n"
+                                    "(⌘ · Shift 키 없이 여러 개 고르기). 고른 것은 '선택 항목 열기'로 엽니다.")
+        self._check_mode.toggled.connect(self._set_check_mode)
+        self._check_all = QPushButton("전체")
+        self._check_all.setToolTip("모두 체크 / 모두 해제")
+        self._check_all.clicked.connect(self._toggle_check_all)
+        self._check_all.setVisible(False)
+        for w in (self._up, self._home, self._refresh, self._check_mode, self._check_all):
             nav.addWidget(w)
         nav.addWidget(self._path, 1)
         nav.addWidget(self._search)
@@ -138,6 +148,9 @@ class CloudBrowserDialog(QDialog):
         self._tree.setColumnHidden(3, True)        # '위치'는 검색 결과에서만
         self._tree.itemDoubleClicked.connect(self._on_double_click)
         self._tree.itemSelectionChanged.connect(self._update_open_buttons)
+        self._tree.itemSelectionChanged.connect(self._sync_checks_from_selection)
+        self._tree.itemChanged.connect(self._on_check_changed)
+        self._syncing_checks = False
         self._tree.setMinimumHeight(300)          # 폴더를 한눈에 보도록
         layout.addWidget(self._tree, 1)
 
@@ -773,6 +786,7 @@ class CloudBrowserDialog(QDialog):
                 row.setToolTip(0, "Google 문서 형식 - 내려받을 수 없음")
             self._tree.addTopLevelItem(row)
         self._tree.setColumnHidden(3, not search)
+        self._apply_checkboxes()
         if search:
             self._tree.setColumnWidth(3, max(260, self._tree.width() // 2))
         self._up.setEnabled(bool(self._stack))
@@ -913,6 +927,57 @@ class CloudBrowserDialog(QDialog):
                 + (f"\n포함되는 하위 폴더: {inside}" if folders else ""))
         else:
             self._open_here.setText("📂 이 폴더 전체 열기")
+
+    # ─── 여러 개 선택(체크 상자) ───
+    def _set_check_mode(self, on):
+        self._check_all.setVisible(on)
+        self._check_mode.setText("☑ 여러 개 선택 중" if on else "☑ 여러 개 선택")
+        self._tree.setSelectionMode(QAbstractItemView.MultiSelection if on
+                                    else QAbstractItemView.ExtendedSelection)
+        self._apply_checkboxes()
+        if on:
+            self._status.setText("☑ 항목을 누를 때마다 체크/해제됩니다 — 다 골랐으면 '선택 항목 열기'")
+
+    def _apply_checkboxes(self):
+        on = self._check_mode.isChecked()
+        self._syncing_checks = True
+        try:
+            for i in range(self._tree.topLevelItemCount()):
+                row = self._tree.topLevelItem(i)
+                if on and not row.isDisabled():
+                    row.setFlags(row.flags() | Qt.ItemIsUserCheckable)
+                    row.setCheckState(0, Qt.Checked if row.isSelected() else Qt.Unchecked)
+                else:
+                    row.setFlags(row.flags() & ~Qt.ItemIsUserCheckable)
+                    row.setData(0, Qt.CheckStateRole, None)   # 체크 상자 없앰
+        finally:
+            self._syncing_checks = False
+
+    def _sync_checks_from_selection(self):
+        if self._check_mode.isChecked() and not self._syncing_checks:
+            self._apply_checkboxes()
+
+    def _on_check_changed(self, row, column):
+        """체크 상자를 직접 눌렀을 때 → 선택도 같이"""
+        if column != 0 or self._syncing_checks or not self._check_mode.isChecked():
+            return
+        want = row.checkState(0) == Qt.Checked
+        if row.isSelected() != want:
+            self._syncing_checks = True
+            row.setSelected(want)
+            self._syncing_checks = False
+            self._update_open_buttons()
+
+    def _toggle_check_all(self):
+        rows = [self._tree.topLevelItem(i) for i in range(self._tree.topLevelItemCount())]
+        rows = [r for r in rows if not r.isHidden() and not r.isDisabled()]
+        select = not all(r.isSelected() for r in rows)
+        self._syncing_checks = True
+        for r in rows:
+            r.setSelected(select)
+        self._syncing_checks = False
+        self._apply_checkboxes()
+        self._update_open_buttons()
 
     def _selected_items(self):
         return [r.data(0, Qt.UserRole) for r in self._tree.selectedItems()]
