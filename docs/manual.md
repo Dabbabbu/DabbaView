@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 4.0.2 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 4.1.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -42,10 +42,14 @@
 
 ### 미리 빌드된 앱 (권장)
 
-1. GitHub [Releases](https://github.com/Dabbabbu/DabbaView/releases/latest)에서 `DabbaView-v2.6.2-macOS.zip` (또는 `DabbaView-v2.6.2-Windows.zip`)을 받습니다. 파일 이름에 버전과 운영체제가 들어 있고, 로그인 없이 받을 수 있습니다.
-2. 압축을 풉니다.
-   - macOS: `DabbaView.app`을 **응용 프로그램(/Applications)** 폴더로 옮깁니다.
-   - Windows: `DabbaView` 폴더를 원하는 곳에 둡니다.
+1. GitHub [Releases](https://github.com/Dabbabbu/DabbaView/releases/latest)에서 받습니다 (로그인 필요 없음). 파일 이름에 버전과 운영체제가 들어 있습니다.
+   - macOS: `DabbaView-v4.1.0-macOS.zip`
+   - **Windows: `DabbaView-v4.1.0-Windows-Setup.exe` (권장)** — 설치 프로그램. 설치 폴더를 따로 고를 필요 없이 사용자 폴더(`%LOCALAPPDATA%\Programs\DabbaView`)에 설치되고 **바탕화면 · 시작 메뉴에 바로가기**가 생깁니다. 관리자 권한이 필요 없습니다.
+   - Windows (설치 없이): `DabbaView-v4.1.0-Windows.zip` — 압축을 풀어 `DabbaView\DabbaView.exe`를 실행.
+2. macOS는 압축을 풀어 `DabbaView.app`을 **응용 프로그램(/Applications)** 폴더로 옮기고, Windows는 Setup.exe를 실행해 **다음 → 설치**를 누릅니다.
+   - **앱 안에서 업데이트 (4.1.0부터)**: 새 버전이 나오면 켤 때 알림이 뜹니다. **⟳ 지금 업데이트**를 누르면 받기 → 닫기 → 설치 → 다시 켜기가 자동으로 됩니다 (Windows는 Setup.exe로 설치한 경우). **Help ▸ 🔄 새 버전 확인…**으로 직접 확인할 수도 있습니다.
+   - **새 버전으로 업데이트할 때 (Windows)**: 새 `…-Windows-Setup.exe`를 그냥 실행하면 같은 자리에 덮어써서 업데이트됩니다. 바로가기와 설정 · 라이브러리 · 캐시는 그대로입니다. 실행 중이면 설치 프로그램이 닫고 진행합니다.
+   - zip으로 쓰던 경우: 버전마다 폴더가 달라 예전 폴더의 exe · 바로가기는 새 버전으로 이어지지 않습니다. Setup.exe로 한 번 설치한 뒤 예전 폴더는 지워도 됩니다 (설정 · 라이브러리는 다른 곳에 저장돼 있어 사라지지 않음).
 3. 처음 열 때는 서명되지 않은 앱이라는 경고가 나옵니다.
    - macOS: 앱을 **우클릭 → 열기**를 누릅니다.
    - Windows: SmartScreen에서 **추가 정보 → 실행**을 누릅니다.

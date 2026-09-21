@@ -11,6 +11,7 @@ import functools
 import json
 import re
 import ssl
+import sys
 import urllib.request
 
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
@@ -43,8 +44,38 @@ def _ssl_context():
         return None
 
 
+def pick_asset(assets, platform=None):
+    """이 컴퓨터에 맞는 설치 파일 → (이름, 내려받기 주소) 또는 None
+
+    Windows: 설치 프로그램(…-Windows-Setup.exe) → 없으면 zip / macOS: …-macOS.zip
+    """
+    platform = platform or sys.platform
+    names = {a.get("name", ""): a.get("browser_download_url", "") for a in assets or []}
+    if platform == "win32":
+        order = ("-Windows-Setup.exe", "-Windows.zip")
+    elif platform == "darwin":
+        order = ("-macOS.zip",)
+    else:
+        return None
+    for suffix in order:
+        for name, url in names.items():
+            if name.endswith(suffix) and url:
+                return name, url
+    return None
+
+
+def release_summary(body, limit=12):
+    """Release 본문에서 '내려받기' 표 앞까지, 앞쪽 몇 줄만 (알림 창에 보여 줄 변경 내용)"""
+    text = str(body or "").split("## 내려받기")[0].strip()
+    lines = [re.sub(r"[*`]", "", line).rstrip() for line in text.splitlines() if line.strip()]
+    out = lines[:limit]
+    if len(lines) > limit:
+        out.append("…")
+    return "\n".join(out)
+
+
 def fetch_latest(url=API_URL):
-    """→ (태그, 이름, 페이지 주소). 실패하면 None"""
+    """→ {tag, name, page, asset: (이름, 주소) | None, notes}. 실패하면 None"""
     request = urllib.request.Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": f"DabbaView/{__version__}",
@@ -54,13 +85,14 @@ def fetch_latest(url=API_URL):
     tag = data.get("tag_name")
     if not tag:
         return None
-    return tag, data.get("name") or tag, data.get("html_url") or RELEASES_PAGE
+    return {"tag": tag, "name": data.get("name") or tag, "page": data.get("html_url") or RELEASES_PAGE,
+            "asset": pick_asset(data.get("assets")), "notes": release_summary(data.get("body"))}
 
 
 class UpdateChecker(QObject):
     """백그라운드로 최신 버전 확인. 새 버전이 있을 때만 found를 보냄"""
 
-    found = pyqtSignal(str, str)   # 태그, 페이지 주소
+    found = pyqtSignal(object)     # fetch_latest()의 dict (새 버전일 때만)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -87,8 +119,8 @@ class UpdateChecker(QObject):
             worker.deleteLater()
             if not found:
                 return
-            tag, _name, url = found
+            tag = found.get("tag")
             if is_newer(tag) and (skip_version or "").strip() != str(tag).strip():
-                self.found.emit(tag, url)
+                self.found.emit(found)
         worker.result.connect(done)
         worker.start()

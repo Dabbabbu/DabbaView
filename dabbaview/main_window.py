@@ -5,6 +5,7 @@
 DabbaView 메인 윈도우
 """
 import os
+import sys
 import threading
 import time
 from PyQt5.QtWidgets import (
@@ -3052,24 +3053,110 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(9000, lambda: None if self._update_seen else
                           self._statusbar.showMessage(f"이미 최신 버전입니다 (v{__version__}).", 5000))
 
-    def _on_update_found(self, tag, url):
+    def _on_update_found(self, info):
+        """새 버전 알림 — 이 컴퓨터에 맞는 설치 파일을 바로 받을 수 있게"""
         from .update_check import RELEASES_PAGE
         self._update_seen = True
+        tag = info.get("tag", "")
+        asset = info.get("asset")
+        page = info.get("page") or RELEASES_PAGE
         box = QMessageBox(self)
         box.setWindowModality(Qt.ApplicationModal)
         box.setIcon(QMessageBox.Information)
-        box.setWindowTitle("새 버전")
-        box.setText(f"DabbaView {tag}이(가) 출시되었습니다. (현재 v{__version__})")
-        box.setInformativeText("Releases 페이지에서 macOS · Windows용 zip을 받을 수 있습니다.")
+        box.setWindowTitle("새 버전이 나왔습니다")
+        box.setText(f"<b>DabbaView {tag}</b>이(가) 나왔습니다. (지금 v{__version__})<br>"
+                    "새 버전을 설치한 뒤 사용하세요.")
+        from .self_update import can_self_update
+        auto_ok, auto_why = can_self_update(asset[0]) if asset else (False, "")
+        if auto_ok:
+            how = ("⟳ 지금 업데이트 → 새 버전을 받은 뒤 DabbaView를 닫고 설치하고 다시 켭니다.\n"
+                   "설정 · 라이브러리 · 캐시는 그대로 남습니다.")
+        elif sys.platform == "win32" and asset and asset[0].endswith(".exe"):
+            how = ("⬇ 설치 파일 받기 → 받은 Setup.exe 실행 → 다음 · 설치.\n"
+                   "같은 자리에 덮어써서 바탕화면 · 시작 메뉴 바로가기가 그대로 작동하고, "
+                   "설정 · 라이브러리도 그대로 남습니다. (이 창을 닫고 DabbaView를 끄면 더 빠릅니다)")
+        elif sys.platform == "darwin":
+            how = ("⬇ 설치 파일 받기 → 압축을 풀어 DabbaView.app을 응용 프로그램 폴더에 덮어쓰기.\n"
+                   "설정 · 라이브러리는 그대로 남습니다.")
+        else:
+            how = "Releases 페이지에서 새 버전을 받으세요."
+        if auto_why and not auto_ok:
+            how += f"\n\n({auto_why})"
+        box.setInformativeText(how)
+        if info.get("notes"):
+            box.setDetailedText(f"{tag} 달라진 점\n\n{info['notes']}")
         skip = QCheckBox("이 버전은 다시 알리지 않기")
         box.setCheckBox(skip)
-        download = box.addButton("다운로드 페이지 열기", QMessageBox.AcceptRole)
+        update_now = box.addButton("⟳ 지금 업데이트", QMessageBox.AcceptRole) if auto_ok else None
+        download = box.addButton("⬇ 설치 파일 받기", QMessageBox.AcceptRole) if asset else None
+        open_page = box.addButton("Release 페이지 열기", QMessageBox.HelpRole)
         box.addButton("나중에", QMessageBox.RejectRole)
+        if download is not None:
+            download.setToolTip(asset[0])
+            box.setDefaultButton(download)
+        if update_now is not None:
+            update_now.setToolTip("앱 안에서 받아 설치하고 다시 켭니다")
+            box.setDefaultButton(update_now)
         box.exec_()
         if skip.isChecked():
             self._app_settings.set_update_skip_version(tag)
-        if box.clickedButton() is download:
-            QDesktopServices.openUrl(QUrl(url or RELEASES_PAGE))
+        clicked = box.clickedButton()
+        if update_now is not None and clicked is update_now:
+            self._start_self_update(tag, asset)
+        elif download is not None and clicked is download:
+            QDesktopServices.openUrl(QUrl(asset[1]))     # 브라우저가 파일을 바로 내려받음
+            self._statusbar.showMessage(f"{asset[0]} 내려받는 중 — 다 받으면 실행해서 설치하세요.", 15000)
+        elif clicked is open_page:
+            QDesktopServices.openUrl(QUrl(page))
+
+    def _start_self_update(self, tag, asset):
+        """앱 안 업데이트: 받기(진행 표시) → 닫고 설치할지 묻기 → 닫히면 설치 · 다시 켜기"""
+        from PyQt5.QtWidgets import QProgressDialog
+        from .self_update import Downloader
+        from .progress_text import human_size
+        name, url = asset
+        dialog = QProgressDialog(f"DabbaView {tag} 받는 중…", "취소", 0, 100, self)
+        dialog.setWindowTitle("업데이트")
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        worker = Downloader(url, name, self)
+        self._update_worker = worker
+
+        def progress(got, total):
+            if total:
+                dialog.setValue(int(got * 100 / total))
+                dialog.setLabelText(f"DabbaView {tag} 받는 중…  {human_size(got)} / {human_size(total)}")
+            else:
+                dialog.setLabelText(f"DabbaView {tag} 받는 중…  {human_size(got)}")
+
+        def ok(path):
+            dialog.close()
+            self._update_worker = None
+            answer = QMessageBox.question(
+                self, "업데이트 준비 완료",
+                f"DabbaView {tag}을(를) 다 받았습니다.\n\n지금 DabbaView를 닫고 설치할까요? "
+                "설치가 끝나면 자동으로 다시 켜집니다 (1분 안쪽).\n저장하지 않은 작업이 있으면 먼저 물어봅니다.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if answer == QMessageBox.Yes:
+                self._pending_update = path
+                self.close()
+            else:
+                self._statusbar.showMessage("업데이트를 미뤘습니다 — Help ▸ 새 버전 확인으로 다시 할 수 있습니다.", 8000)
+
+        def failed(message):
+            dialog.close()
+            self._update_worker = None
+            if "취소" not in message:
+                QMessageBox.warning(self, "업데이트", f"새 버전을 받지 못했습니다.\n{message}\n\n"
+                                    "'⬇ 설치 파일 받기'로 직접 받아 설치할 수도 있습니다.")
+
+        worker.progress.connect(progress)
+        worker.finished_ok.connect(ok)
+        worker.failed.connect(failed)
+        dialog.canceled.connect(lambda: setattr(worker, "cancelled", True))
+        worker.start()
 
     # ─── 작업(ROI · 측정 · 주석) 저장 · 복원 ───
     def _setup_worksave(self):
@@ -3486,6 +3573,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if not self._ask_save_work_on_exit():   # 저장하지 않은 ROI · 측정 · 주석
             event.ignore()
+            self._pending_update = None          # 닫기를 취소하면 업데이트도 미룸
             return
         # 불러오는 중에 종료(⌘Q 포함): 로더를 취소하고 끝날 때까지 잠시 기다림 - 클라우드 경고창에
         # 답을 기다리던 로더도 풀어 줌. 돌고 있는 QThread를 지우면 앱이 비정상 종료됨
@@ -3504,6 +3592,13 @@ class MainWindow(QMainWindow):
         self._ai_panel.shutdown()  # 편집한 마스크 저장
         self._series_tree.shutdown()
         self._series_panel.shutdown()
+        pending, self._pending_update = getattr(self, "_pending_update", None), None
+        if pending:                              # 앱 안 업데이트: 앱이 꺼지면 설치 · 다시 켜기
+            from . import self_update
+            try:
+                self_update.apply(pending)
+            except Exception as exc:              # noqa: BLE001
+                QMessageBox.warning(self, "업데이트", f"설치를 시작하지 못했습니다: {exc}")
         super().closeEvent(event)
         if event.isAccepted():
             # 독립 창이 하나라도 남아 있으면 Qt가 앱을 끝내지 않으므로 명시적으로 종료

@@ -87,6 +87,22 @@ jobs:
           name: DabbaView-Windows
           path: DabbaView-Windows.zip
 
+      # 설치 프로그램: 한 번 설치하면 바탕화면 · 시작 메뉴 바로가기가 생기고, 새 버전도 같은 자리에 덮어써서 업데이트
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          $v = (Select-String -Path dabbaview\__init__.py -Pattern '__version__ = "(.+?)"').Matches[0].Groups[1].Value
+          & $iscc "/DAppVersion=$v" installer\DabbaView.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item dist-installer\DabbaView-Setup.exe
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: DabbaView-Windows-Setup
+          path: dist-installer/DabbaView-Setup.exe
+
   release:
     name: Release (태그를 올렸을 때)
     needs: [macos, windows]
@@ -103,10 +119,15 @@ jobs:
         with:
           name: DabbaView-Windows
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: DabbaView-Windows-Setup
+
       - name: 파일 이름에 버전 · OS 넣기
         run: |
           mv DabbaView-macOS.zip "DabbaView-$GITHUB_REF_NAME-macOS.zip"
           mv DabbaView-Windows.zip "DabbaView-$GITHUB_REF_NAME-Windows.zip"
+          mv DabbaView-Setup.exe "DabbaView-$GITHUB_REF_NAME-Windows-Setup.exe"
           ls -lh DabbaView-*.zip
 
       - name: Release 본문 (CHANGELOG에서 이 버전 부분만)
@@ -127,7 +148,8 @@ jobs:
           print("|---|---|---|")
           tag = "${{ github.ref_name }}"
           print(f"| macOS | `DabbaView-{tag}-macOS.zip` | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |")
-          print(f"| Windows | `DabbaView-{tag}-Windows.zip` | 압축을 풀고 `DabbaView\\DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |")
+          print(f"| **Windows (권장)** | `DabbaView-{tag}-Windows-Setup.exe` | 실행해서 설치 → **바탕화면 · 시작 메뉴 바로가기**가 생깁니다. 새 버전도 이 파일을 실행하면 같은 자리에 업데이트되어 바로가기가 그대로 작동. SmartScreen에서 **추가 정보 → 실행** |")
+          print(f"| Windows (설치 없이) | `DabbaView-{tag}-Windows.zip` | 압축을 풀고 `DabbaView\\DabbaView.exe` 실행 |")
           print()
           print("서명되지 않은 앱이라 처음 열 때 경고가 나옵니다. 전체 변경 이력은 [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).")
           print()
@@ -142,7 +164,8 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "DabbaView $GITHUB_REF_NAME" \
             --notes-file notes.md \
-            "DabbaView-$GITHUB_REF_NAME-macOS.zip" "DabbaView-$GITHUB_REF_NAME-Windows.zip"
+            "DabbaView-$GITHUB_REF_NAME-macOS.zip" "DabbaView-$GITHUB_REF_NAME-Windows.zip" \
+            "DabbaView-$GITHUB_REF_NAME-Windows-Setup.exe"
 
       - name: 이전 Release 정리 (최신 하나만 남김)
         env:

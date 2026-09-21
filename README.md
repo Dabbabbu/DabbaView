@@ -45,7 +45,7 @@ Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 
 | 🔌 **PACS · 연동** | C-STORE(DICOM Send) · DICOM Print, 익명화, Google Drive · OneDrive 열기, 포맷 변환(NIfTI ↔ DICOM 등) |
 | 🎬 **내보내기** | 화면 캡처, 동영상(MP4 · AVI · GIF), **여러 시리즈 일괄 동영상**, PNG 시퀀스 |
 
-<!-- version -->**Version** 4.0.2 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
+<!-- version -->**Version** 4.1.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
 
 > ⚠️ 진단용으로 인증된 의료기기가 아닙니다. 학습·연구·참고용으로 사용하세요.
 
@@ -375,7 +375,8 @@ Windows 빌드는 `onnxruntime`을 넣지 않습니다 (PyInstaller가 분석 �
 | 운영체제 | 파일 | 설치 |
 |---|---|---|
 | macOS | `DabbaView-v2.13.0-macOS.zip` (안에 `DabbaView.app`) | 압축을 풀고 `DabbaView.app`을 **응용 프로그램**으로 옮긴 뒤, 처음에는 **우클릭 → 열기** |
-| Windows | `DabbaView-v2.13.0-Windows.zip` (안에 `DabbaView\DabbaView.exe`) | 압축을 풀고 `DabbaView.exe` 실행. SmartScreen에서 **추가 정보 → 실행** |
+| **Windows (권장)** | `DabbaView-v4.1.0-Windows-Setup.exe` | 실행해서 설치 → **바탕화면 · 시작 메뉴 바로가기** 생성 (관리자 권한 불필요). 새 버전도 이 파일을 실행하면 같은 자리에 업데이트되어 바로가기가 그대로 작동. SmartScreen에서 **추가 정보 → 실행** |
+| Windows (설치 없이) | `DabbaView-v4.1.0-Windows.zip` (안에 `DabbaView\DabbaView.exe`) | 압축을 풀고 `DabbaView.exe` 실행 |
 
 버전 태그(`v2.6.0` 등)를 올리면 GitHub Actions가 두 플랫폼을 빌드하고 실행되는지 확인한 뒤 Release를 만들고 zip을 붙입니다. 새 Release가 올라가면 이전 Release는 자동으로 지워져 **항상 최신 하나만** 남습니다 (태그는 그대로 남아 소스는 언제든 받을 수 있습니다).
 태그 없이 main에 push한 빌드는 [Actions](https://github.com/Dabbabbu/DabbaView/actions) → 최근 빌드 → **Artifacts**에 남습니다 (GitHub 로그인 필요, 90일 보관).
