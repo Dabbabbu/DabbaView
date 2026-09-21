@@ -42,7 +42,7 @@ def install(main, menubar):
     install_acr(main, dock, menu)
     menu.addSeparator()
     toggle = menu.addAction("Analysis 패널 보이기/숨기기")
-    toggle.triggered.connect(lambda: dock.setVisible(not dock.isVisible()))
+    toggle.triggered.connect(lambda: main._close_dock(dock) if dock.isVisible() else (dock.show(), dock.raise_()))
     from ..viewport import DicomViewport
     DicomViewport.add_overlay_painter(draw_contours(main))
     DicomViewport.add_overlay_painter(tools_iq.paint_markers)

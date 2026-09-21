@@ -5,7 +5,7 @@
 탭 · 패널 닫기 버튼 (X) - 마우스를 올린 탭(또는 도크 제목)에만 X가 보이고, 누르면 부드럽게 닫힘
 
 - HoverCloseTabs: QTabBar에 붙임. 올린 탭의 X만 보임
-- HoverTitleBar: QDockWidget 제목 줄. 올리면 X(와 떼어내기) 보임
+- HoverTitleBar: QDockWidget 제목 줄. X는 늘 보이고(흐리게 → 올리면 빨갛게), 떼어내기는 올렸을 때만
 - fade_out: 닫기 전에 잠깐 흐려짐
 """
 from PyQt5.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt, QTimer
@@ -163,7 +163,7 @@ class HoverTitleBar(QWidget):
     def _set_hover(self, on):
         movable = bool(self.dock.features() & QDockWidget.DockWidgetFloatable)
         self.float_btn.setVisible(on and movable)
-        self.close_btn.setVisible(on)
+        self.close_btn.setVisible(True)        # 닫기는 늘 보이게 (어디서 닫는지 바로 알 수 있게)
 
     def enterEvent(self, event):
         self._set_hover(True)

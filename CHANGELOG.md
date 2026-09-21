@@ -4,6 +4,18 @@
 버그 수정만 → patch (2.1.0 → 2.1.1), 기능 추가·개선 → minor (2.1.x → 2.2.0), 대규모 변경 → major (2.x → 3.0.0).
 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면·README).
 
+## 3.6.0 — 2026-09-21
+
+### 추가
+- **영상 옆 Zoom · W/L 조절 막대**: 영상 오른쪽에 영상을 가리지 않는 세로 막대를 두었습니다.
+  - **🔍 Zoom**: 누른 채 위로 끌면 확대, 아래로 축소 (영상 가운데 기준). 두 번 클릭 = 화면 맞춤.
+  - **◐ W/L**: 누른 채 좌우 = Width, 위아래 = Level (영상 위 우클릭 드래그와 같음). 두 번 클릭 = DICOM 기본값.
+  - 끄는 동안 칸에 현재 배율 · W/L 값이 보입니다. Multi View에서는 선택한 칸에 적용, MPR · 3D에서는 숨김. **View 메뉴**에서 끄고 켤 수 있습니다(기억됨).
+
+### 바뀜
+- **패널 닫기 ✕가 늘 보입니다**: 오른쪽 · 아래 패널(ROI Manager, Image Info, AI Research, Analysis, Histogram, Python Console) 제목 줄의 ✕가 마우스를 올려야만 나오던 것을 항상 보이게 했습니다 (올리면 빨갛게). 떼어내기 버튼은 예전처럼 올렸을 때만.
+- **ROI Manager 열고 닫기**: Tools ▸ ROI Manager (Ctrl+Shift+M)를 한 번 더 누르면 닫힙니다. 이미 고른 ROI 도구(ROI · Ellipse · Rect · Area)를 한 번 더 눌러도 열려 있던 ROI Manager가 닫힙니다. Analysis ▸ 패널 보이기/숨기기도 같은 방식으로 부드럽게 닫힙니다.
+
 ## 3.5.2 — 2026-09-21
 
 ### 고침

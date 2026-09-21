@@ -265,6 +265,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._restore_series_panel()
         self._install_panel_close()
+        self._update_drag_pads()
         self._install_overlay_items()
         self._restored_studies = set()
         self._setup_worksave()
@@ -451,6 +452,10 @@ class MainWindow(QMainWindow):
         self._panel_toggle.clicked.connect(self.toggle_series_panel)
         right_layout.addWidget(self._panel_toggle)
         right_layout.addWidget(self._tab_widget)
+        # 영상 옆 조절 막대: 영상을 가리지 않고 끌어서 Zoom · W/L
+        from .drag_pads import DragPadStrip
+        self._drag_pads = DragPadStrip(self._target_viewport)
+        right_layout.addWidget(self._drag_pads)
         splitter.addWidget(right)
 
         left_panel.setMinimumWidth(220)
@@ -580,6 +585,11 @@ class MainWindow(QMainWindow):
         self._view_menu = view_menu
         self._init_ui_scale_menu(view_menu)
         self._init_arrow_menu(view_menu)
+        self._act_drag_pads = view_menu.addAction("🔍◐ 영상 옆 Zoom · W/L 조절 막대")
+        self._act_drag_pads.setCheckable(True)
+        self._act_drag_pads.setChecked(self._settings.value("ui/drag_pads", True, type=bool))
+        self._act_drag_pads.setToolTip("영상 오른쪽 막대를 누른 채 끌어 확대 · W/L 조절 (영상을 가리지 않음)")
+        self._act_drag_pads.toggled.connect(self._set_drag_pads)
         view_menu.addSeparator()
 
         # 툴바와 같은 QAction을 공유 (단축키 중복 시 Qt가 둘 다 무시함)
@@ -2597,7 +2607,22 @@ class MainWindow(QMainWindow):
         self._refresh_image_info()
         self._ai_panel.on_series_changed()
 
+    def _set_drag_pads(self, on):
+        self._settings.setValue("ui/drag_pads", bool(on))
+        self._update_drag_pads()
+
+    def _update_drag_pads(self):
+        """2D View · Multi View에서만 (MPR · 3D는 조작 방식이 달라 숨김)"""
+        pads = getattr(self, "_drag_pads", None)
+        if pads is None:
+            return
+        action = getattr(self, "_act_drag_pads", None)
+        on = action.isChecked() if action is not None else True
+        current = self._tab_widget.currentWidget()
+        pads.setVisible(on and current in (getattr(self, "_page2d", None), self._multi_viewport))
+
     def _on_tab_changed(self, index):
+        self._update_drag_pads()
         self._sync_volume_tabs()
         self._refresh_image_info()
         self._ai_panel.on_series_changed()
@@ -3120,7 +3145,7 @@ class MainWindow(QMainWindow):
         self._seg.edited.connect(lambda: setattr(self, "_last_seg_edit", time.monotonic()))
         menu.addSeparator()
         entries = [
-            ("ROI Manager", "Ctrl+Shift+M", self._show_roi_manager, False),
+            ("ROI Manager (열기 / 닫기)", "Ctrl+Shift+M", self._toggle_roi_manager, False),
             ("Measure (선택 ROI 통계)", "Ctrl+M", lambda: (self._show_roi_manager(),
                                                          self._roi_manager.measure()), False),
             ("측정 표시 설정 (글자 크기·단위)...", "", self._measure_settings, False),
@@ -3148,6 +3173,14 @@ class MainWindow(QMainWindow):
             menu.addAction(action)
         # 세그멘테이션 되돌리기는 위 Undo가 순서를 보고 나눠서 처리
         self._ai_panel.undo_action.setShortcut(QKeySequence())
+
+    def _toggle_roi_manager(self):
+        """보이고 있으면 닫고, 닫혀 있거나 다른 탭에 가려져 있으면 열어서 앞으로"""
+        dock = self._roi_manager
+        if dock.isVisible() and not dock.visibleRegion().isEmpty():
+            self._close_dock(dock)
+        else:
+            self._show_roi_manager()
 
     def _show_roi_manager(self):
         self._roi_manager.show()
@@ -3195,6 +3228,12 @@ class MainWindow(QMainWindow):
         return self._viewport
 
     def _set_tool_all(self, tool):
+        V = DicomViewport
+        roi_tools = (V.TOOL_ROI, V.TOOL_ELLIPSE, V.TOOL_RECT, V.TOOL_AREA)
+        if (tool == getattr(self, "_current_tool_id", None) and tool in roi_tools
+                and self._roi_manager.isVisible()):
+            self._close_dock(self._roi_manager)   # 이미 고른 ROI 도구를 한 번 더 누름 → ROI Manager 닫기
+        self._current_tool_id = tool
         self._seg.set_tool(None)  # 툴바 도구를 고르면 세그멘테이션 도구 해제
         for vp in self._all_viewports():
             vp.set_tool(tool)
