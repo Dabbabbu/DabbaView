@@ -1069,6 +1069,8 @@ class MainWindow(QMainWindow):
         self._status_pos = QLabel("")
         self._statusbar.addWidget(self._status_wl)
         self._statusbar.addWidget(self._status_zoom)
+        self._status_file = QLabel("")            # 지금 보는 슬라이스의 파일 이름 (올리면 전체 경로)
+        self._statusbar.addWidget(self._status_file)
         self._statusbar.addPermanentWidget(self._status_pos)
         # 맨 아래 Zoom · W/L 조절 칸: 영상을 가리지 않고 끌어서 조절.
         # 상태바 배치에 넣지 않고 '뷰어 창 가운데 아래'에 직접 놓음 → 옆 패널을 열고 닫아도 가운데 유지
@@ -2650,6 +2652,7 @@ class MainWindow(QMainWindow):
 
     def _select_series(self, series):
         self._current_series = series
+        self._show_source(series)
         self._update_library_star()
         # 썸네일 패널과 트리의 선택 표시를 맞춤 (시그널 없이)
         self._series_panel.select_uid(series.series_uid)
@@ -3448,7 +3451,21 @@ class MainWindow(QMainWindow):
 
     # ─── 시그널 핸들러 ───
 
+    def _show_source(self, series, index=None):
+        """창 제목에 폴더 이름, 상태바에 지금 슬라이스의 파일 이름"""
+        from .source_info import folder_of, slice_file
+        short, full = folder_of(series) if series is not None else ("", "")
+        title = f"{APP_NAME} v{__version__} - DICOM Viewer"
+        self.setWindowTitle(f"{short} — {title}" if short else title)
+        if not hasattr(self, "_status_file"):
+            return
+        path = slice_file(series, index if index is not None else 0) if series is not None else ""
+        self._status_file.setText(f"📄 {os.path.basename(path)}" if path else "")
+        self._status_file.setToolTip(f"{full}\n{path}" if path else "")
+
     def _on_slice_changed(self, current, total):
+        if self.sender() is self._viewport:
+            self._show_source(self._current_series, current)
         self._slice_slider.blockSignals(True)
         self._slice_slider.setValue(current)
         self._slice_slider.blockSignals(False)

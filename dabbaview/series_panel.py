@@ -41,6 +41,7 @@ ROLE_MODALITY = Qt.UserRole + 5
 ROLE_GROUP = Qt.UserRole + 6      # 환자 키 / 검사 키 (머리글·카드 모두)
 ROLE_STUDY = Qt.UserRole + 7
 ROLE_EXPANDED = Qt.UserRole + 8   # 머리글이 펼쳐져 있는지
+ROLE_SOURCE = Qt.UserRole + 9     # 불러온 폴더 이름 (카드 맨 아래 📁 줄)
 
 SELECT_COLOR = QColor("#ffd400")
 
@@ -174,6 +175,13 @@ class SeriesCardDelegate(QStyledItemDelegate):
                                                Qt.ElideRight, int(text_rect.width()))
         painter.drawText(QRectF(text_rect.left(), text_rect.top() + 40,
                                 text_rect.width(), 16), Qt.AlignLeft, detail)
+        source = index.data(ROLE_SOURCE)
+        if source:                                   # 불러온 폴더 (어디서 왔는지)
+            painter.setPen(QColor("#7fa7c9"))
+            folder = QFontMetrics(font).elidedText(f"📁 {source}", Qt.ElideMiddle,
+                                                   int(text_rect.width()))
+            painter.drawText(QRectF(text_rect.left(), text_rect.top() + 58,
+                                    text_rect.width(), 16), Qt.AlignLeft, folder)
 
         if selected:
             painter.setPen(QPen(SELECT_COLOR, 2))
@@ -273,11 +281,14 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
                     item.setData(ROLE_DETAIL, " · ".join(d for d in detail if d))
                     item.setData(ROLE_MODALITY, s.modality)
                     item.setData(Qt.DisplayRole, s.description)
+                    from .source_info import folder_of
+                    short, full = folder_of(s)
+                    item.setData(ROLE_SOURCE, short)
                     if ds is not None:
                         item.setToolTip(dicom_info.sequence_tooltip(
                             ds, f"#{s.series_number}  {s.description}"
                             if s.series_number is not None else s.description,
-                            s.num_slices))
+                            s.num_slices) + (f"\n\n📁 {full}" if full else ""))
                     self.addItem(item)
                     self._items_by_uid[s.series_uid] = item
                     self._first_uid.setdefault(pkey, s.series_uid)

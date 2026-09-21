@@ -36,6 +36,19 @@ class ArchiveError(Exception):
     pass
 
 
+_SOURCES = {}                        # 풀어 둔 폴더 → 원래 압축파일 (어디서 왔는지 표시용)
+
+
+def original_for(folder):
+    """풀어 둔 폴더 안의 경로면 (원래 압축파일, 안쪽 상대 경로), 아니면 None"""
+    folder = os.path.abspath(folder)
+    for dest, archive in _SOURCES.items():
+        if folder == dest or folder.startswith(dest + os.sep):
+            inner = os.path.relpath(folder, dest)
+            return archive, "" if inner == "." else inner
+    return None
+
+
 def is_archive_name(name):
     lower = name.lower()
     return lower.endswith(ARCHIVE_EXTENSIONS) and not lower.endswith(NOT_ARCHIVES) \
@@ -92,6 +105,7 @@ def extract(path, progress=None, cancelled=None):
     """압축파일을 풀고 풀린 폴더 경로를 돌려줌. progress(done, total, name) · cancelled() → True면 멈춤"""
     from . import cache
     dest = extraction_dir(path)
+    _SOURCES[os.path.abspath(dest)] = os.path.abspath(path)
     if os.path.exists(os.path.join(dest, ".complete")):
         cache.touch(dest)                # 이미 풀어 둠
         return dest

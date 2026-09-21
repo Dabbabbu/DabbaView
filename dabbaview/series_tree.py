@@ -410,6 +410,10 @@ class SeriesTreeWidget(ClickToLoadMixin, QTreeWidget):
                         ds, s.description, s.num_slices) if ds is not None else "")
                     if s.series_number is not None:
                         tooltip = f"Series #{s.series_number}\n{tooltip}"
+                    from .source_info import folder_of
+                    _short, full = folder_of(s)
+                    if full:
+                        tooltip += f"\n\n📁 {full}"
                     item.setToolTip(0, tooltip)
                     item.setToolTip(1, tooltip)
                     study_item.addChild(item)
