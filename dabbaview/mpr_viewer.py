@@ -620,7 +620,9 @@ class MPRWidget(QWidget):
 
         series.sort_slices()
         slices, kept = [], []
-        for i, arr in enumerate(series.get_all_pixel_arrays()):
+        arrays = series.get_all_pixel_arrays()
+        for i in series.spatial_order():       # 보기 순서와 달라도 볼륨은 공간 순서로
+            arr = arrays[i]
             if arr is not None and len(arr.shape) == 2:
                 slices.append(arr)
                 kept.append(i)

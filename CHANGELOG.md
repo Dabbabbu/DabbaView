@@ -4,6 +4,16 @@
 버그 수정만 → patch (2.1.0 → 2.1.1), 기능 추가·개선 → minor (2.1.x → 2.2.0), 대규모 변경 → major (2.x → 3.0.0).
 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면·README).
 
+## 4.1.1 — 2026-09-21
+
+### 고침
+- **영상이 찍은 순서대로 나오지 않던 문제 (정렬 기준 정리)**: 같은 폴더를 열 때마다 · 파일을 읽은 순서에 따라 순서가 달라질 수 있던 것을 **늘 같은 순서**로 맞췄습니다.
+  - 시리즈 안 영상: ① cine · perfusion처럼 같은 위치에 시간 위상이 여러 장이면 → 위치(찍은 순서) → 그 안에서 **TriggerTime · TemporalPositionIdentifier · AcquisitionTime** 순, ② 그 밖에는 **InstanceNumber**(찍은 순서), ③ 번호가 없으면 **SliceLocation**, ④ 그것도 없으면 **ImagePositionPatient**(슬라이스 법선 방향 위치 — sagittal · coronal도), ⑤ 마지막으로 시간. 값이 같으면 InstanceNumber → SOPInstanceUID → 파일 이름으로 마무리.
+  - 3면 로컬라이저처럼 방향이 섞인 시리즈는 번호 순서.
+  - MPR · 3D 볼륨은 보기 순서와 상관없이 **공간 순서**로 쌓아 방향이 뒤집히지 않습니다.
+  - 시리즈 목록(패널 · 트리): 최신 검사가 위, **검사 안에서는 시리즈를 찍은 때(SeriesDate/Time → AcquisitionTime) → 시리즈 번호** 순. 이름(설명) 순으로 섞이던 것을 고쳤습니다.
+- 웹 버전(4.1.1)도 같은 기준으로 정렬합니다.
+
 ## 4.1.0 — 2026-09-21
 
 ### 추가

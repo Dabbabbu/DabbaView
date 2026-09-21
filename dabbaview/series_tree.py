@@ -183,9 +183,15 @@ def format_patient_name(value):
 
 
 def _series_sort_key(series):
+    """한 검사 안의 시리즈: 찍은 때(SeriesDate/Time) → 시리즈 번호 → 설명 → UID"""
     number = series.series_number
-    return (number is None, number if number is not None else 0,
-            series.description)
+    return (getattr(series, "series_datetime", ""), number is None, number if number is not None else 0,
+            series.description, getattr(series, "series_uid", ""))
+
+
+def _study_time_key(value):
+    from .dicom_loader import _time_text
+    return _time_text(value)
 
 
 def group_series(series_list):
@@ -209,8 +215,8 @@ def group_series(series_list):
             series.sort(key=_series_sort_key)
             study_rows.append((first.study_date, first.study_time,
                                first.study_description, series))
-        # 최신 검사가 위로
-        study_rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+        # 최신 검사가 위로 (날짜 · 시각이 같으면 검사 UID로 — 늘 같은 순서)
+        study_rows.sort(key=lambda r: (r[0], _study_time_key(r[1]), r[3][0].study_uid or ""), reverse=True)
         result.append((pname, pid, study_rows))
     result.sort(key=lambda r: (format_patient_name(r[0]).lower(), r[1]))
     return result

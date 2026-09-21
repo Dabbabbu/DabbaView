@@ -243,7 +243,8 @@ class VolumeRenderWidget(QWidget):
 
         series.sort_slices()
         slices = []
-        for arr in series.get_all_pixel_arrays():
+        arrays = series.get_all_pixel_arrays()
+        for arr in (arrays[i] for i in series.spatial_order()):   # 볼륨은 공간 순서로
             if arr is not None and len(arr.shape) == 2:
                 slices.append(arr)
 

@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 4.1.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 4.1.1 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.

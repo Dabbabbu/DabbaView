@@ -345,6 +345,105 @@ def run_with_timeout(fn, arg, timeout):
 decode_error_listeners = []
 
 
+def _time_text(value):
+    """DICOM TM 'HHMMSS.ffffff' → 비교할 수 있게 자릿수를 맞춘 글자 (없으면 '')"""
+    value = str(value or "").strip().replace(":", "")
+    if not value:
+        return ""
+    whole, _, frac = value.partition(".")
+    return whole.ljust(6, "0")[:6] + "." + frac.ljust(6, "0")[:6]
+
+
+def _number(ds, keyword):
+    try:
+        value = getattr(ds, keyword, None)
+        return None if value is None or str(value).strip() == "" else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _projections(slices):
+    """슬라이스 위치를 첫 슬라이스 법선에 투영한 값(mm) — 위치 정보가 없거나 방향이 섞이면 None"""
+    try:
+        iop = [float(v) for v in slices[0].ImageOrientationPatient]
+        normal = np.cross(iop[:3], iop[3:])
+        if np.linalg.norm(normal) == 0:
+            return None
+        out = []
+        for ds in slices:
+            other = [float(v) for v in ds.ImageOrientationPatient]
+            if abs(float(np.dot(np.cross(other[:3], other[3:]), normal))) < 0.99:
+                return None                   # 방향이 다른 영상이 섞임 (3면 로컬라이저 등)
+            out.append(float(np.dot([float(v) for v in ds.ImagePositionPatient], normal)))
+        return out
+    except (AttributeError, TypeError, ValueError, IndexError):
+        return None
+
+
+def _time_of(ds):
+    """시간 순서 값: TriggerTime(ms) → TemporalPositionIdentifier → AcquisitionTime → ContentTime"""
+    for keyword in ("TriggerTime", "TemporalPositionIdentifier"):
+        value = _number(ds, keyword)
+        if value is not None:
+            return (0, value, "")
+    for keyword in ("AcquisitionTime", "ContentTime"):
+        text = _time_text(getattr(ds, keyword, ""))
+        if text:
+            return (1, 0.0, text)
+    return (2, 0.0, "")
+
+
+def slice_order_keys(slices):
+    """시리즈 안 영상 정렬 키 — 불러올 때마다 늘 같은 순서가 되게
+
+    1. 시간 시리즈(cine · perfusion: 같은 위치가 여러 번 + 시간 태그가 다름)
+       → 위치(찍은 순서) → 그 위치 안에서 TriggerTime · TemporalPositionIdentifier · AcquisitionTime
+    2. InstanceNumber가 모두 있으면 → InstanceNumber (찍은 순서)
+    3. SliceLocation이 모두 있으면 → SliceLocation
+    4. 위치 정보(IPP)가 있으면 → 슬라이스 법선 방향 위치 (z만 쓰면 sagittal · coronal이 안 됨)
+    5. 그 밖에는 시간
+    어느 경우든 같은 값이면 InstanceNumber → SOPInstanceUID → 파일 이름으로 마무리 (병렬로 읽은 순서와 무관)
+    """
+    n = len(slices)
+    inst = [_number(ds, "InstanceNumber") for ds in slices]
+    tail = [((inst[i] is None, inst[i] or 0.0), str(getattr(ds, "SOPInstanceUID", "") or ""),
+             str(getattr(ds, "filename", "") or ""), float(getattr(ds, "_dv_frame", 0) or 0))
+            for i, ds in enumerate(slices)]
+    times = [_time_of(ds) for ds in slices]
+    proj = _projections(slices)
+    if proj is not None:
+        where = [round(p, 2) for p in proj]
+        repeated = len(set(where)) < n
+        if repeated:
+            by_pos = {}
+            for i, w in enumerate(where):
+                by_pos.setdefault(w, []).append(i)
+            timed = any(len({times[i] for i in idx}) > 1 for idx in by_pos.values())
+            if timed:
+                # 위치는 찍은 순서(그 위치의 가장 작은 InstanceNumber, 없으면 위치 값)대로
+                def first_seen(idx):
+                    nums = [inst[i] for i in idx if inst[i] is not None]
+                    return min(nums) if nums else min(where[i] for i in idx)
+                rank = {w: r for r, w in enumerate(sorted(by_pos, key=lambda w: (first_seen(by_pos[w]), w)))}
+                return [(0, rank[where[i]], times[i], tail[i]) for i in range(n)]
+    if all(v is not None for v in inst):
+        return [(1, inst[i], times[i], tail[i]) for i in range(n)]
+    locations = [_number(ds, "SliceLocation") for ds in slices]
+    if all(v is not None for v in locations):
+        return [(2, locations[i], times[i], tail[i]) for i in range(n)]
+    if proj is not None:
+        return [(3, round(proj[i], 3), times[i], tail[i]) for i in range(n)]
+    return [(4, 0.0, times[i], tail[i]) for i in range(n)]
+
+
+def series_order_key(series):
+    """시리즈 순서: 검사 날짜 · 시각 → 시리즈를 찍은 때 → 시리즈 번호 → 설명 → UID (늘 같은 순서)"""
+    number = series.series_number
+    return (series.study_date, _time_text(series.study_time), series.study_uid or "",
+            series.series_datetime, number is None, number if number is not None else 0,
+            series.description, series.series_uid)
+
+
 class DicomSeries:
     """하나의 DICOM 시리즈를 나타내는 클래스
 
@@ -376,35 +475,42 @@ class DicomSeries:
             self.modality = str(ds.Modality)
 
     def sort_slices(self):
-        """슬라이스를 위치 순서로 정렬"""
+        """슬라이스를 늘 같은 순서로 (찍은 순서 기준, slice_order_keys 참고)"""
         if self._sorted:
             return
         try:
-            self.slices.sort(
-                key=lambda s: float(s.InstanceNumber)
-                if hasattr(s, 'InstanceNumber') else 0
-            )
-            # ImagePositionPatient가 있으면 슬라이스 법선 방향 위치로 정렬
-            # (z만 쓰면 Sagittal/Coronal 시리즈는 z가 모두 같아 정렬되지 않음)
-            if all(hasattr(s, 'ImagePositionPatient') for s in self.slices):
-                normal = np.array([0.0, 0.0, 1.0])
-                iop = getattr(self.slices[0], 'ImageOrientationPatient', None)
-                if iop is not None and len(iop) == 6:
-                    n = np.cross([float(v) for v in iop[:3]],
-                                 [float(v) for v in iop[3:]])
-                    if np.linalg.norm(n) > 0:
-                        normal = n
-                self.slices.sort(
-                    key=lambda s: float(np.dot(
-                        [float(v) for v in s.ImagePositionPatient], normal))
-                )
-        except (TypeError, ValueError, IndexError):
+            keys = slice_order_keys(self.slices)
+            order = sorted(range(len(self.slices)), key=lambda i: keys[i])
+            self.slices[:] = [self.slices[i] for i in order]
+        except Exception:                 # noqa: BLE001 - 태그가 이상해도 불러오기는 계속
             pass
         # 정렬로 인덱스가 바뀌므로 캐시 무효화
         with self._cache_lock:
             self._pixel_array_cache.clear()
         self._geometry = _UNSET
         self._sorted = True
+
+    def spatial_order(self):
+        """공간 순서(슬라이스 법선 방향)의 인덱스 — MPR · 3D 볼륨을 쌓을 때 (보기 순서와 다를 수 있음)"""
+        self.sort_slices()
+        proj = _projections(self.slices)
+        if proj is None:
+            return list(range(len(self.slices)))
+        return sorted(range(len(self.slices)), key=lambda i: (round(proj[i], 3), i))
+
+    @property
+    def series_datetime(self):
+        """시리즈를 찍은 때 'YYYYMMDDHHMMSS.ffffff' (SeriesDate/Time → AcquisitionDate/Time → ContentDate/Time)"""
+        if not self.slices:
+            return ""
+        first = self.slices[0]
+        for date_key, time_key in (("SeriesDate", "SeriesTime"), ("AcquisitionDate", "AcquisitionTime"),
+                                   ("ContentDate", "ContentTime")):
+            date = str(getattr(first, date_key, "") or "").strip()
+            time_ = str(getattr(first, time_key, "") or "").strip()
+            if date or time_:
+                return f"{date or self.study_date}{_time_text(time_)}"
+        return ""
 
     @property
     def geometry(self):
@@ -1139,9 +1245,7 @@ class DicomLoader:
         series_list = list(self.series_dict.values())
         # 시리즈 번호 또는 설명 순으로 정렬
         # 날짜·설명이 같아도 순서가 항상 같도록 시리즈 번호·UID로 마무리 (캐시/파싱 무관)
-        series_list.sort(key=lambda s: (s.study_date, s.description,
-                                        s.series_number if s.series_number is not None else -1,
-                                        s.series_uid))
+        series_list.sort(key=series_order_key)
         return series_list
 
     def merge(self, other):
