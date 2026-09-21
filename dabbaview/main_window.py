@@ -3163,11 +3163,38 @@ class MainWindow(QMainWindow):
             if not worker.wait(5000):   # 클라우드 파일 읽기가 안 끝나면 창과 함께 지우지 않고 남김
                 worker.setParent(None)
                 _ORPHAN_THREADS.append(worker)
+        self._close_popups()            # 클라우드 창 등 독립 창도 함께 닫음
         self._library_panel.flush()  # 입력 중인 메모 저장
         self._ai_panel.shutdown()  # 편집한 마스크 저장
         self._series_tree.shutdown()
         self._series_panel.shutdown()
         super().closeEvent(event)
+        if event.isAccepted():
+            # 독립 창이 하나라도 남아 있으면 Qt가 앱을 끝내지 않으므로 명시적으로 종료
+            QTimer.singleShot(0, QApplication.instance().quit)
+
+    def _close_popups(self):
+        """메인 창과 함께 닫혀야 할 창들 (부모가 없는 독립 창은 자동으로 안 닫힘)"""
+        stop = getattr(self, "_prefetch_stop", None)
+        if stop is not None:
+            stop.set()                  # 미리 받기 중단
+        cloud = getattr(self, "_cloud_dialog", None)
+        if cloud is not None:
+            try:
+                cloud.shutdown(wait_ms=1500)
+                cloud.close()
+            except RuntimeError:
+                pass
+            self._cloud_dialog = None
+        for widget, _icon in list(getattr(self, "_popups", [])):
+            try:
+                if widget is not self and widget.isVisible():
+                    widget.close()
+            except RuntimeError:
+                pass
+        self._popups = []
+        if hasattr(self, "_side_tab"):
+            self._side_tab.hide()
 
     def _sync_volume_tabs(self):
         """현재 탭이 MPR/3D일 때만 볼륨 구성 (전체 슬라이스 픽셀 로딩 필요)"""

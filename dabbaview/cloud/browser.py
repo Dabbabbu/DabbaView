@@ -31,6 +31,9 @@ def human_size(n):
     return ""
 
 
+_LIVE_WORKERS = []   # 창이 닫혀도 아직 끝나지 않은 작업자 (지우면 Qt가 비정상 종료)
+
+
 class _Worker(QThread):
     progress = pyqtSignal(object)   # 문자열 또는 ("count", 완료, 전체, 문구)
     done = pyqtSignal(object)
@@ -988,10 +991,23 @@ class CloudBrowserDialog(QDialog):
         self.reject()
 
     def closeEvent(self, event):
-        if self._worker is not None:
-            self._worker.cancel = True
-            self._worker.wait(3000)
+        self.shutdown()
         super().closeEvent(event)
+
+    def shutdown(self, wait_ms=3000):
+        """창을 닫거나 앱을 끝낼 때: 돌고 있는 작업(다운로드·훑기)을 멈춘다"""
+        self._stop_ticker()
+        for worker in (self._worker, getattr(self, "_scan_worker", None)):
+            if worker is None:
+                continue
+            worker.cancel = True
+            if not worker.wait(wait_ms):         # 네트워크 응답을 기다리는 중이면 뒤에서 끝나게 둠
+                worker.setParent(None)
+                _LIVE_WORKERS.append(worker)
+                worker.finished.connect(
+                    lambda w=worker: w in _LIVE_WORKERS and _LIVE_WORKERS.remove(w))
+        self._worker = None
+        self._scan_worker = None
 
 
 def open_from_cloud(main_window, provider):
