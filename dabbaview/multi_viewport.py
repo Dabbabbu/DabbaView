@@ -42,6 +42,7 @@ def grid_for_count(n):
 
 
 # Reference Line 전체 커버리지 색 (Multi View 칸 순서: 파랑, 초록, 주황, 보라, 분홍, 청록 …)
+SCAN_PLAN_COLOR = "#4aa3ff"   # Crosslink: 선택한 시리즈의 전체 슬라이스(스캔 범위) — 현재 슬라이스(노랑)와 다른 색
 COVERAGE_COLORS = ["#4aa3ff", "#3ddc84", "#ff9f40", "#c78bff", "#ff6b9a", "#35d0d0", "#e6e6e6", "#b8b83a"]
 
 def _proportional(index, src_count, dst_count):
@@ -291,6 +292,7 @@ class MultiViewport(QWidget):
             else:
                 self._highlight_active()
             self.active_viewport_changed.emit(index)
+            self._refresh_reference_lines()    # Crosslink: 선택한 칸이 바뀌면 선도 바뀜
 
     def _highlight_active(self):
         """활성 칸은 노란 테두리, 함께 고른 칸은 파란 테두리 (1x1에서는 생략)"""
@@ -440,28 +442,35 @@ class MultiViewport(QWidget):
         self._refresh_reference_lines()
 
     def _reference_sources_for(self, viewport):
-        """viewport에 그릴 다른 칸들의 선 (같은 환자 + 같은 좌표계)
+        """viewport에 그릴 다른 칸들의 선 (같은 환자 + 연동 기준을 만족하는 위치 정보)
 
-        Crosslink ON → 그 시리즈 전체 슬라이스(점선) + 현재 슬라이스(노란 실선)
-        Ref Lines ON → 현재 슬라이스 한 줄만
+        Crosslink ON (PACS 스카우트 방식) → **선택한 칸**의 시리즈만, 다른 칸 위에
+            전체 슬라이스(스캔 플래닝, 파란 점선) + 지금 슬라이스(노란 실선).
+            선택한 칸 자신에는 아무 선도 그리지 않는다.
+        Ref Lines만 ON → 다른 칸들의 지금 슬라이스 한 줄씩
         """
         if not (self._reference_lines or self._crosslink) or viewport.series is None:
             return []
         own = viewport.sync_geometry()
         if own is None:
             return []
+        active = self.active_viewport
+        if self._crosslink and viewport is active:
+            return []                           # 선택한 칸은 깨끗하게
         sources = []
         for i, vp in enumerate(self.visible_viewports):
             if vp is viewport or vp.series is None:
                 continue
+            if self._crosslink and vp is not active:
+                continue                        # Crosslink: 선택한 칸의 위치만 보여 줌
             geom = vp.sync_geometry()
             if (geom is None or not own.is_linkable_with(geom)
                     or vp.series.patient_id != viewport.series.patient_id):
                 continue
             label = f"S{vp.series.series_number or ''}:{vp.current_slice + 1}"
             # 칸마다 다른 색 (커버리지 점선) - 현재 슬라이스는 노란 실선
-            sources.append((geom, vp.current_slice, label, COVERAGE_COLORS[i % len(COVERAGE_COLORS)],
-                            self._crosslink))
+            color = SCAN_PLAN_COLOR if self._crosslink else COVERAGE_COLORS[i % len(COVERAGE_COLORS)]
+            sources.append((geom, vp.current_slice, label, color, self._crosslink))
         return sources
 
     def _refresh_reference_lines(self):

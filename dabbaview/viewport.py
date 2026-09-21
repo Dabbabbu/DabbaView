@@ -1961,8 +1961,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     def _draw_reference_lines(self, painter):
         """다른 뷰포트 시리즈의 위치 (Scout / Reference Line)
 
-        PACS처럼: 그 시리즈의 전체 슬라이스(스캔 커버리지)를 칸마다 다른 색의 가는 점선으로,
-        지금 보고 있는 슬라이스는 노란 실선(2 px)으로. 스크롤하면 노란 선이 따라 움직임.
+        PACS처럼: 그 시리즈의 전체 슬라이스(스캔 플래닝)를 파란 가는 점선으로,
+        지금 보고 있는 슬라이스는 노란 실선(2 px)으로 — 두 색을 달리해 구분. 스크롤하면 노란 선이 따라 움직임.
         """
         if self._reference_sources is None or self._series is None:
             return
