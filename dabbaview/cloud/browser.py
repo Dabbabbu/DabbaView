@@ -107,6 +107,10 @@ class CloudBrowserDialog(QDialog):
         self._search.setClearButtonEnabled(True)
         self._search.setMaximumWidth(260)
         self._search.returnPressed.connect(self._do_search)
+        # 최근 검색어: 검색칸을 누르면 목록 (눌러서 다시 검색 · ✕로 지우기)
+        from .recent_searches import attach as attach_recent
+        self._recent, self._recent_popup = attach_recent(self._search, self._do_search)
+        self._search.setToolTip(self._search.toolTip() + "\n검색칸을 누르면 최근 검색어가 나옵니다 (✕로 지우기).")
         for w in (self._up, self._home, self._refresh):
             nav.addWidget(w)
         nav.addWidget(self._path, 1)
@@ -776,6 +780,7 @@ class CloudBrowserDialog(QDialog):
         if not hasattr(provider, "search"):
             self._status.setText("이 서비스는 검색을 지원하지 않습니다.")
             return
+        self._recent.add(text)
 
         def task(progress, cancelled):
             progress(f"'{text}' 검색 중...")
