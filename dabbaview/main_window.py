@@ -3802,8 +3802,17 @@ class MainWindow(QMainWindow):
                 border-radius: 7px;
             }
             QStatusBar {
-                background-color: #007acc;
-                color: white;
+                background-color: #232323;
+                color: #cfd6df;
+                border-top: 1px solid #3d3d3d;
+            }
+            QStatusBar::item {
+                border: none;
+            }
+            QStatusBar QLabel {
+                background: transparent;
+                color: #aeb7c2;
+                padding: 0 6px;
             }
             QLabel {
                 color: #d4d4d4;
