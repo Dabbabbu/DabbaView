@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 3.6.3 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 3.6.4 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -425,7 +425,7 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 
 ### 🔍 기능 찾기 (Ctrl(⌘)+F)
 
-메뉴 어디에 있는지 몰라도 이름으로 찾아 바로 실행합니다. **Ctrl(⌘)+F**, 아래 도구 막대의 **🔍 찾기**, 또는 **Help ▸ 🔍 기능 찾기…** 로 엽니다.
+메뉴 어디에 있는지 몰라도 이름으로 찾아 바로 실행합니다. **Ctrl(⌘)+F**, 뷰어 탭 줄(2D View … 3D Volume) 오른쪽 끝의 **🔍 기능 검색…** 칸, 또는 **Help ▸ 🔍 기능 찾기…** 로 엽니다.
 
 - 영어 메뉴 이름뿐 아니라 **한글 · 비슷한 말**로도 찾습니다. 예) `내보내기` · `export` · `저장` · `동영상` · `동영상으로 저장` · `mp4` → **Export as Video…**, **Batch Export Videos…**, Export as Image…, Capture
 - 초성만 쳐도 됩니다: `ㄷㅇㅅ` → 동영상

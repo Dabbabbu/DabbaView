@@ -841,6 +841,29 @@ class MainWindow(QMainWindow):
             self._tool_actions[tool_id] = action
         self._tool_actions[V.TOOL_SELECT].setChecked(True)
 
+        # 🔍 기능 찾기 — 뷰어 탭 줄(2D View … 3D Volume) 오른쪽 끝에 검색창처럼 (자리가 늘 있음)
+        key = QKeySequence(QKeySequence.Find).toString(QKeySequence.NativeText)
+        find = QPushButton(f"🔍  기능 검색…     {key}")
+        find.setObjectName("FindBox")
+        find.setCursor(Qt.PointingHandCursor)
+        find.setMinimumWidth(220)
+        find.setFixedHeight(24)
+        find.setToolTip("메뉴 · 도구 막대의 모든 기능을 이름으로 찾아 바로 실행합니다\n"
+                        "한글 · 영어 · 비슷한 말 · 초성 모두 됩니다\n"
+                        "예) 동영상 저장, 내보내기, export, W/L, 익명화, 설정, ㄷㅇㅅ")
+        find.setStyleSheet(
+            "QPushButton#FindBox { background: #1b2433; color: #c9d6e6; text-align: left;"
+            " border: 1px solid #3d8bfd; border-radius: 11px; padding: 0 12px; font-size: 12px; }"
+            "QPushButton#FindBox:hover { background: #22324a; color: #fff; border-color: #6aa8ff; }")
+        find.clicked.connect(self.open_command_palette)
+        corner = QWidget()
+        corner_layout = QHBoxLayout(corner)
+        corner_layout.setContentsMargins(0, 0, 8, 0)
+        corner_layout.setAlignment(Qt.AlignVCenter)
+        corner_layout.addWidget(find)
+        self._tab_widget.setCornerWidget(corner, Qt.TopRightCorner)
+        self._find_box = find
+
         # ─── 둘째 줄: 이미지 조작 + 동기화 + Key Image / Tile ───
         self.addToolBarBreak()
         view_bar = QToolBar("View")
@@ -887,11 +910,6 @@ class MainWindow(QMainWindow):
         self._act_library_panel.setToolTip("Library 탭 열기 / 닫기 (Ctrl+Shift+L) · "
                                            "현재 스터디 추가는 Ctrl+D")
         self._act_library_panel.triggered.connect(lambda: self._toggle_left_tab(self._library_panel))
-        output_bar.addAction(self._act_find)
-        find_button = output_bar.widgetForAction(self._act_find)
-        if find_button is not None:
-            find_button.setText("🔍 찾기")
-        output_bar.addSeparator()
         for action in (self._act_library_panel, self._act_reading, self._act_capture,
                        self._act_image_panel, self._act_anonymize, self._act_ai, self._act_send,
                        self._act_print, self._act_settings):
@@ -1491,6 +1509,9 @@ class MainWindow(QMainWindow):
         if bar is not None:
             area = self._tab_widget
             right = min(right, area.mapTo(self, area.rect().topRight()).x() - 4)
+            box = getattr(self, "_find_box", None)
+            if box is not None and box.isVisible():
+                right = min(right, box.mapTo(self, QPoint(0, 0)).x() - 8)
         room = max(120, right - x - 4 * (len(tabs) - 1))
         each = max(90, room // len(tabs))
         for button in tabs:
