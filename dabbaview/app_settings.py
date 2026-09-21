@@ -145,14 +145,16 @@ DEFAULT_LOCAL_AE = "DABBAVIEW"
 
 
 def default_download_dir():
-    """운영체제 기본 다운로드 폴더 아래 DabbaView 폴더
+    """운영체제 기본 다운로드 폴더 아래 DabbaView_downloads 폴더
 
     macOS·Windows·Linux 모두 QStandardPaths가 각 OS의 '다운로드' 폴더를 알려준다.
+    ★ '다운로드/DabbaView'는 소스 코드를 받아 둔 폴더와 겹칠 수 있어(git에 영상이 섞여 올라감)
+      이름을 따로 둔다.
     """
     from PyQt5.QtCore import QStandardPaths
     base = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation) \
         or os.path.expanduser("~/Downloads")
-    return os.path.join(base, "DabbaView")
+    return os.path.join(base, "DabbaView_downloads")
 
 
 class AppSettings:
@@ -287,6 +289,8 @@ class AppSettings:
     def cloud_download_dir(self):
         """클라우드에서 받은 파일을 저장할 폴더 (기본: 운영체제 기본 다운로드 폴더/DabbaView)"""
         value = self._qs.value("cloud_download_dir", "", type=str)
+        if value and os.path.isdir(os.path.join(value, ".git")):
+            return default_download_dir()   # git 저장소(소스 폴더)에는 받지 않음 — 영상이 커밋될 위험
         return value or default_download_dir()
 
     def set_cloud_download_dir(self, folder):
