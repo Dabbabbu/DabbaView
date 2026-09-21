@@ -356,6 +356,7 @@ VTK는 3D Volume Rendering에만 쓰이며, 없으면 3D 탭만 비활성화되�
 | 플랫폼 | 명령 | 결과 |
 |---|---|---|
 | macOS | `./build_app.sh` (py2app) | `dist/DabbaView.app` |
+| macOS (코드만 바뀐 경우) | `./quick_patch.sh` | 설치된 `/Applications/DabbaView.app`의 코드만 교체 (몇 초) |
 | macOS 대안 | `./build_pyinstaller.sh` | `dist/DabbaView.app` |
 | Windows | `build_windows.bat` (PyInstaller) | `dist\DabbaView\DabbaView.exe` (ONNX·MedSAM 추론 제외 — 아래 참고) |
 
