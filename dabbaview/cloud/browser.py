@@ -937,7 +937,7 @@ class CloudBrowserDialog(QDialog):
             paths, stats = result
             state = getattr(self, "_prog", None) or {}
             import time as _t
-            elapsed = _t.monotonic() - (state.get("start") or _t.monotonic())
+            elapsed = stats.get("elapsed") or (_t.monotonic() - (state.get("start") or _t.monotonic()))
             fetched_new = (stats.get("heads", 0) or stats.get("done", 0)) - stats.get("hits", 0)
             if elapsed > 3 and fetched_new > 20:          # 캐시에서 꺼낸 건 빼고 실제로 받은 것만
                 self._remember_rate("full_fps", fetched_new / elapsed)
@@ -964,7 +964,14 @@ class CloudBrowserDialog(QDialog):
         self._status.setText(
             f"완료 — 파일 {stats.get('done', 0):,}개"
             + (f" (캐시 {stats['hits']:,}개)" if stats.get("hits") else "")
-            + f" · {human_size(stats.get('bytes', 0))} 받음 · 폴더 {stats.get('groups', 1)}개")
+            + f" · {human_size(stats.get('bytes', 0))} 받음 · 폴더 {stats.get('groups', 1)}개"
+            + (f"  ·  ⚠ {len(stats['failed'])}개는 네트워크 문제로 못 받음 — 같은 폴더를 다시 받으면 "
+               "받은 것은 건너뛰고 나머지만 받습니다" if stats.get("failed") else ""))
+        if stats.get("failed"):
+            first, why = stats["failed"][0]
+            self._status.setToolTip("받지 못한 파일:\n" + "\n".join(
+                f"{rel} — {msg}" for rel, msg in stats["failed"][:20])
+                + ("\n…" if len(stats["failed"]) > 20 else ""))
         self.setWindowTitle(f"{self._base_title} — 완료")
         self._cancel.setText("닫기")
         self._cancel.setEnabled(True)

@@ -137,8 +137,53 @@ def cached_path(provider, item):
     return None
 
 
+RETRIES = 4                      # 네트워크가 잠깐 끊겼을 때 파일 하나를 다시 받는 횟수
+RETRY_WAIT = (1, 3, 6, 12)       # 다시 받기 전 기다리는 초
+
+
+def is_transient(exc):
+    """잠깐 끊김 · 시간 초과처럼 다시 받으면 되는 오류인지 (인증 · 없는 파일 등은 아님)"""
+    import http.client
+    import socket
+    import ssl
+    if isinstance(exc, (http.client.IncompleteRead, http.client.RemoteDisconnected,
+                        ConnectionError, TimeoutError, socket.timeout, ssl.SSLError)):
+        return True
+    name = type(exc).__name__
+    if name in ("ServerNotFoundError", "IncompleteRead", "ChunkedEncodingError",
+                "ReadTimeout", "ConnectTimeout", "ProtocolError"):
+        return True
+    status = getattr(getattr(exc, "resp", None), "status", None) or getattr(
+        getattr(exc, "response", None), "status_code", None)
+    try:
+        return int(status) in (408, 429, 500, 502, 503, 504)
+    except (TypeError, ValueError):
+        return False
+
+
 def _fetch_one(provider, item, on_bytes, cancelled):
-    """캐시 확인 → 없으면 내려받아 캐시에 저장. (경로, 캐시 적중 여부)"""
+    """캐시 확인 → 없으면 내려받아 캐시에 저장. (경로, 캐시 적중 여부)
+
+    받다가 네트워크가 끊기면(IncompleteRead 등) 잠시 뒤 처음부터 다시 받는다 (최대 RETRIES번).
+    """
+    attempt = 0
+    while True:
+        try:
+            return _fetch_one_try(provider, item, on_bytes, cancelled)
+        except Exception as exc:                 # noqa: BLE001 - 다시 받을 오류만 골라 재시도
+            if attempt >= RETRIES or not is_transient(exc) or (cancelled and cancelled()):
+                raise
+            on_bytes(item.name, 0)               # 받다 만 양은 되돌림
+            wait = RETRY_WAIT[min(attempt, len(RETRY_WAIT) - 1)]
+            end = time.monotonic() + wait
+            while time.monotonic() < end:
+                if cancelled and cancelled():
+                    raise CloudError("취소했습니다.") from exc
+                time.sleep(0.2)
+            attempt += 1
+
+
+def _fetch_one_try(provider, item, on_bytes, cancelled):
     entry = cache.cloud_entry_dir(provider.key, item.id, _version(item))
     data = os.path.join(entry, "data")
     hit = cached_path(provider, item)
@@ -202,7 +247,7 @@ def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
     total = len(files)
     lock = threading.Lock()
     stats = {"done": 0, "hits": 0, "bytes": 0, "total": total, "folder": session,
-             "groups_done": 0, "groups": len(groups)}
+             "groups_done": 0, "groups": len(groups), "failed": [], "elapsed": 0.0}
     in_flight = {}
     left_in_group = {g: len(members) for g, members in groups}
     group_paths = {g: [] for g, _m in groups}
@@ -224,6 +269,8 @@ def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
                 parts.append(f"남은 시간 약 {_human_time(left / speed)}")
         if stats["hits"]:
             parts.append(f"캐시 {stats['hits']}개")
+        if stats["failed"]:
+            parts.append(f"못 받음 {len(stats['failed'])}개")
         if stats["groups"] > 1:
             parts.append(f"폴더 {stats['groups_done']}/{stats['groups']} 완료")
         if progress:
@@ -235,15 +282,27 @@ def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
                 stats["bytes"] += done_bytes - in_flight.get(item.id, 0)
                 in_flight[item.id] = done_bytes
             report()
-        path, hit = _fetch_one(provider, item, on_bytes, cancelled)
-        dest = os.path.join(session, rel)
-        _link(path, dest)
+        try:
+            path, hit = _fetch_one(provider, item, on_bytes, cancelled)
+        except CloudError:
+            raise                                 # 취소 · 받을 수 없는 형식 등은 그대로
+        except Exception as exc:                 # noqa: BLE001
+            if not is_transient(exc):
+                raise                             # 인증 등: 다른 파일도 안 되므로 멈춤
+            path = None                           # 다시 받아도 안 됨 → 이 파일만 빼고 계속
+            with lock:
+                stats["failed"].append((rel, f"{type(exc).__name__}: {exc}"))
+                stats["bytes"] -= in_flight.pop(item.id, 0)
         finished = None
+        if path is not None:
+            dest = os.path.join(session, rel)
+            _link(path, dest)
         with lock:
-            stats["done"] += 1
-            stats["hits"] += int(hit)
             group = group_of[rel]
-            group_paths[group].append(dest)
+            if path is not None:
+                stats["done"] += 1
+                stats["hits"] += int(hit)
+                group_paths[group].append(dest)
             left_in_group[group] -= 1
             if left_in_group[group] == 0:            # 이 폴더(시리즈)는 다 받음
                 stats["groups_done"] += 1
@@ -264,6 +323,7 @@ def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
             for f in futures:
                 f.cancel()
             raise
+    stats["elapsed"] = time.monotonic() - start
     cache.enforce_limit(force=True)
     paths = [os.path.join(session, top) for top in tops
              if os.path.exists(os.path.join(session, top))]
