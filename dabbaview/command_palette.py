@@ -80,7 +80,7 @@ def matched_keys(q):
     if q and all(ch in CHOSEONG for ch in q):
         return [k for k in SYNONYMS if len(q) >= 2 and choseong(normalize(k)) == q]
     keys = [k for k in SYNONYMS if normalize(k) and normalize(k) in q]
-    if not keys and len(q) >= 2:               # 치는 중: '동영' → 동영상
+    if not keys and (len(q) >= 2 or (len(q) == 1 and not q.isascii())):   # 치는 중: '동영' → 동영상, '추' → 추가
         keys = [k for k in SYNONYMS if normalize(k).startswith(q)]
     # 더 긴 말에 들어 있는 짧은 말은 뺌 ('영상저장' 안의 '저장')
     return [k for k in keys

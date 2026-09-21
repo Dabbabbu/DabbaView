@@ -508,7 +508,13 @@ class MainWindow(QMainWindow):
         open_dir.setShortcut(QKeySequence("Ctrl+Shift+O"))
         open_dir.triggered.connect(self._open_directory)
         file_menu.addAction(open_dir)
-        add_dir = QAction("📂➕ Add Folder… (지금 연 영상에 더하기 · 나란히 비교)", self)
+        # 추가로 열기: 지금 연 영상은 그대로 두고 더해서 Multi View에 나란히 (Add Files / Add Folder)
+        add_file = QAction("➕ 파일 추가… (지금 연 영상에 더하기 · Add Files)", self)
+        add_file.setShortcut(QKeySequence("Ctrl+Alt+Shift+O"))
+        add_file.setToolTip("지금 목록은 그대로 두고 고른 파일(여러 개 · 압축파일 가능)을 더해 Multi View 빈 칸에 나란히 엽니다.")
+        add_file.triggered.connect(self._add_files)
+        file_menu.addAction(add_file)
+        add_dir = QAction("➕ 폴더 추가… (지금 연 영상에 더하기 · Add Folder)", self)
         add_dir.setShortcut(QKeySequence("Ctrl+Alt+O"))
         add_dir.setToolTip("지금 목록은 그대로 두고 다른 폴더의 시리즈를 더해 Multi View 빈 칸에 나란히 엽니다.\n"
                            "같은 검사면 Crosslink · Ref Lines로 서로의 위치(스캔 범위)가 보입니다.")
@@ -2692,13 +2698,24 @@ class MainWindow(QMainWindow):
             pass
 
     def _add_folder(self):
-        """폴더를 더 열기 — 지금 목록은 그대로 두고, 새 시리즈를 Multi View의 빈 칸에 나란히"""
+        """➕ 폴더 추가 — 지금 연 영상은 그대로 두고 다른 폴더를 더해 나란히"""
         dirpath = QFileDialog.getExistingDirectory(
             self, "추가로 열 폴더 (지금 연 영상은 그대로 둡니다)", self._last_dir())
-        if not dirpath:
-            return
+        if dirpath:
+            self._add_paths([dirpath], "폴더")
+
+    def _add_files(self):
+        """➕ 파일 추가 — 지금 연 영상은 그대로 두고 고른 파일(여러 개 가능 · 압축파일 포함)을 더해 나란히"""
+        from .formats import OPEN_FILTERS
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "추가로 열 파일 (지금 연 영상은 그대로 둡니다)", self._last_dir(), OPEN_FILTERS)
+        if paths:
+            self._add_paths(paths, "파일")
+
+    def _add_paths(self, paths, what="폴더"):
+        """지금 목록에 더하고, 새 시리즈를 Multi View의 빈 칸에 나란히 (칸이 다 차면 격자를 키움)"""
         if self._loader is None or not self._loader.series_dict:
-            self.load_path(dirpath)             # 연 게 없으면 보통 열기와 같음
+            self.load_paths(paths)              # 연 게 없으면 보통 열기와 같음
             return
         mv = self._multi_viewport
         self._tab_widget.setCurrentWidget(mv)
@@ -2714,9 +2731,9 @@ class MainWindow(QMainWindow):
             if bigger:
                 mv.set_layout(bigger)
             free = next((i for i in range(mv.num_visible) if cells[i].series is None), mv.num_visible - 1)
-        self.load_paths([dirpath], target_viewport=free)
+        self.load_paths(paths, target_viewport=free)
         self._statusbar.showMessage(
-            "폴더를 더 열었습니다 — 같은 검사(위치 정보)면 ⌖ Crosslink(C) · Ref Lines로 서로 위치가 보입니다", 10000)
+            f"{what}을(를) 더 열었습니다 — 같은 검사(위치 정보)면 ⌖ Crosslink(C) · Ref Lines로 서로 위치가 보입니다", 10000)
 
     def _init_link_menu(self, menu):
         """View ▸ Crosslink 연동 기준 — 어떤 시리즈끼리 위치를 맞출지"""
