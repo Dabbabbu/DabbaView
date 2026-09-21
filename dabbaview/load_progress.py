@@ -68,7 +68,7 @@ class LoadProgressDialog(QDialog):
         self.spinner.setStyleSheet("color:#9ab;font-size:12px")
         self.stats = QLabel("")
         self.stats.setStyleSheet("color:#9ab;font-size:12px;"
-                                 "font-family:'Menlo','Courier New',monospace;")
+                                 "font-family:'Menlo','Consolas','Courier New';")
         stats_row.addWidget(self.spinner)
         stats_row.addWidget(self.stats, 1)
         layout.addLayout(stats_row)
@@ -205,6 +205,18 @@ class LoadProgressDialog(QDialog):
     def reject(self):
         """ESC = 취소 (창은 닫지 않음 — 정리 후 닫힘)"""
         self._on_cancel()
+
+    def closeEvent(self, event):
+        """프로그램이 close()로 닫을 때는 반드시 닫힌다.
+
+        ★ QDialog의 기본 closeEvent는 reject()를 부르고, 그 뒤에도 창이 보이면 닫기를
+          '무시'한다. 위 reject()는 ESC를 '취소'로 쓰려고 창을 숨기지 않으므로,
+          기본 동작을 쓰면 close()가 영원히 무시되어 진행 창이 남아 있었다.
+          → 부모 closeEvent를 거치지 않고 직접 받아들인다.
+        """
+        self._ticker.stop()
+        event.accept()
+        self.hide()
 
     def wasCanceled(self):                             # noqa: N802 - 호환용
         return not self.cancel_button.isEnabled()

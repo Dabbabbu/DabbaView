@@ -196,18 +196,6 @@ class OneDriveProvider:
         return self.download_file(item, os.path.join(dest_dir, safe_name(item.name)),
                                   progress, cancelled)
 
-    def download_head(self, item, path, length):
-        """파일 앞부분 length 바이트만 받아 저장 → 실제로 받은 바이트 수"""
-        drive = item.extra.get("drive_id")
-        url = (f"/drives/{drive}/items/{item.id}/content" if drive
-               else f"/me/drive/items/{item.id}/content")
-        resp = self._get(url, stream=True,
-                         headers={"Range": f"bytes=0-{max(0, int(length) - 1)}"})
-        data = resp.content
-        with open(path, "wb") as fh:
-            fh.write(data)
-        return len(data)
-
     def download_file(self, item, path, progress=None, cancelled=None):
         """파일 하나를 path에 저장"""
         drive = item.extra.get("drive_id")

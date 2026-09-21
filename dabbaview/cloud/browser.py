@@ -171,30 +171,6 @@ class CloudBrowserDialog(QDialog):
         self._choice_label.setStyleSheet("color:#cfe0f5;")
         layout.addWidget(self._choice_label)
 
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("열기 방식:"))
-        self._fast_open = QRadioButton("⚡ 빠른 열기 (권장)")
-        self._fast_open.setChecked(True)
-        self._fast_open.setToolTip(
-            "인터넷이 되는 환경이라면 이쪽이 항상 낫습니다.\n"
-            " · 파일 앞부분(64 KB)만 받아 시리즈 목록을 바로 띄웁니다\n"
-            " · 시리즈를 열면 나머지를 백그라운드로 미리 받아 스크롤이 끊기지 않습니다\n"
-            " · 안 보는 시리즈는 아예 받지 않습니다 (시간·디스크 절약)\n"
-            "(동기화 폴더로 열 때는 불가능하고, API로 연결했을 때만 됩니다)")
-        self._full_open = QRadioButton("⬇ 전체 다운로드 (오프라인 대비)")
-        self._full_open.setToolTip(
-            "고른 폴더의 영상을 모두 내려받은 뒤 엽니다.\n"
-            "인터넷이 없는 곳에서 볼 예정이거나, 원본을 그대로 보관할 때 고르세요.\n"
-            "시간과 디스크 공간이 더 듭니다.")
-        group = QButtonGroup(self)
-        group.addButton(self._fast_open)
-        group.addButton(self._full_open)
-        self._mode_group = group
-        mode_row.addWidget(self._fast_open)
-        mode_row.addWidget(self._full_open)
-        mode_row.addStretch(1)
-        layout.addLayout(mode_row)
-        self._fast_open.toggled.connect(lambda *_: self._update_mode_hint())
         dest_row = QHBoxLayout()
         self._dest_hint = QLabel()
         self._dest_hint.setWordWrap(True)
@@ -218,7 +194,7 @@ class CloudBrowserDialog(QDialog):
         self._spinner.setFixedWidth(18)
         self._spinner.setAlignment(Qt.AlignCenter)
         self._status = QLabel()
-        self._status.setStyleSheet("font-family: 'Menlo', 'Courier New', monospace; font-size: 12px;")
+        self._status.setStyleSheet("font-family: 'Menlo', 'Consolas', 'Courier New'; font-size: 12px;")
         status_row.addWidget(self._spinner)
         status_row.addWidget(self._status, 1)
         layout.addLayout(status_row)
@@ -315,20 +291,8 @@ class CloudBrowserDialog(QDialog):
         self._refresh_dest_hint()
 
     def _update_mode_hint(self):
-        """고른 폴더를 훑고 나면 각 방식의 예상 용량을 버튼 이름에 붙여 준다"""
         if getattr(self, "_by_ext", None):
-            self._update_choice()      # 고른 유형 기준으로 계산 (아래 계산보다 정확)
-            return
-        summary = getattr(self, "_summary", None)
-        total = (summary or {}).get("bytes", 0)
-        files = (summary or {}).get("files", 0)
-        if total and files and not (summary or {}).get("listing"):
-            head = min(total, files * transfer.HEAD_BYTES)
-            self._fast_open.setText(f"⚡ 빠른 열기 (권장 · 약 {human_size(head)})")
-            self._full_open.setText(f"⬇ 전체 다운로드 (오프라인 대비 · 약 {human_size(total)})")
-        else:
-            self._fast_open.setText("⚡ 빠른 열기 (권장)")
-            self._full_open.setText("⬇ 전체 다운로드 (오프라인 대비)")
+            self._update_choice()
 
     def _fix_width(self):
         """글자가 길어져도 창 크기가 변하지 않게 (라벨이 창을 밀지 못하도록)"""
@@ -505,30 +469,21 @@ class CloudBrowserDialog(QDialog):
         count, size = self._chosen_counts()
         total_count = sum(v[0] for v in by_ext.values())
         rates = self._known_rates()
-        head = min(size, count * transfer.HEAD_BYTES)
-        # 헤더 받기는 요청 하나하나의 왕복 시간이 좌우 → 개수로 계산
-        head_secs = count / rates["heads_fps"] if count else 0
-        # 전체 받기는 용량(대역폭)과 개수(요청 수) 중 더 오래 걸리는 쪽
-        full_secs = max(size / rates["full_bps"] if size else 0,
-                        count / rates["full_fps"] if count else 0)
-        mark = "" if rates["measured"] else "약 "
-        head_eta = f"  ·  예상 {mark}{_human_time(head_secs)}" if count else ""
-        full_eta = f"  ·  예상 {mark}{_human_time(full_secs)}" if count else ""
+        secs = max(size / rates["full_bps"] if size else 0,
+                   count / rates["full_fps"] if count else 0)
+        eta = f"  ·  예상 {'' if rates['measured'] else '약 '}{_human_time(secs)}" if count else ""
         if self._type_pick.isChecked():
             excluded = getattr(self, "_ext_excluded", set()) or set()
             names = ", ".join(sorted(e for e in by_ext if e not in excluded))
             self._choice_label.setText(
-                f"고른 유형: {count:,}개 / 전체 {total_count:,}개  ·  {human_size(size)}"
+                f"고른 유형: {count:,}개 / 전체 {total_count:,}개  ·  {human_size(size)}{eta}"
                 + (f"  ·  {names}" if names else "  ·  (아무것도 고르지 않음)"))
         else:
-            self._choice_label.setText(f"전부 받기: {total_count:,}개  ·  {human_size(size)}")
-        self._fast_open.setText(f"⚡ 빠른 열기 (권장 · 약 {human_size(head)}{head_eta})")
-        self._full_open.setText(f"⬇ 전체 다운로드 (오프라인 대비 · {human_size(size)}{full_eta})")
+            self._choice_label.setText(f"전부 받기: {total_count:,}개  ·  {human_size(size)}{eta}")
 
     # 처음 쓸 때의 어림값 (실제로 받아 본 뒤에는 그 측정값을 씀)
-    DEFAULT_RATES = {"heads_fps": 15.0,              # 헤더: 초당 15개 (동시 12개 기준)
-                     "full_bps": 8 * 1024 * 1024,    # 전체: 8 MB/s
-                     "full_fps": 6.0}                # 전체: 초당 6개
+    DEFAULT_RATES = {"full_bps": 8 * 1024 * 1024,    # 8 MB/s
+                     "full_fps": 6.0}                # 초당 6개
 
     def _settings_qs(self):
         settings = getattr(self.main, "_app_settings", None)
@@ -606,6 +561,11 @@ class CloudBrowserDialog(QDialog):
     def _on_progress(self, value):
         if isinstance(value, tuple) and value and value[0] == "summary":
             self._show_summary(value[1])
+            return
+        if isinstance(value, tuple) and value and value[0] == "group":
+            _tag, paths, done, total = value
+            if hasattr(self.main, "add_ready_series"):
+                self.main.add_ready_series(paths, done, total)
             return
         self._on_progress_bar(value)
 
@@ -931,8 +891,6 @@ class CloudBrowserDialog(QDialog):
                 return
             to_fetch = [i for _rel, i in files if not transfer.cached_path(provider, i)]
             size = sum(i.size for i in to_fetch)
-            if self._fast_open.isChecked() and hasattr(provider, "download_head"):
-                size = min(size, len(to_fetch) * transfer.HEAD_BYTES)   # 헤더만 받음
             free, _total = self._disk_free()
             if free and size > free * 0.95:
                 QMessageBox.warning(
@@ -949,18 +907,18 @@ class CloudBrowserDialog(QDialog):
             self._skipped = skipped
             dest = self._download_dir()
             self._refresh_dest_hint()
-            fast = self._fast_open.isChecked() and hasattr(provider, "download_head")
-            if fast:
-                self._run(f"빠른 열기 - 메타데이터 받는 중... 0/{len(files)}",
-                          lambda progress, cancelled: transfer.fetch_heads(
-                              provider, files, tops, progress, cancelled, dest_root=dest),
-                          fetched)
-            else:
-                self._run(f"내려받는 중... 0/{len(files)} files",
-                          lambda progress, cancelled: transfer.fetch(provider, files, tops,
-                                                                     progress, cancelled,
-                                                                     dest_root=dest),
-                          fetched)
+            groups = len(transfer.group_by_folder(files))
+            self._progressive = groups > 1 and hasattr(self.main, "add_ready_series")
+            if self._progressive:
+                self.main.begin_cloud_session(groups)   # 다 받은 폴더부터 바로 열림
+
+            def run_fetch(progress, cancelled):
+                def group_done(_folder, paths, done, total):
+                    progress(("group", paths, done, total))
+                return transfer.fetch(provider, files, tops, progress, cancelled,
+                                      dest_root=dest,
+                                      on_group_done=group_done if self._progressive else None)
+            self._run(f"내려받는 중... 0/{len(files)} files", run_fetch, fetched)
 
         def fetched(result):
             paths, stats = result
@@ -969,12 +927,9 @@ class CloudBrowserDialog(QDialog):
             elapsed = _t.monotonic() - (state.get("start") or _t.monotonic())
             fetched_new = (stats.get("heads", 0) or stats.get("done", 0)) - stats.get("hits", 0)
             if elapsed > 3 and fetched_new > 20:          # 캐시에서 꺼낸 건 빼고 실제로 받은 것만
-                if "heads" in stats:                      # 빠른 열기
-                    self._remember_rate("heads_fps", fetched_new / elapsed)
-                else:                                     # 전체 받기
-                    self._remember_rate("full_fps", fetched_new / elapsed)
-                    if stats.get("bytes"):
-                        self._remember_rate("full_bps", stats["bytes"] / elapsed)
+                self._remember_rate("full_fps", fetched_new / elapsed)
+                if stats.get("bytes"):
+                    self._remember_rate("full_bps", stats["bytes"] / elapsed)
             self.downloaded = paths
             self.stats = dict(stats, skipped=getattr(self, "_skipped", 0))
             self._dest_hint.setText(
@@ -1043,6 +998,8 @@ def open_from_cloud(main_window, provider):
             f"내려받음 {cache.human_size(stats.get('bytes', 0))}"
             + (f", 건너뜀 {stats['skipped']}개" if stats.get("skipped") else "") + ") 불러오는 중...",
             10000)
+        if getattr(dialog, "_progressive", False):
+            return                      # 폴더마다 이미 불러왔음 (다시 불러오지 않음)
         # 로컬 Open Folder와 같은 방식으로 (세션 폴더는 최근 목록에 남기지 않음)
         main_window.load_paths(dialog.downloaded, remember=False)
 

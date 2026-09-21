@@ -217,61 +217,6 @@ class GoogleDriveProvider:
         return self.download_file(item, os.path.join(dest_dir, safe_name(item.name)),
                                   progress, cancelled)
 
-    def download_head(self, item, path, length):
-        """파일 앞부분 length 바이트만 받아 저장 → 실제로 받은 바이트 수
-
-        DICOM은 앞부분에 메타데이터가 모두 들어 있어서, 이것만 받아도
-        환자·검사·시리즈·슬라이스 위치를 읽을 수 있다 (픽셀은 나중에).
-        """
-        url = (f"https://www.googleapis.com/drive/v3/files/{item.id}"
-               "?alt=media&supportsAllDrives=true")
-        headers = {"Authorization": f"Bearer {self._access_token()}",
-                   "Range": f"bytes=0-{max(0, int(length) - 1)}"}
-        import time
-        response = None
-        import random
-        for attempt in range(6):        # 403·429(요청이 몰림)면 점점 오래 쉬었다 다시
-            response = self._http().get(url, headers=headers, timeout=60)
-            if response.status_code not in (403, 429, 500, 502, 503):
-                break
-            time.sleep(min(16.0, (2 ** attempt) * 0.5) + random.random() * 0.4)
-        if response.status_code >= 400:
-            raise CloudError(f"{item.name}: HTTP {response.status_code}")
-        data = response.content
-        with open(path, "wb") as fh:
-            fh.write(data)
-        return len(data)
-
-    def _http(self):
-        """스레드마다 하나씩 두는 연결 (keep-alive로 TLS 악수를 다시 하지 않음)
-
-        헤더만 받을 때는 파일마다 연결을 새로 맺는 비용이 전송보다 크다.
-        requests는 certifi 인증서를 쓰므로 번들 앱에서도 동작한다.
-        """
-        import threading
-        import requests
-        local = getattr(self, "_tls", None)
-        if local is None:
-            local = self._tls = threading.local()
-        session = getattr(local, "session", None)
-        if session is None:
-            session = local.session = requests.Session()
-            adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=4,
-                                                    max_retries=2)
-            session.mount("https://", adapter)
-        return session
-
-    def _access_token(self):
-        """지금 쓸 수 있는 액세스 토큰 (만료되었으면 갱신)"""
-        creds = self._creds
-        if creds is None:
-            self._service()          # 로그인 · 토큰 준비
-            creds = self._creds
-        if getattr(creds, "expired", False) and getattr(creds, "refresh_token", None):
-            from google.auth.transport.requests import Request
-            creds.refresh(Request())
-        return creds.token
-
     def download_file(self, item, path, progress=None, cancelled=None):
         """파일 하나를 path에 저장"""
         if not item.downloadable:

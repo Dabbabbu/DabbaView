@@ -20,9 +20,7 @@ import time
 from .. import cache
 from . import CloudError, safe_name
 
-WORKERS = 6            # 전체 파일 받기 (큰 파일 - 대역폭이 병목)
-HEAD_WORKERS = 18      # 헤더만 받기 - 구글 한도(1인당 분당 325,000단위 ≈ 초당 27건) 아래로
-                       # 넘치면 Throttle이 스스로 속도를 낮춤
+WORKERS = 10           # 동시에 받는 파일 수 (구글 한도 1인당 초당 약 27건 안쪽, 넘치면 자동 재시도)
 
 
 def wanted(name):
@@ -34,35 +32,6 @@ def wanted(name):
     if name.lower().endswith(TEXT_REPORT_EXTENSIONS):
         return True
     return is_candidate_file(name) or file_kind(name) != "dicom"
-
-
-class Throttle:
-    """요청 한도에 걸리면 잠시 쉬었다가 천천히 회복 (구글 분당 한도 대응)"""
-
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._until = 0.0
-        self._penalty = 0.0
-
-    def wait(self):
-        while True:
-            with self._lock:
-                remain = self._until - time.monotonic()
-            if remain <= 0:
-                return
-            time.sleep(min(remain, 0.5))
-
-    def hit_limit(self):
-        """한도 응답을 받았을 때: 쉬는 시간을 늘림 (최대 20초)"""
-        with self._lock:
-            self._penalty = min(20.0, (self._penalty or 1.0) * 2)
-            self._until = time.monotonic() + self._penalty
-            return self._penalty
-
-    def ok(self):
-        """성공하면 벌점을 조금씩 줄임"""
-        with self._lock:
-            self._penalty = max(0.0, self._penalty * 0.5)
 
 
 def _human_time(seconds):
@@ -193,115 +162,12 @@ def _fetch_one(provider, item, on_bytes, cancelled):
     return data, False
 
 
-HEAD_BYTES = 32 * 1024        # DICOM 헤더용으로 받을 앞부분 크기 (대부분 여기서 끝남)
-
-
-def fetch_heads(provider, files, tops, progress=None, cancelled=None, workers=HEAD_WORKERS,
-                dest_root=None, head_bytes=HEAD_BYTES):
-    """파일 앞부분(헤더)만 받아 둔다 → (경로 목록, 통계)
-
-    받은 파일은 lazy 모듈에 등록되어, 픽셀이 필요해지는 순간 전체를 내려받는다.
-    """
-    from . import lazy
-    session = session_dir(provider.key, dest_root)
-    total = len(files)
-    lock = threading.Lock()
-    stats = {"done": 0, "hits": 0, "bytes": 0, "total": total, "folder": session,
-             "heads": 0}
-    start = time.monotonic()
-    paths = []
-
-    def report():
-        elapsed = max(0.001, time.monotonic() - start)
-        done = stats["done"]
-        speed = done / elapsed
-        parts = [f"{done:,}/{total:,} 파일 ({done * 100 // max(1, total)}%)",
-                 f"헤더 {cache.human_size(stats['bytes'])} 받음"]
-        if speed > 0.1:
-            parts.append(f"{speed:.0f}개/초")
-            if done < total:
-                parts.append(f"남은 시간 약 {_human_time((total - done) / speed)}")
-        if progress:
-            progress(("count", done, total,
-                      "빠른 열기 - 메타데이터만 받는 중  ·  " + "  ·  ".join(parts)))
-
-    throttle = Throttle()
-    stats["failed"] = 0
-
-    def task(rel, item):
-        dest = os.path.join(session, rel)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        cached = cached_path(provider, item)
-        if cached:                                  # 이미 전체가 캐시에 있으면 그대로 사용
-            _link(cached, dest)
-            with lock:
-                stats["hits"] += 1
-        else:
-            got = 0
-            for attempt in range(5):
-                if cancelled and cancelled():
-                    return
-                throttle.wait()
-                try:
-                    got = provider.download_head(item, dest, head_bytes)
-                    lazy.register(dest, provider, item)   # 나머지는 볼 때 받음
-                    throttle.ok()
-                    break
-                except Exception as e:  # noqa: BLE001
-                    if _is_rate_limit(e):
-                        throttle.hit_limit()          # 한도 → 전체 속도를 잠시 낮춤
-                        continue
-                    if attempt >= 2:                  # 다른 오류: 통째로 받아 보고, 그래도 안 되면 건너뜀
-                        try:
-                            path, _hit = _fetch_one(provider, item, None, cancelled)
-                            _link(path, dest)
-                            got = getattr(item, "size", 0) or 0
-                        except Exception:  # noqa: BLE001
-                            with lock:
-                                stats["failed"] += 1
-                                stats["done"] += 1
-                            report()
-                            return
-                        break
-                    time.sleep(0.3 * (attempt + 1))
-            with lock:
-                stats["bytes"] += got
-                stats["heads"] += 1
-        with lock:
-            stats["done"] += 1
-            paths.append(dest)
-        report()
-
-    report()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(task, rel, item) for rel, item in files]
-        for future in concurrent.futures.as_completed(futures):
-            if cancelled and cancelled():
-                for f in futures:
-                    f.cancel()
-                raise CloudError("취소했습니다.")
-            try:
-                future.result()
-            except Exception:  # noqa: BLE001 - 개별 파일 실패는 건너뛰고 계속
-                with lock:
-                    stats["failed"] = stats.get("failed", 0) + 1
-    return sorted(paths), stats
-
-
 def _link(src, dst):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     try:
         os.link(src, dst)        # 하드 링크: 공간을 더 쓰지 않고, 캐시가 지워져도 유지
     except OSError:
         shutil.copy2(src, dst)
-
-
-def _is_rate_limit(error):
-    """구글·MS의 '요청이 너무 많음' 응답인지"""
-    text = str(error)
-    return ("rateLimitExceeded" in text or "userRateLimitExceeded" in text
-            or "Quota exceeded" in text or "429" in text
-            or "HTTP 403" in text or "HttpError 403" in text)
 
 
 def session_dir(provider_key, dest_root=None):
@@ -314,14 +180,33 @@ def session_dir(provider_key, dest_root=None):
     return path
 
 
+def group_by_folder(files):
+    """파일을 들어 있는 폴더별로 묶음 (보통 한 폴더 = 한 시리즈). 처음 나온 순서 유지"""
+    groups = {}
+    for rel, item in files:
+        groups.setdefault(os.path.dirname(rel), []).append((rel, item))
+    return list(groups.items())
+
+
 def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
-          dest_root=None):
-    """계획한 파일들을 캐시를 거쳐 저장 폴더로 → (불러올 경로 목록, 통계 dict)"""
+          dest_root=None, on_group_done=None):
+    """계획한 파일들을 캐시를 거쳐 저장 폴더로 → (불러올 경로 목록, 통계 dict)
+
+    폴더(≈시리즈) 단위로 차례대로 받는다. 한 폴더를 다 받으면
+    on_group_done(폴더, [파일 경로들], 끝난 폴더 수, 전체 폴더 수)를 불러
+    다른 폴더를 받는 동안에도 그 시리즈를 바로 볼 수 있게 한다.
+    """
     session = session_dir(provider.key, dest_root)
+    groups = group_by_folder(files)
+    files = [f for _g, members in groups for f in members]      # 폴더 순서대로 받음
     total = len(files)
     lock = threading.Lock()
-    stats = {"done": 0, "hits": 0, "bytes": 0, "total": total, "folder": session}
+    stats = {"done": 0, "hits": 0, "bytes": 0, "total": total, "folder": session,
+             "groups_done": 0, "groups": len(groups)}
     in_flight = {}
+    left_in_group = {g: len(members) for g, members in groups}
+    group_paths = {g: [] for g, _m in groups}
+    group_of = {rel: g for g, members in groups for rel, _i in members}
 
     total_bytes = sum(getattr(i, "size", 0) or 0 for _rel, i in files)
     start = time.monotonic()
@@ -339,8 +224,8 @@ def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
                 parts.append(f"남은 시간 약 {_human_time(left / speed)}")
         if stats["hits"]:
             parts.append(f"캐시 {stats['hits']}개")
-        if stats.get("throttled"):
-            parts.append(f"요청 한도로 잠시 천천히 ({stats['throttled']}회)")
+        if stats["groups"] > 1:
+            parts.append(f"폴더 {stats['groups_done']}/{stats['groups']} 완료")
         if progress:
             progress(("count", stats["done"], total, "내려받는 중  ·  " + "  ·  ".join(parts)))
 
@@ -351,11 +236,21 @@ def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
                 in_flight[item.id] = done_bytes
             report()
         path, hit = _fetch_one(provider, item, on_bytes, cancelled)
-        _link(path, os.path.join(session, rel))
+        dest = os.path.join(session, rel)
+        _link(path, dest)
+        finished = None
         with lock:
             stats["done"] += 1
             stats["hits"] += int(hit)
+            group = group_of[rel]
+            group_paths[group].append(dest)
+            left_in_group[group] -= 1
+            if left_in_group[group] == 0:            # 이 폴더(시리즈)는 다 받음
+                stats["groups_done"] += 1
+                finished = (group, sorted(group_paths[group]), stats["groups_done"])
         report()
+        if finished and on_group_done is not None:
+            on_group_done(finished[0], finished[1], finished[2], stats["groups"])
 
     report()
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
