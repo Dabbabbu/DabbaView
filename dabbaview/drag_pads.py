@@ -2,18 +2,18 @@
 # This file is part of DabbaView, licensed under GPL-3.0.
 # See LICENSE for details.
 """
-영상 옆 조절 막대 - 영상을 가리지 않고 확대 · W/L을 마우스 끌기로 조절
+Zoom · W/L 조절 칸 - 맨 아래 상태바에 있어 영상을 가리지 않고, 마우스 끌기로 확대 · W/L 조절
 
 - 🔍 Zoom: 누른 채 위로 끌면 확대, 아래로 축소 (두 번 클릭: 화면 맞춤)
 - ◐ W/L: 좌우 = Width, 위아래 = Level — 영상 위 우클릭 드래그와 같음 (두 번 클릭: DICOM 기본값)
 - 대상은 지금 보는 영상 (Multi View에서는 선택한 칸)
 """
 from PyQt5.QtCore import QPoint, Qt, pyqtSignal
-from PyQt5.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 PAD_STYLE = """
-QLabel#DragPad { background: #262a30; color: #cfd6df; border: 1px solid #3a414a; border-radius: 6px;
-                 font-size: 11px; padding: 6px 2px; }
+QLabel#DragPad { background: #262a30; color: #cfd6df; border: 1px solid #3a414a; border-radius: 4px;
+                 font-size: 11px; padding: 1px 8px; }
 QLabel#DragPad:hover { background: #2f3945; border-color: #3d8bfd; color: #fff; }
 QLabel#DragPad[dragging="true"] { background: #094771; border-color: #3d8bfd; color: #fff; }
 """
@@ -35,8 +35,7 @@ class DragPad(QLabel):
         self.setAlignment(Qt.AlignCenter)
         self.setToolTip(tip)
         self.setCursor(cursor)
-        self.setMinimumHeight(64)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setFixedWidth(132)      # 끄는 동안 숫자가 바뀌어도 칸 크기는 그대로
         self._last = None
 
     def mousePressEvent(self, event):
@@ -70,22 +69,19 @@ class DragPad(QLabel):
 
 
 class DragPadStrip(QWidget):
-    """세로 막대: [🔍 Zoom] [◐ W/L]. target() → 조절할 DicomViewport (없으면 None)"""
+    """상태바에 넣는 [🔍 Zoom ↕] [◐ W/L ✥]. target() → 조절할 DicomViewport (없으면 None)"""
 
     def __init__(self, target, parent=None):
         super().__init__(parent)
         self.target = target
         self.setObjectName("DragPadStrip")
-        self.setFixedWidth(58)
-        self.setStyleSheet(PAD_STYLE + "QWidget#DragPadStrip { background: #1b1e22; "
-                                       "border-left: 1px solid #333; }")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 8, 5, 8)
-        layout.setSpacing(8)
-        self.zoom = DragPad("🔍\nZoom\n↕", "누른 채 위로 끌면 확대, 아래로 축소\n두 번 클릭: 화면 맞춤",
+        self.setStyleSheet(PAD_STYLE)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 1, 6, 1)
+        layout.setSpacing(4)
+        self.zoom = DragPad("🔍 Zoom  ↕", "누른 채 위로 끌면 확대, 아래로 축소\n두 번 클릭: 화면 맞춤",
                             Qt.SizeVerCursor)
-        self.wl = DragPad("◐\nW/L\n✥", "누른 채 끌기: 좌우 = Width(대비), 위아래 = Level(밝기)\n"
+        self.wl = DragPad("◐ W/L  ✥", "누른 채 끌기: 좌우 = Width(대비), 위아래 = Level(밝기)\n"
                           "두 번 클릭: DICOM 기본값", Qt.SizeAllCursor)
         self.zoom.dragged.connect(self._zoom)
         self.wl.dragged.connect(self._window)
@@ -94,7 +90,6 @@ class DragPadStrip(QWidget):
         for pad in (self.zoom, self.wl):
             pad.released.connect(lambda p=pad: p.setText(p.base_text))
             layout.addWidget(pad)
-        layout.addStretch(1)
 
     def _viewport(self):
         vp = self.target()
@@ -107,7 +102,7 @@ class DragPadStrip(QWidget):
         center = QPoint(vp.width() // 2, vp.height() // 2)   # 영상 가운데를 기준으로
         vp._zoom_by(max(0.2, 1.0 - dy * ZOOM_PER_PX), center)
         vp.update()
-        self.zoom.setText(f"🔍\n{vp._zoom * 100:.0f}%")
+        self.zoom.setText(f"🔍 {vp._zoom * 100:.0f}%")
 
     def _window(self, dx, dy):
         vp = self._viewport()
@@ -116,7 +111,7 @@ class DragPadStrip(QWidget):
         vp._adjust_window(dx, dy)
         vp.update()
         center, width = vp.window_level
-        self.wl.setText(f"◐\nW {width:.0f}\nL {center:.0f}")
+        self.wl.setText(f"◐ W {width:.0f} L {center:.0f}")
 
     def _fit(self):
         vp = self._viewport()

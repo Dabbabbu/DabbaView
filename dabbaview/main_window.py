@@ -452,10 +452,6 @@ class MainWindow(QMainWindow):
         self._panel_toggle.clicked.connect(self.toggle_series_panel)
         right_layout.addWidget(self._panel_toggle)
         right_layout.addWidget(self._tab_widget)
-        # 영상 옆 조절 막대: 영상을 가리지 않고 끌어서 Zoom · W/L
-        from .drag_pads import DragPadStrip
-        self._drag_pads = DragPadStrip(self._target_viewport)
-        right_layout.addWidget(self._drag_pads)
         splitter.addWidget(right)
 
         left_panel.setMinimumWidth(220)
@@ -585,10 +581,10 @@ class MainWindow(QMainWindow):
         self._view_menu = view_menu
         self._init_ui_scale_menu(view_menu)
         self._init_arrow_menu(view_menu)
-        self._act_drag_pads = view_menu.addAction("🔍◐ 영상 옆 Zoom · W/L 조절 막대")
+        self._act_drag_pads = view_menu.addAction("🔍◐ 맨 아래 Zoom · W/L 조절 칸")
         self._act_drag_pads.setCheckable(True)
         self._act_drag_pads.setChecked(self._settings.value("ui/drag_pads", True, type=bool))
-        self._act_drag_pads.setToolTip("영상 오른쪽 막대를 누른 채 끌어 확대 · W/L 조절 (영상을 가리지 않음)")
+        self._act_drag_pads.setToolTip("맨 아래 상태바의 칸을 누른 채 끌어 확대 · W/L 조절 (영상을 가리지 않음)")
         self._act_drag_pads.toggled.connect(self._set_drag_pads)
         view_menu.addSeparator()
 
@@ -1026,6 +1022,10 @@ class MainWindow(QMainWindow):
         self._status_pos = QLabel("")
         self._statusbar.addWidget(self._status_wl)
         self._statusbar.addWidget(self._status_zoom)
+        # 맨 아래 Zoom · W/L 조절 칸: 영상을 가리지 않고 끌어서 조절 (알림 글이 떠도 가려지지 않게 고정 영역)
+        from .drag_pads import DragPadStrip
+        self._drag_pads = DragPadStrip(self._target_viewport)
+        self._statusbar.addPermanentWidget(self._drag_pads)
         self._statusbar.addPermanentWidget(self._status_pos)
         # 불러오기·표시에 실패한 파일 목록 (디코딩 실패는 어느 스레드에서든 보고됨)
         from . import dicom_loader
