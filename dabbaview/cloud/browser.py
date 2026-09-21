@@ -501,10 +501,16 @@ class CloudBrowserDialog(QDialog):
             return
         count, size = self._chosen_counts()
         total_count = sum(v[0] for v in by_ext.values())
-        speed = self._known_speed()
-        full_eta = f"  ·  예상 {_human_time(size / speed)}" if size and speed else ""
+        rates = self._known_rates()
         head = min(size, count * transfer.HEAD_BYTES)
-        head_eta = f"  ·  예상 {_human_time(head / speed)}" if head and speed else ""
+        # 헤더 받기는 요청 하나하나의 왕복 시간이 좌우 → 개수로 계산
+        head_secs = count / rates["heads_fps"] if count else 0
+        # 전체 받기는 용량(대역폭)과 개수(요청 수) 중 더 오래 걸리는 쪽
+        full_secs = max(size / rates["full_bps"] if size else 0,
+                        count / rates["full_fps"] if count else 0)
+        mark = "" if rates["measured"] else "약 "
+        head_eta = f"  ·  예상 {mark}{_human_time(head_secs)}" if count else ""
+        full_eta = f"  ·  예상 {mark}{_human_time(full_secs)}" if count else ""
         if self._type_pick.isChecked():
             excluded = getattr(self, "_ext_excluded", set()) or set()
             names = ", ".join(sorted(e for e in by_ext if e not in excluded))
@@ -516,9 +522,38 @@ class CloudBrowserDialog(QDialog):
         self._fast_open.setText(f"⚡ 빠른 열기 (권장 · 약 {human_size(head)}{head_eta})")
         self._full_open.setText(f"⬇ 전체 다운로드 (오프라인 대비 · {human_size(size)}{full_eta})")
 
-    def _known_speed(self):
-        """최근에 관찰한 다운로드 속도 (없으면 8 MB/s로 어림)"""
-        return getattr(self, "_speed_hint", 0) or 8 * 1024 * 1024
+    # 처음 쓸 때의 어림값 (실제로 받아 본 뒤에는 그 측정값을 씀)
+    DEFAULT_RATES = {"heads_fps": 15.0,              # 헤더: 초당 15개 (동시 12개 기준)
+                     "full_bps": 8 * 1024 * 1024,    # 전체: 8 MB/s
+                     "full_fps": 6.0}                # 전체: 초당 6개
+
+    def _settings_qs(self):
+        settings = getattr(self.main, "_app_settings", None)
+        return getattr(settings, "_qs", None)
+
+    def _known_rates(self):
+        """지난번에 실제로 잰 속도 (없으면 어림값) — 설정에 저장돼 다음에도 쓰임"""
+        rates = dict(self.DEFAULT_RATES)
+        measured = False
+        qs = self._settings_qs()
+        if qs is not None:
+            for key in rates:
+                try:
+                    value = float(qs.value(f"cloud/rate_{key}", 0) or 0)
+                except (TypeError, ValueError):
+                    value = 0
+                if value > 0:
+                    rates[key] = value
+                    measured = True
+        rates["measured"] = measured
+        return rates
+
+    def _remember_rate(self, key, value):
+        qs = self._settings_qs()
+        if qs is not None and value > 0:
+            old = float(qs.value(f"cloud/rate_{key}", 0) or 0)
+            blended = value if old <= 0 else old * 0.4 + value * 0.6   # 최근 값에 무게
+            qs.setValue(f"cloud/rate_{key}", round(blended, 3))
 
     def _on_type_mode(self, picking):
         """전부 받기 ↔ 유형 골라서 받기"""
@@ -925,8 +960,14 @@ class CloudBrowserDialog(QDialog):
             state = getattr(self, "_prog", None) or {}
             import time as _t
             elapsed = _t.monotonic() - (state.get("start") or _t.monotonic())
-            if stats.get("bytes") and elapsed > 2:
-                self._speed_hint = stats["bytes"] / elapsed
+            fetched_new = (stats.get("heads", 0) or stats.get("done", 0)) - stats.get("hits", 0)
+            if elapsed > 3 and fetched_new > 20:          # 캐시에서 꺼낸 건 빼고 실제로 받은 것만
+                if "heads" in stats:                      # 빠른 열기
+                    self._remember_rate("heads_fps", fetched_new / elapsed)
+                else:                                     # 전체 받기
+                    self._remember_rate("full_fps", fetched_new / elapsed)
+                    if stats.get("bytes"):
+                        self._remember_rate("full_bps", stats["bytes"] / elapsed)
             self.downloaded = paths
             self.stats = dict(stats, skipped=getattr(self, "_skipped", 0))
             self._dest_hint.setText(
