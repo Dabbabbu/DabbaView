@@ -142,6 +142,7 @@ class LoadProgressDialog(QDialog):
             if speed > 0 and current < total:
                 parts.append(f"남은 시간 약 {human_time((total - current) / speed)}")
         self._last_stats = "  ·  ".join(parts)
+        self._last_numbers = (current, total)
         self._last_update = time.monotonic()
         self.spinner.setText(self.SPINNER[self._spin])
         self.stats.setText(self._last_stats)
@@ -161,9 +162,17 @@ class LoadProgressDialog(QDialog):
         quiet = time.monotonic() - self._last_update
         mark = self.SPINNER[self._spin]
         self.spinner.setText(mark)
-        text = self._last_stats or f"준비 중…  ·  경과 {human_time(elapsed)}"
+        numbers = getattr(self, "_last_numbers", None)
+        if numbers:                      # 경과 시간은 지금 기준으로 다시 계산
+            done, total = numbers
+            percent = (done * 100.0 / total) if total else 0.0
+            text = f"{done:,} / {total:,} 파일 ({percent:.1f}%)  ·  경과 {human_time(elapsed)}"
+        else:
+            text = self._last_stats or f"준비 중…  ·  경과 {human_time(elapsed)}"
         if quiet > 3:
             text += f"   (마지막 응답 {human_time(quiet)} 전 — 큰 파일이면 시간이 걸립니다)"
+        if getattr(self, "_cancel_at", None) and time.monotonic() - self._cancel_at > 3:
+            text += "   ·  정리가 오래 걸리면 '강제 중단'을 누르세요"
         self.stats.setText(text)
 
     def show_force_button(self):
@@ -180,6 +189,9 @@ class LoadProgressDialog(QDialog):
         self.cancel_button.setEnabled(False)
         self.cancel_button.setText("정리하는 중…")
         self.show_force_button()
+        self.force_button.setEnabled(True)      # 취소가 안 먹힐 때를 위해 항상 누를 수 있게
+        self.force_button.setDefault(True)
+        self._cancel_at = time.monotonic()
         self.canceled.emit()
 
     def _on_force(self):

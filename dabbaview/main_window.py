@@ -1641,6 +1641,14 @@ class MainWindow(QMainWindow):
 
     def _check_load_stall(self):
         worker, progress = self._load_worker, self._load_progress
+        if worker is None and progress is not None:
+            # 작업은 끝났는데 창이 남아 있으면 스스로 정리 (버튼이 안 먹히는 것처럼 보임)
+            progress.close()
+            self._load_progress = None
+            watchdog = getattr(self, "_load_watchdog", None)
+            if watchdog is not None:
+                watchdog.stop()
+            return
         if worker is None or progress is None:
             return
         memory_warning = self._update_ram()
@@ -1682,7 +1690,15 @@ class MainWindow(QMainWindow):
         스레드는 뒤에서 스스로 끝나게 두고(참조만 남겨 둠) 화면은 즉시 정리한다.
         """
         worker = self._load_worker
-        if worker is None:
+        if worker is None:      # 작업은 이미 끝났는데 창만 남은 경우 → 창이라도 닫아 준다
+            if self._load_progress is not None:
+                self._load_progress.close()
+                self._load_progress = None
+            watchdog = getattr(self, "_load_watchdog", None)
+            if watchdog is not None:
+                watchdog.stop()
+            self._status_ram.setVisible(False)
+            self._statusbar.showMessage("불러오기 창을 닫았습니다.", 5000)
             return
         worker.cancel()
         worker.answer_placeholders("cancel")   # 클라우드 질문을 기다리는 중이면 풀어 줌
