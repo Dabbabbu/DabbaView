@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QPushButton, QInputDialog, QToolButton, QSizePolicy, QShortcut, QDialog, QCheckBox
 )
 from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings, QObject, QEvent,
-                          QVariantAnimation, QEasingCurve, QTimer, QUrl)
+                          QVariantAnimation, QEasingCurve, QTimer, QUrl, QPoint)
 from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices, QColor
 
 from .dicom_loader import CLOUD_TIMEOUT_S as DL_CLOUD_TIMEOUT, DicomLoader
@@ -204,6 +204,26 @@ class _QuitWatcher(QObject):
             self._on_quit()
             return True
         return False
+
+
+class _GeometryWatcher(QObject):
+    """지켜보는 위젯의 크기 · 위치가 바뀌면 (한 번에 모아) callback — 상태바 가운데 칸 자리 맞춤용"""
+
+    def __init__(self, callback, parent=None):
+        super().__init__(parent)
+        self._callback = callback
+        self._pending = False
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Resize, QEvent.Move, QEvent.Show, QEvent.LayoutRequest):
+            if not self._pending:
+                self._pending = True
+                QTimer.singleShot(0, self._run)
+        return False
+
+    def _run(self):
+        self._pending = False
+        self._callback()
 
 
 class MainWindow(QMainWindow):
@@ -1022,11 +1042,16 @@ class MainWindow(QMainWindow):
         self._status_pos = QLabel("")
         self._statusbar.addWidget(self._status_wl)
         self._statusbar.addWidget(self._status_zoom)
-        # 맨 아래 Zoom · W/L 조절 칸: 영상을 가리지 않고 끌어서 조절 (알림 글이 떠도 가려지지 않게 고정 영역)
-        from .drag_pads import DragPadStrip
-        self._drag_pads = DragPadStrip(self._target_viewport)
-        self._statusbar.addPermanentWidget(self._drag_pads)
         self._statusbar.addPermanentWidget(self._status_pos)
+        # 맨 아래 Zoom · W/L 조절 칸: 영상을 가리지 않고 끌어서 조절.
+        # 상태바 배치에 넣지 않고 '뷰어 창 가운데 아래'에 직접 놓음 → 옆 패널을 열고 닫아도 가운데 유지
+        from .drag_pads import DragPadStrip
+        self._drag_pads = DragPadStrip(self._target_viewport, self._statusbar)
+        self._drag_pads.adjustSize()
+        self._pad_watcher = _GeometryWatcher(self._place_drag_pads, self)
+        for widget in (self._tab_widget, self._tab_widget.parentWidget(), self._statusbar):
+            widget.installEventFilter(self._pad_watcher)
+        QTimer.singleShot(0, self._place_drag_pads)
         # 불러오기·표시에 실패한 파일 목록 (디코딩 실패는 어느 스레드에서든 보고됨)
         from . import dicom_loader
         from .load_errors import LoadErrorButton, LoadErrorLog
@@ -2607,6 +2632,22 @@ class MainWindow(QMainWindow):
         self._refresh_image_info()
         self._ai_panel.on_series_changed()
 
+    def _place_drag_pads(self):
+        """Zoom · W/L 칸을 뷰어(2D View … 3D Volume 영역) 가로 가운데, 상태바 세로 가운데에"""
+        pads = getattr(self, "_drag_pads", None)
+        if pads is None:
+            return
+        try:
+            bar = self._statusbar
+            area = self._tab_widget
+            center = area.mapTo(self, QPoint(area.width() // 2, 0)).x() - bar.mapTo(self, QPoint(0, 0)).x()
+            pads.adjustSize()
+            x = max(0, min(bar.width() - pads.width(), center - pads.width() // 2))
+            pads.move(x, max(0, (bar.height() - pads.height()) // 2))
+            pads.raise_()
+        except RuntimeError:
+            pass
+
     def _set_drag_pads(self, on):
         self._settings.setValue("ui/drag_pads", bool(on))
         self._update_drag_pads()
@@ -2620,6 +2661,7 @@ class MainWindow(QMainWindow):
         on = action.isChecked() if action is not None else True
         current = self._tab_widget.currentWidget()
         pads.setVisible(on and current in (getattr(self, "_page2d", None), self._multi_viewport))
+        self._place_drag_pads()
 
     def _on_tab_changed(self, index):
         self._update_drag_pads()
