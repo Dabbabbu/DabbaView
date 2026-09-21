@@ -336,9 +336,23 @@ class CloudBrowserDialog(QDialog):
         self.setMinimumWidth(880)
         self.resize(980, 720)
 
+    ROW_PX = 24          # 표 한 줄 높이(대략)
+
+    def _set_detail_space(self, expanded):
+        """확장자 표를 펼치면 5~6줄이 보이도록 폴더 목록 높이를 양보한다"""
+        if expanded:
+            self._summary_detail.setMinimumHeight(self.ROW_PX * 6 + 28)   # 6줄 + 머리글
+            self._summary_detail.setMaximumHeight(self.ROW_PX * 9 + 28)
+            self._tree.setMinimumHeight(self.ROW_PX * 5)                  # 폴더도 5줄은 유지
+        else:
+            self._summary_detail.setMinimumHeight(0)
+            self._summary_detail.setMaximumHeight(120)
+            self._tree.setMinimumHeight(300)
+
     def _toggle_summary(self, on):
         self._summary_toggle.setText("▾ 접기" if on else "▸ 자세히")
         self._summary_detail.setVisible(on)
+        self._set_detail_space(on)
         if on:
             self._scan_current()          # 하위 폴더 내용까지 훑어서 채움
         else:
@@ -403,10 +417,12 @@ class CloudBrowserDialog(QDialog):
         self._summary_detail.blockSignals(True)
         self._summary_detail.clear()
         picking = self._type_pick.isChecked()
-        chosen = getattr(self, "_ext_chosen", None)
-        if picking and chosen is None:      # 골라서 받기로 바꾼 직후: 우선 모두 체크
-            chosen = set(by_ext)
-            self._ext_chosen = chosen
+        # 새 확장자가 나중에 발견돼도 기본은 '받음' — 사용자가 끈 것만 기억한다
+        excluded = getattr(self, "_ext_excluded", None)
+        if excluded is None:
+            excluded = self._ext_excluded = set()
+        chosen = {e for e in by_ext if e not in excluded}
+        self._ext_chosen = chosen if picking else None
         for ext, (count, size) in sorted(by_ext.items(), key=lambda kv: (-kv[1][0], kv[0])):
             row = QTreeWidgetItem([ext, f"{count:,}개", human_size(size)])
             if picking:
@@ -424,19 +440,26 @@ class CloudBrowserDialog(QDialog):
         self._update_choice()
 
     def _on_ext_toggled(self, *_args):
-        chosen = set()
+        chosen, excluded = set(), set(getattr(self, "_ext_excluded", set()))
         for i in range(self._summary_detail.topLevelItemCount()):
             row = self._summary_detail.topLevelItem(i)
+            ext = row.data(0, Qt.UserRole)
             if row.checkState(0) == Qt.Checked:
-                chosen.add(row.data(0, Qt.UserRole))
+                chosen.add(ext)
+                excluded.discard(ext)
+            else:
+                excluded.add(ext)
         self._ext_chosen = chosen
+        self._ext_excluded = excluded
         self._update_choice()
 
     def _chosen_counts(self):
         """고른 유형의 (개수, 용량)"""
         by_ext = getattr(self, "_by_ext", {}) or {}
-        chosen = getattr(self, "_ext_chosen", None)
-        if chosen is None or not self._type_pick.isChecked():
+        if self._type_pick.isChecked():
+            excluded = getattr(self, "_ext_excluded", set()) or set()
+            chosen = {e for e in by_ext if e not in excluded}
+        else:
             chosen = set(by_ext)
         count = sum(v[0] for k, v in by_ext.items() if k in chosen)
         size = sum(v[1] for k, v in by_ext.items() if k in chosen)
@@ -454,7 +477,8 @@ class CloudBrowserDialog(QDialog):
         head = min(size, count * transfer.HEAD_BYTES)
         head_eta = f"  ·  예상 {_human_time(head / speed)}" if head and speed else ""
         if self._type_pick.isChecked():
-            names = ", ".join(sorted(getattr(self, "_ext_chosen", None) or []))
+            excluded = getattr(self, "_ext_excluded", set()) or set()
+            names = ", ".join(sorted(e for e in by_ext if e not in excluded))
             self._choice_label.setText(
                 f"고른 유형: {count:,}개 / 전체 {total_count:,}개  ·  {human_size(size)}"
                 + (f"  ·  {names}" if names else "  ·  (아무것도 고르지 않음)"))
@@ -469,11 +493,12 @@ class CloudBrowserDialog(QDialog):
 
     def _on_type_mode(self, picking):
         """전부 받기 ↔ 유형 골라서 받기"""
+        self._ext_excluded = set()                     # 처음엔 모두 받는 상태에서 시작
+        self._ext_chosen = None
         if picking:
-            self._ext_chosen = None                    # 표를 채울 때 모두 체크로 시작
             self._summary_toggle.setChecked(True)      # 표를 펼치고 하위 폴더까지 훑기
-        else:
-            self._ext_chosen = None                    # 전부
+            self._summary_detail.setVisible(True)
+            self._set_detail_space(True)
         self._fill_ext_table(getattr(self, "_by_ext", {}) or {})
 
     def _show_listing_summary(self, items):
