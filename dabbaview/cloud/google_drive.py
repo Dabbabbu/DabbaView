@@ -223,19 +223,36 @@ class GoogleDriveProvider:
         DICOM은 앞부분에 메타데이터가 모두 들어 있어서, 이것만 받아도
         환자·검사·시리즈·슬라이스 위치를 읽을 수 있다 (픽셀은 나중에).
         """
-        import urllib.request
-        from ..update_check import _ssl_context      # 번들 앱: certifi 인증서 사용
-        token = self._access_token()
         url = (f"https://www.googleapis.com/drive/v3/files/{item.id}"
                "?alt=media&supportsAllDrives=true")
-        request = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {token}",
-            "Range": f"bytes=0-{max(0, int(length) - 1)}"})
-        with urllib.request.urlopen(request, timeout=60, context=_ssl_context()) as response:
-            data = response.read()
+        headers = {"Authorization": f"Bearer {self._access_token()}",
+                   "Range": f"bytes=0-{max(0, int(length) - 1)}"}
+        response = self._http().get(url, headers=headers, timeout=60)
+        if response.status_code >= 400:
+            raise CloudError(f"{item.name}: HTTP {response.status_code}")
+        data = response.content
         with open(path, "wb") as fh:
             fh.write(data)
         return len(data)
+
+    def _http(self):
+        """스레드마다 하나씩 두는 연결 (keep-alive로 TLS 악수를 다시 하지 않음)
+
+        헤더만 받을 때는 파일마다 연결을 새로 맺는 비용이 전송보다 크다.
+        requests는 certifi 인증서를 쓰므로 번들 앱에서도 동작한다.
+        """
+        import threading
+        import requests
+        local = getattr(self, "_tls", None)
+        if local is None:
+            local = self._tls = threading.local()
+        session = getattr(local, "session", None)
+        if session is None:
+            session = local.session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=4,
+                                                    max_retries=2)
+            session.mount("https://", adapter)
+        return session
 
     def _access_token(self):
         """지금 쓸 수 있는 액세스 토큰 (만료되었으면 갱신)"""

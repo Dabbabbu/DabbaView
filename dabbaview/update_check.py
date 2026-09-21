@@ -7,6 +7,7 @@
 시작할 때 한 번, 백그라운드 스레드에서 확인한다 (실패하면 조용히 넘어감).
 보내는 것은 GET 요청 하나뿐이고 사용자 정보는 담지 않는다.
 """
+import functools
 import json
 import re
 import ssl
@@ -32,6 +33,7 @@ def is_newer(latest, current=__version__):
     return bool(a and b and a > b)
 
 
+@functools.lru_cache(maxsize=1)
 def _ssl_context():
     """파이썬 기본 인증서 저장소가 비어 있는 설치본(python.org · 번들 앱)에서도 되게 certifi 사용"""
     try:

@@ -20,7 +20,8 @@ import time
 from .. import cache
 from . import CloudError, safe_name
 
-WORKERS = 6
+WORKERS = 6            # 전체 파일 받기 (큰 파일 - 대역폭이 병목)
+HEAD_WORKERS = 24      # 헤더만 받기 (64KB - 왕복 시간이 병목이라 많이 띄울수록 빠름)
 
 
 def wanted(name):
@@ -165,7 +166,7 @@ def _fetch_one(provider, item, on_bytes, cancelled):
 HEAD_BYTES = 64 * 1024        # DICOM 헤더용으로 받을 앞부분 크기
 
 
-def fetch_heads(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
+def fetch_heads(provider, files, tops, progress=None, cancelled=None, workers=HEAD_WORKERS,
                 dest_root=None, head_bytes=HEAD_BYTES):
     """파일 앞부분(헤더)만 받아 둔다 → (경로 목록, 통계)
 
