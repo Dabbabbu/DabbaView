@@ -227,7 +227,13 @@ class GoogleDriveProvider:
                "?alt=media&supportsAllDrives=true")
         headers = {"Authorization": f"Bearer {self._access_token()}",
                    "Range": f"bytes=0-{max(0, int(length) - 1)}"}
-        response = self._http().get(url, headers=headers, timeout=60)
+        import time
+        response = None
+        for attempt in range(4):        # 403·429(요청이 몰림)면 잠깐 쉬었다 다시
+            response = self._http().get(url, headers=headers, timeout=60)
+            if response.status_code not in (403, 429, 500, 502, 503):
+                break
+            time.sleep(0.4 * (attempt + 1))
         if response.status_code >= 400:
             raise CloudError(f"{item.name}: HTTP {response.status_code}")
         data = response.content

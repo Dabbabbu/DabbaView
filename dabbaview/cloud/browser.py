@@ -215,6 +215,7 @@ class CloudBrowserDialog(QDialog):
         self._spinner.setFixedWidth(18)
         self._spinner.setAlignment(Qt.AlignCenter)
         self._status = QLabel()
+        self._status.setStyleSheet("font-family: 'Menlo', 'Courier New', monospace;")
         status_row.addWidget(self._spinner)
         status_row.addWidget(self._status, 1)
         layout.addLayout(status_row)
@@ -601,16 +602,14 @@ class CloudBrowserDialog(QDialog):
         done, total = state["done"], state["total"]
         if state["kind"] == "count":
             percent = (done * 100.0 / total) if total else 0.0
-            self._progress.setFormat(f"{done:,} / {total:,} 파일 ({percent:.1f}%)")
-            parts = [state["title"], f"{done:,} / {total:,} 파일 ({percent:.1f}%)"]
-            if state.get("bytes"):
-                parts.append(f"{human_size(state['bytes'])} 받음")
-                speed = state["bytes"] / max(0.001, elapsed)
-                parts.append(f"{human_size(speed)}/s")
-            speed_files = done / max(0.001, elapsed)
-            if done and done < total and speed_files > 0:
-                parts.append(f"남은 시간 약 {_human_time((total - done) / speed_files)}")
-            parts.append(f"경과 {_human_time(elapsed)}")
+            width = len(f"{total:,}")          # 자릿수를 맞춰 글자가 좌우로 밀리지 않게
+            counts = f"{done:,}".rjust(width) + f" / {total:,} 파일 ({percent:5.1f}%)"
+            self._progress.setFormat(counts)
+            parts = [state["title"], counts]
+            if done and done < total:
+                speed_files = done / max(0.001, elapsed)
+                parts.append("남은 시간 약 " + _human_time((total - done) / speed_files).rjust(8))
+            parts.append("경과 " + _human_time(elapsed).rjust(8))
             parts.extend(state.get("extra") or [])
             self._spinner.setText(mark)
             self._status.setText("  ·  ".join(parts))
@@ -618,10 +617,12 @@ class CloudBrowserDialog(QDialog):
         else:   # 폴더 훑는 중
             self._spinner.setText(mark)
             self.setWindowTitle(f"{self._base_title} — 폴더 확인 {done:,}/{total:,}")
+            width = len(f"{total:,}")
             self._status.setText(
-                f"하위 폴더 확인 중…  폴더 {done:,}/{total:,}  ·  "
-                f"파일 {state['files']:,}개  ·  {human_size(state.get('bytes', 0))}  ·  "
-                f"경과 {_human_time(elapsed)}")
+                "하위 폴더 확인 중…  폴더 " + f"{done:,}".rjust(width) + f"/{total:,}  ·  "
+                + ("파일 " + f"{state['files']:,}".rjust(7) + "개") + "  ·  "
+                + human_size(state.get("bytes", 0)).rjust(9) + "  ·  "
+                + "경과 " + _human_time(elapsed).rjust(8))
 
     def _on_progress_bar(self, value):
         if isinstance(value, tuple) and value and value[0] == "count":
@@ -631,8 +632,12 @@ class CloudBrowserDialog(QDialog):
             parts = str(text).split("  ·  ")
             head = parts[0] if parts else "내려받는 중"
             # 보내는 쪽이 준 세부 정보(받은 용량·캐시 수) 중 겹치지 않는 것만 이어 붙임
-            extra = [p.strip() for p in parts[1:]
-                     if any(k in p for k in ("받음", "캐시", "/s"))]
+            extra = []
+            for piece in parts[1:]:
+                piece = piece.strip()
+                if not any(k in piece for k in ("받음", "캐시", "/s")):
+                    continue
+                extra.append(piece.rjust(16) if "받음" in piece else piece)
             state = getattr(self, "_prog", None) or {}
             if state.get("kind") != "count":
                 state = {}                      # 훑기 → 다운로드로 넘어가면 처음부터

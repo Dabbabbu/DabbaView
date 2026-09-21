@@ -67,7 +67,8 @@ class LoadProgressDialog(QDialog):
         self.spinner.setAlignment(Qt.AlignCenter)
         self.spinner.setStyleSheet("color:#9ab;font-size:12px")
         self.stats = QLabel("")
-        self.stats.setStyleSheet("color:#9ab;font-size:12px")
+        self.stats.setStyleSheet("color:#9ab;font-size:12px;"
+                                 "font-family:'Menlo','Courier New',monospace;")
         stats_row.addWidget(self.spinner)
         stats_row.addWidget(self.stats, 1)
         layout.addLayout(stats_row)
@@ -135,7 +136,9 @@ class LoadProgressDialog(QDialog):
         percent = current * 100 // total
         self.bar.setValue(percent)
         elapsed = time.monotonic() - self._start
-        parts = [f"{current:,} / {total:,} 파일 ({percent}%)", f"경과 {human_time(elapsed)}"]
+        width = len(f"{total:,}")          # 자릿수 고정 — 글자가 좌우로 밀리지 않게
+        parts = [f"{current:,}".rjust(width) + f" / {total:,} 파일 ({current * 100.0 / total:5.1f}%)",
+                 "경과 " + human_time(elapsed).rjust(8)]
         if current >= 5 and elapsed > 1:
             speed = current / elapsed
             parts.append(f"{speed:.1f}개/초")
@@ -166,7 +169,9 @@ class LoadProgressDialog(QDialog):
         if numbers:                      # 경과 시간은 지금 기준으로 다시 계산
             done, total = numbers
             percent = (done * 100.0 / total) if total else 0.0
-            text = f"{done:,} / {total:,} 파일 ({percent:.1f}%)  ·  경과 {human_time(elapsed)}"
+            width = len(f"{total:,}")
+            text = (f"{done:,}".rjust(width) + f" / {total:,} 파일 ({percent:5.1f}%)"
+                    + "  ·  경과 " + human_time(elapsed).rjust(8))
         else:
             text = self._last_stats or f"준비 중…  ·  경과 {human_time(elapsed)}"
         if quiet > 3:
