@@ -508,6 +508,12 @@ class MainWindow(QMainWindow):
         open_dir.setShortcut(QKeySequence("Ctrl+Shift+O"))
         open_dir.triggered.connect(self._open_directory)
         file_menu.addAction(open_dir)
+        add_dir = QAction("📂➕ Add Folder… (지금 연 영상에 더하기 · 나란히 비교)", self)
+        add_dir.setShortcut(QKeySequence("Ctrl+Alt+O"))
+        add_dir.setToolTip("지금 목록은 그대로 두고 다른 폴더의 시리즈를 더해 Multi View 빈 칸에 나란히 엽니다.\n"
+                           "같은 검사면 Crosslink · Ref Lines로 서로의 위치(스캔 범위)가 보입니다.")
+        add_dir.triggered.connect(self._add_folder)
+        file_menu.addAction(add_dir)
         file_menu.addSeparator()
         library_add = QAction("★ Add to Library (현재 스터디)", self)
         library_add.setShortcut(QKeySequence("Ctrl+D"))
@@ -610,6 +616,7 @@ class MainWindow(QMainWindow):
         self._view_menu = view_menu
         self._init_ui_scale_menu(view_menu)
         self._init_arrow_menu(view_menu)
+        self._init_link_menu(view_menu)
         self._act_drag_pads = view_menu.addAction("🔍◐ 맨 아래 Zoom · W/L 조절 칸")
         self._act_drag_pads.setCheckable(True)
         self._act_drag_pads.setChecked(self._settings.value("ui/drag_pads", True, type=bool))
@@ -2683,6 +2690,59 @@ class MainWindow(QMainWindow):
             pads.raise_()
         except RuntimeError:
             pass
+
+    def _add_folder(self):
+        """폴더를 더 열기 — 지금 목록은 그대로 두고, 새 시리즈를 Multi View의 빈 칸에 나란히"""
+        dirpath = QFileDialog.getExistingDirectory(
+            self, "추가로 열 폴더 (지금 연 영상은 그대로 둡니다)", self._last_dir())
+        if not dirpath:
+            return
+        if self._loader is None or not self._loader.series_dict:
+            self.load_path(dirpath)             # 연 게 없으면 보통 열기와 같음
+            return
+        mv = self._multi_viewport
+        self._tab_widget.setCurrentWidget(mv)
+        cells = mv.viewports
+        if all(vp.series is None for vp in cells[:mv.num_visible]) and self._current_series is not None:
+            cells[0].set_series(self._current_series)   # 지금 보던 시리즈를 첫 칸에
+        free = next((i for i in range(mv.num_visible) if cells[i].series is None), None)
+        if free is None:                        # 칸이 다 찼으면 한 단계 큰 격자로
+            order = ["1x1", "1x2", "2x2", "2x3", "3x3", "3x4", "4x4"]
+            current = getattr(mv, "_current_layout", "1x1")
+            bigger = next((l for l in order[order.index(current) + 1:] if l in order), None) \
+                if current in order else "2x2"
+            if bigger:
+                mv.set_layout(bigger)
+            free = next((i for i in range(mv.num_visible) if cells[i].series is None), mv.num_visible - 1)
+        self.load_paths([dirpath], target_viewport=free)
+        self._statusbar.showMessage(
+            "폴더를 더 열었습니다 — 같은 검사(위치 정보)면 ⌖ Crosslink(C) · Ref Lines로 서로 위치가 보입니다", 10000)
+
+    def _init_link_menu(self, menu):
+        """View ▸ Crosslink 연동 기준 — 어떤 시리즈끼리 위치를 맞출지"""
+        from . import geometry
+        mode = self._settings.value("view/link_mode", "frame", type=str)
+        geometry.link_mode = mode if mode in geometry.LINK_MODES else "frame"
+        sub = menu.addMenu("⌖ Crosslink · Ref Lines 연동 기준")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for key, text in geometry.LINK_MODES.items():
+            action = sub.addAction(text)
+            action.setCheckable(True)
+            action.setChecked(key == geometry.link_mode)
+            action.triggered.connect(lambda _c=False, k=key: self._set_link_mode(k))
+            group.addAction(action)
+
+    def _set_link_mode(self, mode):
+        from . import geometry
+        geometry.link_mode = mode
+        self._settings.setValue("view/link_mode", mode)
+        refresh = getattr(self._multi_viewport, "_refresh_reference_lines", None)
+        if refresh is not None:
+            refresh()
+        for vp in self._all_viewports():
+            vp.update()
+        self._statusbar.showMessage(f"연동 기준: {geometry.LINK_MODES[mode]}", 6000)
 
     def _set_drag_pads(self, on):
         self._settings.setValue("ui/drag_pads", bool(on))

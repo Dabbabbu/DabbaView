@@ -45,7 +45,7 @@ Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 
 | 🔌 **PACS · 연동** | C-STORE(DICOM Send) · DICOM Print, 익명화, Google Drive · OneDrive 열기, 포맷 변환(NIfTI ↔ DICOM 등) |
 | 🎬 **내보내기** | 화면 캡처, 동영상(MP4 · AVI · GIF), **여러 시리즈 일괄 동영상**, PNG 시퀀스 |
 
-<!-- version -->**Version** 3.11.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
+<!-- version -->**Version** 3.12.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
 
 > ⚠️ 진단용으로 인증된 의료기기가 아닙니다. 학습·연구·참고용으로 사용하세요.
 

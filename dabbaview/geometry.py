@@ -12,13 +12,22 @@ DICOM 규약 (PS3.3 C.7.6.2.1.1):
 """
 import numpy as np
 
+# Crosslink · Reference Line · 3D 커서를 어떤 시리즈끼리 연동할지 (View ▸ 연동 기준)
+LINK_MODES = {
+    "frame": "좌표계(Frame of Reference)가 같을 때만 (기본 · 가장 정확)",
+    "study": "같은 검사(Study)면 — 좌표계 표시가 없거나 달라도",
+    "position": "환자 좌표만 보고 항상 — 다른 날 · 다른 장비 검사도 (위치가 어긋날 수 있음)",
+}
+link_mode = "frame"
+
 
 class SeriesGeometry:
     """시리즈 슬라이스별 공간 정보 (정렬된 slices 순서와 동일)"""
 
     def __init__(self, frame_of_reference_uid, origins, row_dirs, col_dirs,
-                 spacings, shapes):
+                 spacings, shapes, study_uid=""):
         self.frame_of_reference_uid = frame_of_reference_uid
+        self.study_uid = study_uid  # 연동 기준 '같은 검사'용
         self.origins = origins      # (n, 3)
         self.row_dirs = row_dirs    # (n, 3) 열 인덱스(x) 증가 방향
         self.col_dirs = col_dirs    # (n, 3) 행 인덱스(y) 증가 방향
@@ -76,21 +85,26 @@ class SeriesGeometry:
         return abs(float(self.normals[index] @ other.normals[other_index])) >= tolerance
 
     def is_linkable_with(self, other):
-        return (other is not None
-                and self.frame_of_reference_uid
-                and self.frame_of_reference_uid == other.frame_of_reference_uid)
+        """같은 공간으로 보고 위치를 맞춰도 되는지 (연동 기준은 link_mode)"""
+        if other is None:
+            return False
+        if self.frame_of_reference_uid and self.frame_of_reference_uid == other.frame_of_reference_uid:
+            return True
+        if link_mode == "study":
+            return bool(self.study_uid) and self.study_uid == other.study_uid
+        return link_mode == "position"
 
 
 def build_series_geometry(slices):
     """메타데이터 Dataset 목록으로 SeriesGeometry 생성
 
-    공간 정보(IPP/IOP/PixelSpacing/FrameOfReferenceUID)가 하나라도 없으면 None.
+    위치 정보(IPP/IOP/PixelSpacing)가 하나라도 없으면 None.
+    FrameOfReferenceUID가 없어도 만들어 두고, 연동할지는 is_linkable_with(연동 기준)가 정한다.
     """
     if not slices:
         return None
     for_uid = str(getattr(slices[0], 'FrameOfReferenceUID', '') or '')
-    if not for_uid:
-        return None
+    study_uid = str(getattr(slices[0], 'StudyInstanceUID', '') or '')
     origins, rows, cols, spacings, shapes = [], [], [], [], []
     try:
         for ds in slices:
@@ -108,7 +122,7 @@ def build_series_geometry(slices):
     except (AttributeError, TypeError, ValueError, ZeroDivisionError):
         return None
     return SeriesGeometry(for_uid, np.array(origins), np.array(rows),
-                          np.array(cols), np.array(spacings), np.array(shapes))
+                          np.array(cols), np.array(spacings), np.array(shapes), study_uid)
 
 
 def reference_line(source, source_index, target, target_index, parallel_tolerance=0.98):
