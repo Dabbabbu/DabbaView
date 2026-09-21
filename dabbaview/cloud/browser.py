@@ -145,25 +145,30 @@ class CloudBrowserDialog(QDialog):
         layout.addLayout(sum_row)
         self._summary_detail = QTreeWidget()
         self._summary_detail.setColumnCount(3)
-        self._summary_detail.setHeaderLabels(["받을 유형 (체크)", "개수", "용량"])
+        self._summary_detail.setHeaderLabels(["확장자 (많은 순)", "개수", "용량"])
         self._summary_detail.setMaximumHeight(150)
         self._summary_detail.setVisible(False)
         self._summary_detail.setRootIsDecorated(False)
         self._summary_detail.itemChanged.connect(self._on_ext_toggled)
         layout.addWidget(self._summary_detail)
-        choice_row = QHBoxLayout()
+        type_row = QHBoxLayout()
+        type_row.addWidget(QLabel("받을 파일:"))
+        self._type_all = QRadioButton("전부 받기")
+        self._type_all.setChecked(True)
+        self._type_pick = QRadioButton("유형 골라서 받기")
+        self._type_pick.setToolTip("같은 검사가 DICOM·JPG 등 여러 형식으로 중복돼 있을 때, 필요한 유형만 받습니다")
+        type_group = QButtonGroup(self)
+        type_group.addButton(self._type_all)
+        type_group.addButton(self._type_pick)
+        self._type_group = type_group
+        self._type_pick.toggled.connect(self._on_type_mode)
+        type_row.addWidget(self._type_all)
+        type_row.addWidget(self._type_pick)
+        type_row.addStretch(1)
+        layout.addLayout(type_row)
         self._choice_label = QLabel("")
         self._choice_label.setStyleSheet("color:#cfe0f5;")
-        only_dicom = QPushButton("DICOM만")
-        only_dicom.setToolTip("같은 환자의 그림(JPG·PNG)은 빼고 DICOM만 받습니다")
-        only_dicom.clicked.connect(self._choose_dicom_only)
-        all_kinds = QPushButton("전부")
-        all_kinds.clicked.connect(self._choose_all_exts)
-        choice_row.addWidget(self._choice_label, 1)
-        choice_row.addWidget(only_dicom)
-        choice_row.addWidget(all_kinds)
-        self._choice_row = choice_row
-        layout.addLayout(choice_row)
+        layout.addWidget(self._choice_label)
 
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("열기 방식:"))
@@ -398,15 +403,18 @@ class CloudBrowserDialog(QDialog):
         self._by_ext = dict(by_ext)
         self._summary_detail.blockSignals(True)
         self._summary_detail.clear()
+        picking = self._type_pick.isChecked()
         chosen = getattr(self, "_ext_chosen", None)
-        if chosen is None:      # 처음엔 DICOM만 (그림은 중복이라 빼 둠)
-            dicoms = [e for e in by_ext if e in self.DICOM_EXTS or e[1:].isdigit()]
-            chosen = set(dicoms) if dicoms else set(by_ext)
+        if picking and chosen is None:      # 골라서 받기로 바꾼 직후: 우선 모두 체크
+            chosen = set(by_ext)
             self._ext_chosen = chosen
         for ext, (count, size) in sorted(by_ext.items(), key=lambda kv: (-kv[1][0], kv[0])):
             row = QTreeWidgetItem([ext, f"{count:,}개", human_size(size)])
-            row.setFlags(row.flags() | Qt.ItemIsUserCheckable)
-            row.setCheckState(0, Qt.Checked if ext in chosen else Qt.Unchecked)
+            if picking:
+                row.setFlags(row.flags() | Qt.ItemIsUserCheckable)
+                row.setCheckState(0, Qt.Checked if ext in chosen else Qt.Unchecked)
+            else:       # 전부 받기: 체크칸 없이 목록만
+                row.setFlags(row.flags() & ~Qt.ItemIsUserCheckable)
             row.setData(0, Qt.UserRole, ext)
             row.setTextAlignment(1, Qt.AlignRight)
             row.setTextAlignment(2, Qt.AlignRight)
@@ -429,7 +437,7 @@ class CloudBrowserDialog(QDialog):
         """고른 유형의 (개수, 용량)"""
         by_ext = getattr(self, "_by_ext", {}) or {}
         chosen = getattr(self, "_ext_chosen", None)
-        if chosen is None:
+        if chosen is None or not self._type_pick.isChecked():
             chosen = set(by_ext)
         count = sum(v[0] for k, v in by_ext.items() if k in chosen)
         size = sum(v[1] for k, v in by_ext.items() if k in chosen)
@@ -446,9 +454,13 @@ class CloudBrowserDialog(QDialog):
         full_eta = f"  ·  예상 {_human_time(size / speed)}" if size and speed else ""
         head = min(size, count * transfer.HEAD_BYTES)
         head_eta = f"  ·  예상 {_human_time(head / speed)}" if head and speed else ""
-        self._choice_label.setText(
-            f"받을 유형: {count:,}개 / 전체 {total_count:,}개  ·  {human_size(size)}"
-            + (f"  ·  {', '.join(sorted(self._ext_chosen))}" if getattr(self, "_ext_chosen", None) else ""))
+        if self._type_pick.isChecked():
+            names = ", ".join(sorted(getattr(self, "_ext_chosen", None) or []))
+            self._choice_label.setText(
+                f"고른 유형: {count:,}개 / 전체 {total_count:,}개  ·  {human_size(size)}"
+                + (f"  ·  {names}" if names else "  ·  (아무것도 고르지 않음)"))
+        else:
+            self._choice_label.setText(f"전부 받기: {total_count:,}개  ·  {human_size(size)}")
         self._fast_open.setText(f"⚡ 빠른 열기 (권장 · 약 {human_size(head)}{head_eta})")
         self._full_open.setText(f"⬇ 전체 다운로드 (오프라인 대비 · {human_size(size)}{full_eta})")
 
@@ -456,14 +468,14 @@ class CloudBrowserDialog(QDialog):
         """최근에 관찰한 다운로드 속도 (없으면 8 MB/s로 어림)"""
         return getattr(self, "_speed_hint", 0) or 8 * 1024 * 1024
 
-    def _choose_dicom_only(self):
-        self._ext_chosen = {e for e in getattr(self, "_by_ext", {})
-                            if e in self.DICOM_EXTS or e[1:].isdigit()}
-        self._fill_ext_table(getattr(self, "_by_ext", {}))
-
-    def _choose_all_exts(self):
-        self._ext_chosen = set(getattr(self, "_by_ext", {}))
-        self._fill_ext_table(getattr(self, "_by_ext", {}))
+    def _on_type_mode(self, picking):
+        """전부 받기 ↔ 유형 골라서 받기"""
+        if picking:
+            self._ext_chosen = None                    # 표를 채울 때 모두 체크로 시작
+            self._summary_toggle.setChecked(True)      # 표를 펼치고 하위 폴더까지 훑기
+        else:
+            self._ext_chosen = None                    # 전부
+        self._fill_ext_table(getattr(self, "_by_ext", {}) or {})
 
     def _show_listing_summary(self, items):
         """지금 보고 있는 폴더의 내용 요약 (하위 폴더는 들어가야 알 수 있음)
@@ -795,8 +807,8 @@ class CloudBrowserDialog(QDialog):
 
         def planned(result):
             files, skipped, tops = result
-            chosen = getattr(self, "_ext_chosen", None)
-            if chosen:      # 고른 확장자만 내려받음 (중복 형식 제외)
+            chosen = getattr(self, "_ext_chosen", None) if self._type_pick.isChecked() else None
+            if chosen is not None:      # 고른 확장자만 내려받음 (중복 형식 제외)
                 def keep(rel):
                     ext = (os.path.splitext(rel)[1] or "(확장자 없음)").lower()
                     return ext in chosen
@@ -913,6 +925,10 @@ def open_from_cloud(main_window, provider):
     # 메인 창 뒤로 숨지 않는다
     dialog.setParent(None)
     dialog.setWindowFlags(Qt.Window)
+    # 부모가 없으면 메인 창의 어두운 테마를 못 물려받으므로 그대로 복사
+    if hasattr(main_window, "styleSheet"):
+        dialog.setStyleSheet(main_window.styleSheet())
+        dialog.setPalette(main_window.palette())
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()
