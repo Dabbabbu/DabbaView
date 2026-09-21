@@ -669,6 +669,40 @@ class DicomLoader:
             self.load_errors.append((filepath, str(e)))
             return False
 
+    def _expand_archives(self, paths, recursive, progress_callback=None, cancel_event=None):
+        """압축파일(ZIP · 7z · RAR · TAR …)은 풀어서 풀린 폴더를 대신 연다. 폴더 안의 압축파일도 함께"""
+        from . import archives
+        out = []
+        self.extracted_archives = []
+        for path in paths:
+            if os.path.isfile(path) and archives.is_archive(path):
+                found = [path]
+            else:
+                out.append(path)
+                found = archives.find_archives(path, recursive) if os.path.isdir(path) else []
+            for archive in found:
+                name = os.path.basename(archive)
+                self.phase = f"압축 푸는 중: {name}"
+
+                def step(done, total, _file, cb=progress_callback):
+                    if cb:
+                        cb(done, total)
+                try:
+                    dest = archives.extract(
+                        archive, step,
+                        cancelled=lambda: cancel_event is not None and cancel_event.is_set())
+                except archives.ArchiveError as exc:
+                    self.load_errors.append((archive, str(exc)))
+                    continue
+                except OSError as exc:
+                    self.load_errors.append((archive, f"압축을 풀 수 없습니다: {exc}"))
+                    continue
+                out.append(dest)
+                self.extracted_archives.append((archive, dest))
+                if progress_callback:
+                    progress_callback(0, 0)
+        return out
+
     def collect_files(self, dirpath, recursive=True):
         """디렉토리에서 불러올 파일 경로 수집 (DICOM 후보 + 지원하는 다른 형식)
 
@@ -729,6 +763,8 @@ class DicomLoader:
         self.phase = "파일 목록 확인 중"
         if progress_callback:
             progress_callback(0, 0)   # 전체 개수를 모르는 단계 (폴더 탐색)
+        paths = self._expand_archives(paths, recursive, progress_callback, cancel_event)
+        self.phase = "파일 목록 확인 중"
 
         from . import cache
         files = []

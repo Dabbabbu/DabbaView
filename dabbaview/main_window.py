@@ -1289,6 +1289,9 @@ class MainWindow(QMainWindow):
         name = os.path.basename(path)
         if name.startswith(".") or name.lower().endswith(TEXT_REPORT_EXTENSIONS):
             return False
+        from .archives import is_archive_name
+        if is_archive_name(name):
+            return True                   # 압축파일: 풀어서 연다
         return is_candidate_file(name) or file_kind(name) != "dicom"
 
     def _drain_ready_queue(self):
@@ -3178,7 +3181,8 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self, "캐시 지우기",
             f"캐시 {cache.human_size(u['total'])}를 모두 지울까요?\n\n"
-            f"· 클라우드에서 받은 파일 사본 {cache.human_size(u['cloud'])}\n"
+            f"· 클라우드에서 받은 파일 사본 {cache.human_size(u['cloud'])} · "
+            f"풀어 둔 압축파일 {cache.human_size(u.get('archives', 0))}\n"
             f"· 폴더 메타데이터 {cache.human_size(u['metadata'])} · 썸네일 {cache.human_size(u['thumbnails'])}\n\n"
             "지금 열려 있는 영상과 '저장 위치'에 받아 둔 파일은 그대로 남습니다.\n"
             "다음에 같은 클라우드 폴더를 열면 다시 내려받습니다.")

@@ -607,7 +607,7 @@ class SettingsDialog(QDialog):
         self._cache_usage.setText(
             f"<b>{cache.human_size(u['total'])}</b> / {self._cache_limit.value()} GB  "
             f"(메타데이터 {cache.human_size(u['metadata'])} · 썸네일 {cache.human_size(u['thumbnails'])} · "
-            f"클라우드 파일 {cache.human_size(u['cloud'])})")
+            f"클라우드 파일 {cache.human_size(u['cloud'])} · 압축 푼 파일 {cache.human_size(u.get('archives', 0))})")
 
     def _clear_cache(self):
         from . import cache

@@ -29,7 +29,7 @@ from PyQt5.QtCore import QSettings
 
 DEFAULT_LIMIT_GB = 5
 MIN_LIMIT_GB, MAX_LIMIT_GB = 1, 50
-CATEGORIES = ("metadata", "thumbnails", "cloud")
+CATEGORIES = ("metadata", "thumbnails", "cloud", "archives")   # archives: 풀어 둔 압축파일
 FORMAT_VERSION = 1
 
 _lock = threading.Lock()

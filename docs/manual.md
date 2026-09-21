@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 3.8.1 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 3.9.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -86,7 +86,8 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 1. **File → Open File…** (Ctrl+O)로 파일을 엽니다. DICOM, NIfTI, NRRD, MHA, NumPy, PNG/JPEG, STL을 열 수 있습니다.
 2. **File → Open DICOM Folder…** (Ctrl+Shift+O)로 폴더를 엽니다. 하위 폴더까지 읽고, 시리즈별로 자동으로 나눕니다.
 3. Finder나 탐색기에서 파일·폴더를 창으로 **드래그 앤 드롭**해도 됩니다.
-4. 클라우드 폴더는 **Open from Google Drive… / Open from OneDrive…** 로 엽니다. 각자의 OAuth 키를 Settings → Cloud에 먼저 넣어야 합니다.
+4. **압축파일도 그대로 엽니다**: ZIP · 7z · RAR · TAR(.tar/.tgz/.tar.gz/.tar.bz2/.tar.xz) · ISO · .gz를 파일 열기로 고르거나 끌어다 놓으면 캐시 폴더에 풀어서 안의 DICOM · 영상을 엽니다. 폴더 안에 섞여 있는 압축파일, 압축 안의 압축(한 단계), 윈도우에서 만든 ZIP의 한글 파일 이름도 됩니다. 같은 압축파일을 다시 열면 풀어 둔 것을 그대로 써서 바로 열립니다. 풀어 둔 것은 캐시 한도 · **File ▸ 🧹 캐시 ▸ 캐시 지우기**로 함께 정리됩니다. 암호가 걸린 압축파일은 압축 프로그램으로 먼저 푸세요. (7z · RAR · ISO는 운영체제에 들어 있는 tar로 풉니다 — macOS, Windows 10 이상)
+5. 클라우드 폴더는 **Open from Google Drive… / Open from OneDrive…** 로 엽니다. 각자의 OAuth 키를 Settings → Cloud에 먼저 넣어야 합니다.
    - **받을 파일**: **전부 받기**(기본) 또는 **유형 골라서 받기**. 골라서 받기를 고르면 확장자 목록이 **많은 순서**로 펼쳐지고 체크한 유형만 받습니다 — 같은 검사가 DICOM·JPG로 중복돼 있을 때 쓰세요. 고른 유형의 **개수 · 용량 · 예상 시간**이 바로 표시됩니다.
    - 폴더를 고르면 **폴더 수 · 파일 수 · 용량**이 요약으로 나오고, **▸ 자세히**로 확장자별 개수·용량을 펼쳐 볼 수 있습니다.
    - **다 받은 시리즈부터 바로 볼 수 있습니다**: 폴더(≈시리즈) 단위로 차례대로 받고, 한 폴더를 다 받으면 왼쪽 목록에 곧바로 나타납니다. 나머지는 뒤에서 계속 받고, 상태바에 `☁ 준비된 폴더 12/44`가 표시됩니다. 다 받은 시리즈는 인터넷이 끊겨도 그대로 볼 수 있습니다.

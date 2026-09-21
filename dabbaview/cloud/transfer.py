@@ -31,6 +31,9 @@ def wanted(name):
         return False
     if name.lower().endswith(TEXT_REPORT_EXTENSIONS):
         return True
+    from ..archives import is_archive_name
+    if is_archive_name(name):
+        return True                     # 압축파일도 받아서 풀어 연다
     return is_candidate_file(name) or file_kind(name) != "dicom"
 
 
