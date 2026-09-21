@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QColorD
                              QComboBox, QDialog, QDialogButtonBox, QDockWidget,
                              QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
                              QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-                             QMenu, QMessageBox, QPushButton, QSpinBox, QTabWidget,
+                             QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QTabWidget,
                              QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from . import dicom_info, roi_tools
@@ -329,6 +329,7 @@ class RoiManagerDock(QDockWidget):
         self.table.itemSelectionChanged.connect(self._on_row_selection)
         self.table.cellClicked.connect(self._on_cell_clicked)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.table.setMinimumHeight(110)
         layout.addWidget(self.table, 2)
 
         grid = QGridLayout()
@@ -380,12 +381,22 @@ class RoiManagerDock(QDockWidget):
         self.tabs = QTabWidget()
         self.results = ResultTable()
         self.tabs.addTab(self.results, "결과")
+        self.tabs.setMinimumHeight(130)
         layout.addWidget(self.tabs, 2)
         self.status = QLabel("")
         self.status.setStyleSheet("color: #9ab;")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
-        self.setWidget(body)
+        # 창 높이가 모자라면 버튼 줄이 서로 겹치지 않도록 줄이지 않고 스크롤한다
+        for b in body.findChildren((QPushButton, QToolButton)):
+            b.setMinimumHeight(b.sizeHint().height())
+        scroll = QScrollArea()
+        scroll.setWidget(body)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._body = body
+        self.setWidget(scroll)
         self.setMinimumWidth(420)
 
         self._timer = QTimer(self)

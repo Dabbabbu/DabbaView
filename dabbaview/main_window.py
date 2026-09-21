@@ -1451,7 +1451,12 @@ class MainWindow(QMainWindow):
             last = tab_bar.tabRect(tab_bar.count() - 1)       # 3D Volume 탭
             point = tab_bar.mapTo(self, last.topRight())
             x, y, height = point.x() + 12, point.y(), max(24, last.height())
-        room = max(120, self.width() - 8 - x - 4 * (len(tabs) - 1))
+        # 탭 줄이 있는 가운데 영역 안에서만 (오른쪽 패널 · ROI Manager 위를 덮지 않게)
+        right = self.width() - 8
+        if bar is not None:
+            area = self._tab_widget
+            right = min(right, area.mapTo(self, area.rect().topRight()).x() - 4)
+        room = max(120, right - x - 4 * (len(tabs) - 1))
         each = max(90, room // len(tabs))
         for button in tabs:
             if height:
@@ -1461,7 +1466,7 @@ class MainWindow(QMainWindow):
             button.adjustSize()
             if button.width() > each:
                 button.setFixedWidth(each)
-            button.move(max(0, min(x, self.width() - button.width() - 8)), max(0, y))
+            button.move(max(0, min(x, right - button.width())), max(0, y))
             x += button.width() + 4
 
     def _raise_popup(self, index=0):
