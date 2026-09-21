@@ -215,7 +215,7 @@ class CloudBrowserDialog(QDialog):
         self._spinner.setFixedWidth(18)
         self._spinner.setAlignment(Qt.AlignCenter)
         self._status = QLabel()
-        self._status.setStyleSheet("font-family: 'Menlo', 'Courier New', monospace;")
+        self._status.setStyleSheet("font-family: 'Menlo', 'Courier New', monospace; font-size: 12px;")
         status_row.addWidget(self._spinner)
         status_row.addWidget(self._status, 1)
         layout.addLayout(status_row)
@@ -638,16 +638,20 @@ class CloudBrowserDialog(QDialog):
         if state["kind"] == "count":
             percent = (done * 100.0 / total) if total else 0.0
             width = len(f"{total:,}")          # 자릿수를 맞춰 글자가 좌우로 밀리지 않게
-            counts = f"{done:,}".rjust(width) + f" / {total:,} 파일 ({percent:5.1f}%)"
-            self._progress.setFormat(counts)
-            parts = [state["title"], counts]
+            counts = f"{done:,}".rjust(width) + f" / {total:,} ({percent:5.1f}%)"
+            self._progress.setFormat(f"{done:,} / {total:,} 파일 ({percent:.1f}%)")
+            title = state["title"]
+            short = ("빠른 열기" if "빠른" in title else
+                     "전체 받기" if "내려받" in title else title[:10])
+            parts = [short, counts]            # 창 폭 안에 들어가도록 짧게
             if done and done < total:
                 speed_files = done / max(0.001, elapsed)
-                parts.append("남은 시간 약 " + _human_time((total - done) / speed_files).rjust(8))
-            parts.append("경과 " + _human_time(elapsed).rjust(8))
-            parts.extend(state.get("extra") or [])
+                parts.append("남음 " + _human_time((total - done) / speed_files).rjust(7))
+            parts.append("경과 " + _human_time(elapsed).rjust(7))
+            for piece in state.get("extra") or []:
+                parts.append(piece.replace(" 받음", "").strip())
             self._spinner.setText(mark)
-            self._status.setText("  ·  ".join(parts))
+            self._status.setText(" · ".join(parts))
             self.setWindowTitle(f"{self._base_title} — {percent:.1f}%  ({done:,}/{total:,})")
         else:   # 폴더 훑는 중
             self._spinner.setText(mark)
@@ -672,7 +676,7 @@ class CloudBrowserDialog(QDialog):
                 piece = piece.strip()
                 if not any(k in piece for k in ("받음", "캐시", "/s")):
                     continue
-                extra.append(piece.rjust(16) if "받음" in piece else piece)
+                extra.append(piece.rjust(13) if "받음" in piece else piece)
             state = getattr(self, "_prog", None) or {}
             if state.get("kind") != "count":
                 state = {}                      # 훑기 → 다운로드로 넘어가면 처음부터

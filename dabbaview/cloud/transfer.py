@@ -21,7 +21,8 @@ from .. import cache
 from . import CloudError, safe_name
 
 WORKERS = 6            # 전체 파일 받기 (큰 파일 - 대역폭이 병목)
-HEAD_WORKERS = 12      # 헤더만 받기 - 구글 분당 한도(rateLimitExceeded)에 걸리지 않는 선
+HEAD_WORKERS = 18      # 헤더만 받기 - 구글 한도(1인당 분당 325,000단위 ≈ 초당 27건) 아래로
+                       # 넘치면 Throttle이 스스로 속도를 낮춤
 
 
 def wanted(name):
