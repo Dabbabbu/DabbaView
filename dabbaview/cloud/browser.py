@@ -119,14 +119,16 @@ class CloudBrowserDialog(QDialog):
         layout.addLayout(nav)
 
         self._tree = QTreeWidget()
-        self._tree.setColumnCount(3)
-        self._tree.setHeaderLabels(["이름", "크기", "수정"])
+        self._tree.setColumnCount(4)
+        self._tree.setHeaderLabels(["이름", "크기", "수정", "위치"])
         self._tree.setRootIsDecorated(False)
         self._tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         header = self._tree.header()
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Interactive)
+        self._tree.setColumnHidden(3, True)        # '위치'는 검색 결과에서만
         self._tree.itemDoubleClicked.connect(self._on_double_click)
         self._tree.itemSelectionChanged.connect(self._update_open_buttons)
         self._tree.setMinimumHeight(300)          # 폴더를 한눈에 보도록
@@ -735,7 +737,7 @@ class CloudBrowserDialog(QDialog):
         self._run("로그인 중...", task, done)
         return True
 
-    def _show(self, items, path):
+    def _show(self, items, path, search=False):
         self._items = items
         self._path.setText(path)
         self._tree.clear()
@@ -743,14 +745,21 @@ class CloudBrowserDialog(QDialog):
         folder_icon = style.standardIcon(QStyle.SP_DirIcon)
         file_icon = style.standardIcon(QStyle.SP_FileIcon)
         for item in items:
+            where = (item.extra or {}).get("path", "") if search else ""
             row = QTreeWidgetItem([item.name, "" if item.is_folder else human_size(item.size),
-                                   item.modified])
+                                   item.modified, where])
+            if where:
+                row.setToolTip(0, f"{where}/{item.name}")
+                row.setToolTip(3, f"{where}/{item.name}")
             row.setIcon(0, folder_icon if item.is_folder else file_icon)
             row.setData(0, Qt.UserRole, item)
             if not item.is_folder and not item.downloadable:
                 row.setDisabled(True)
                 row.setToolTip(0, "Google 문서 형식 - 내려받을 수 없음")
             self._tree.addTopLevelItem(row)
+        self._tree.setColumnHidden(3, not search)
+        if search:
+            self._tree.setColumnWidth(3, max(260, self._tree.width() // 2))
         self._up.setEnabled(bool(self._stack))
         self._open_here.setEnabled(bool(self._stack))
         self._update_open_buttons()
@@ -788,7 +797,7 @@ class CloudBrowserDialog(QDialog):
 
         def done(items):
             self._stack.clear()          # 검색 결과는 경로가 없으므로 처음으로 되돌림
-            self._show(items, f"검색 결과: '{text}' — 폴더 {len(items)}개 (더블클릭해서 열기)")
+            self._show(items, f"검색 결과: '{text}' — 폴더 {len(items)}개 (더블클릭해서 열기)", search=True)
             if not items:
                 self._status.setText(f"'{text}' 이름의 폴더를 찾지 못했습니다.")
         self._run(f"'{text}' 검색 중...", task, done)
@@ -802,7 +811,9 @@ class CloudBrowserDialog(QDialog):
         def done(items):
             if push:
                 self._stack.append(folder)
-            self._show(items, "/" + "/".join(f.name for f in self._stack))
+            base = (self._stack[0].extra or {}).get("path", "") if self._stack else ""
+            prefix = "/" + base if base else ""     # 검색 결과에서 연 폴더도 전체 경로로
+            self._show(items, prefix + "/" + "/".join(f.name for f in self._stack))
         self._run(f"'{folder.name}' 여는 중...", task, done)
 
     def _on_double_click(self, row, _col):

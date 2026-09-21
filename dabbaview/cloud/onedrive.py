@@ -176,10 +176,15 @@ class OneDriveProvider:
         source = remote or entry
         drive_id = (source.get("parentReference") or {}).get("driveId")
         is_folder = "folder" in source or ("package" in source and "file" not in source)
+        from urllib.parse import unquote
+        where = unquote((source.get("parentReference") or {}).get("path") or "")
+        where = where.split("root:", 1)[1] if "root:" in where else where
         return CloudItem(source.get("id", entry.get("id")), entry.get("name", ""), is_folder,
                          int(source.get("size", 0) or 0),
                          (source.get("lastModifiedDateTime") or "")[:16].replace("T", " "),
                          extra={"drive_id": drive_id,
+                                "path": "OneDrive" + (where if where.startswith("/") else "/" + where
+                                                      if where else ""),
                                 # 캐시 버전: 내용 태그(cTag) → 없으면 eTag/수정 시각+크기
                                 "version": source.get("cTag") or source.get("eTag") or
                                 f"{source.get('lastModifiedDateTime', '')}|{source.get('size', '')}"})

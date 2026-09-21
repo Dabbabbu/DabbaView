@@ -18,6 +18,7 @@ FOLDER = "application/vnd.google-apps.folder"
 SHORTCUT = "application/vnd.google-apps.shortcut"
 TOKEN_KEY = "google_drive_token"
 SECRET_KEY = "google_client_secret"
+PATH_LOOKUP_LIMIT = 60     # 검색 결과 중 위치(경로)를 찾아 줄 최대 개수
 FIELDS = ("nextPageToken, files(id, name, mimeType, size, modifiedTime, md5Checksum, "
           "shortcutDetails)")
 
@@ -155,10 +156,56 @@ class GoogleDriveProvider:
         if folders_only:
             query += f" and mimeType = '{FOLDER}'"
         result = self._service().files().list(
-            q=query, fields=FIELDS, pageSize=min(1000, limit),
-            orderBy="folder,name_natural", supportsAllDrives=True,
+            q=query, fields=FIELDS.replace("shortcutDetails", "shortcutDetails, parents, driveId"),
+            pageSize=min(1000, limit), orderBy="folder,name_natural", supportsAllDrives=True,
             includeItemsFromAllDrives=True).execute()
-        return [self._item(f) for f in result.get("files", [])]
+        items = []
+        for n, f in enumerate(result.get("files", [])):
+            item = self._item(f)
+            if n < PATH_LOOKUP_LIMIT:      # 검색 결과에 '위치'(상위 폴더 경로) 표시
+                try:
+                    item.extra["path"] = self.folder_path(f.get("parents") or [], f.get("driveId"))
+                except Exception:          # noqa: BLE001 - 위치를 못 구해도 검색 결과는 보여 줌
+                    item.extra["path"] = ""
+            items.append(item)
+        return items
+
+    def folder_path(self, parents, drive_id=None):
+        """상위 폴더 ID → '내 드라이브/때려넣기/…' (한 번 찾은 폴더는 기억해 두고 다시 쓴다)"""
+        cache = self.__dict__.setdefault("_parent_cache", {})
+        service = self._service()
+        if "__root__" not in cache:
+            try:
+                cache["__root__"] = service.files().get(fileId="root", fields="id").execute()["id"]
+            except Exception:              # noqa: BLE001
+                cache["__root__"] = None
+        names = []
+        current = parents[0] if parents else None
+        for _depth in range(30):
+            if not current:
+                break
+            if current == cache["__root__"]:
+                names.append("내 드라이브")
+                break
+            if current not in cache:
+                f = service.files().get(fileId=current, fields="id, name, parents, driveId",
+                                        supportsAllDrives=True).execute()
+                cache[current] = (f.get("name", ""), (f.get("parents") or [None])[0], f.get("driveId"))
+            name, parent, folder_drive = cache[current]
+            if parent is None and folder_drive and folder_drive == current:
+                names.append(self._drive_name(folder_drive) or name)   # 공유 드라이브의 맨 위
+                break
+            names.append(name)
+            if parent is None:             # 맨 위 (다른 컴퓨터 백업 · 공유받은 폴더 등)
+                break
+            current = parent
+        return "/".join(reversed(names))
+
+    def _drive_name(self, drive_id):
+        try:
+            return self._service().drives().get(driveId=drive_id, fields="name").execute().get("name")
+        except Exception:                  # noqa: BLE001
+            return None
 
     def list_children(self, folder):
         if folder.extra.get("root") == "shared":
