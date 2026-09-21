@@ -229,11 +229,12 @@ class GoogleDriveProvider:
                    "Range": f"bytes=0-{max(0, int(length) - 1)}"}
         import time
         response = None
-        for attempt in range(4):        # 403·429(요청이 몰림)면 잠깐 쉬었다 다시
+        import random
+        for attempt in range(6):        # 403·429(요청이 몰림)면 점점 오래 쉬었다 다시
             response = self._http().get(url, headers=headers, timeout=60)
             if response.status_code not in (403, 429, 500, 502, 503):
                 break
-            time.sleep(0.4 * (attempt + 1))
+            time.sleep(min(16.0, (2 ** attempt) * 0.5) + random.random() * 0.4)
         if response.status_code >= 400:
             raise CloudError(f"{item.name}: HTTP {response.status_code}")
         data = response.content
@@ -283,7 +284,7 @@ class GoogleDriveProvider:
             while not done:
                 if cancelled and cancelled():
                     raise CloudError("취소했습니다.")
-                status, done = downloader.next_chunk()
+                status, done = downloader.next_chunk(num_retries=5)   # 한도·일시 오류 자동 재시도
                 if progress:
                     progress(item.name, int(status.resumable_progress) if status else item.size)
         return path

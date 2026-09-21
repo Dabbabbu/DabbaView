@@ -21,7 +21,7 @@ from .. import cache
 from . import CloudError, safe_name
 
 WORKERS = 6            # 전체 파일 받기 (큰 파일 - 대역폭이 병목)
-HEAD_WORKERS = 40      # 헤더만 받기 (64KB - 왕복 시간이 병목이라 많이 띄울수록 빠름)
+HEAD_WORKERS = 12      # 헤더만 받기 - 구글 분당 한도(rateLimitExceeded)에 걸리지 않는 선
 
 
 def wanted(name):
@@ -33,6 +33,35 @@ def wanted(name):
     if name.lower().endswith(TEXT_REPORT_EXTENSIONS):
         return True
     return is_candidate_file(name) or file_kind(name) != "dicom"
+
+
+class Throttle:
+    """요청 한도에 걸리면 잠시 쉬었다가 천천히 회복 (구글 분당 한도 대응)"""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._until = 0.0
+        self._penalty = 0.0
+
+    def wait(self):
+        while True:
+            with self._lock:
+                remain = self._until - time.monotonic()
+            if remain <= 0:
+                return
+            time.sleep(min(remain, 0.5))
+
+    def hit_limit(self):
+        """한도 응답을 받았을 때: 쉬는 시간을 늘림 (최대 20초)"""
+        with self._lock:
+            self._penalty = min(20.0, (self._penalty or 1.0) * 2)
+            self._until = time.monotonic() + self._penalty
+            return self._penalty
+
+    def ok(self):
+        """성공하면 벌점을 조금씩 줄임"""
+        with self._lock:
+            self._penalty = max(0.0, self._penalty * 0.5)
 
 
 def _human_time(seconds):
@@ -195,6 +224,9 @@ def fetch_heads(provider, files, tops, progress=None, cancelled=None, workers=HE
             progress(("count", done, total,
                       "빠른 열기 - 메타데이터만 받는 중  ·  " + "  ·  ".join(parts)))
 
+    throttle = Throttle()
+    stats["failed"] = 0
+
     def task(rel, item):
         dest = os.path.join(session, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -204,13 +236,33 @@ def fetch_heads(provider, files, tops, progress=None, cancelled=None, workers=HE
             with lock:
                 stats["hits"] += 1
         else:
-            try:
-                got = provider.download_head(item, dest, head_bytes)
-                lazy.register(dest, provider, item)     # 나머지는 볼 때 받음
-            except Exception:  # noqa: BLE001 - 부분 다운로드가 안 되면 통째로 받는다
-                path, _hit = _fetch_one(provider, item, None, cancelled)
-                _link(path, dest)
-                got = getattr(item, "size", 0) or 0
+            got = 0
+            for attempt in range(5):
+                if cancelled and cancelled():
+                    return
+                throttle.wait()
+                try:
+                    got = provider.download_head(item, dest, head_bytes)
+                    lazy.register(dest, provider, item)   # 나머지는 볼 때 받음
+                    throttle.ok()
+                    break
+                except Exception as e:  # noqa: BLE001
+                    if _is_rate_limit(e):
+                        throttle.hit_limit()          # 한도 → 전체 속도를 잠시 낮춤
+                        continue
+                    if attempt >= 2:                  # 다른 오류: 통째로 받아 보고, 그래도 안 되면 건너뜀
+                        try:
+                            path, _hit = _fetch_one(provider, item, None, cancelled)
+                            _link(path, dest)
+                            got = getattr(item, "size", 0) or 0
+                        except Exception:  # noqa: BLE001
+                            with lock:
+                                stats["failed"] += 1
+                                stats["done"] += 1
+                            report()
+                            return
+                        break
+                    time.sleep(0.3 * (attempt + 1))
             with lock:
                 stats["bytes"] += got
                 stats["heads"] += 1
@@ -227,7 +279,11 @@ def fetch_heads(provider, files, tops, progress=None, cancelled=None, workers=HE
                 for f in futures:
                     f.cancel()
                 raise CloudError("취소했습니다.")
-            future.result()
+            try:
+                future.result()
+            except Exception:  # noqa: BLE001 - 개별 파일 실패는 건너뛰고 계속
+                with lock:
+                    stats["failed"] = stats.get("failed", 0) + 1
     return sorted(paths), stats
 
 
@@ -237,6 +293,14 @@ def _link(src, dst):
         os.link(src, dst)        # 하드 링크: 공간을 더 쓰지 않고, 캐시가 지워져도 유지
     except OSError:
         shutil.copy2(src, dst)
+
+
+def _is_rate_limit(error):
+    """구글·MS의 '요청이 너무 많음' 응답인지"""
+    text = str(error)
+    return ("rateLimitExceeded" in text or "userRateLimitExceeded" in text
+            or "Quota exceeded" in text or "429" in text
+            or "HTTP 403" in text or "HttpError 403" in text)
 
 
 def session_dir(provider_key, dest_root=None):
@@ -274,6 +338,8 @@ def fetch(provider, files, tops, progress=None, cancelled=None, workers=WORKERS,
                 parts.append(f"남은 시간 약 {_human_time(left / speed)}")
         if stats["hits"]:
             parts.append(f"캐시 {stats['hits']}개")
+        if stats.get("throttled"):
+            parts.append(f"요청 한도로 잠시 천천히 ({stats['throttled']}회)")
         if progress:
             progress(("count", stats["done"], total, "내려받는 중  ·  " + "  ·  ".join(parts)))
 

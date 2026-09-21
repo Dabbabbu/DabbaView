@@ -677,8 +677,18 @@ class CloudBrowserDialog(QDialog):
 
     def _failed(self, message):
         self._finish()
-        self._status.setText(f"오류: {message.splitlines()[0] if message else ''}")
-        QMessageBox.warning(self, self.provider.name, message)
+        text = message or ""
+        if any(k in text for k in ("rateLimitExceeded", "Quota exceeded", "userRateLimitExceeded")):
+            friendly = ("구글 드라이브의 1분당 요청 한도에 걸렸습니다.\n\n"
+                        "잠시(1~2분) 뒤 다시 시도하면 됩니다. "
+                        "이미 받은 파일은 캐시에 남아 있어 다시 받지 않습니다.")
+        elif "403" in text:
+            friendly = ("구글 드라이브가 요청을 거부했습니다 (권한 또는 요청 한도).\n"
+                        "잠시 뒤 다시 시도해 주세요.")
+        else:
+            friendly = text.splitlines()[0] if text else "알 수 없는 오류"
+        self._status.setText("오류: " + friendly.splitlines()[0])
+        QMessageBox.warning(self, self.provider.name, friendly)
 
     def _set_busy(self, busy):
         self._progress.setVisible(busy)
