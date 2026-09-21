@@ -408,6 +408,7 @@ class MainWindow(QMainWindow):
         self._tab_widget = QTabWidget()
         self._tab_widget.setStyleSheet("""
             QTabWidget::pane { border: none; }
+            QTabWidget::tab-bar { alignment: center; }
             QTabBar::tab {
                 background: #2d2d2d; color: #aaa;
                 padding: 8px 16px; border: none;
@@ -509,19 +510,20 @@ class MainWindow(QMainWindow):
         open_dir.triggered.connect(self._open_directory)
         file_menu.addAction(open_dir)
         # 추가로 열기: 지금 연 영상은 그대로 두고 더해서 Multi View에 나란히 (Add Files / Add Folder)
-        add_file = QAction("➕ 파일 추가… (지금 연 영상에 더하기 · Add Files)", self)
+        add_file = QAction("➕ 파일 추가…", self)
         add_file.setShortcut(QKeySequence("Ctrl+Alt+Shift+O"))
-        add_file.setToolTip("지금 목록은 그대로 두고 고른 파일(여러 개 · 압축파일 가능)을 더해 Multi View 빈 칸에 나란히 엽니다.")
+        add_file.setToolTip("Add Files — 지금 목록은 그대로 두고 고른 파일(여러 개 · 압축파일 가능)을 더해 Multi View 빈 칸에 나란히 엽니다.")
         add_file.triggered.connect(self._add_files)
         file_menu.addAction(add_file)
-        add_dir = QAction("➕ 폴더 추가… (지금 연 영상에 더하기 · Add Folder)", self)
+        add_dir = QAction("➕ 폴더 추가…", self)
         add_dir.setShortcut(QKeySequence("Ctrl+Alt+O"))
-        add_dir.setToolTip("지금 목록은 그대로 두고 다른 폴더의 시리즈를 더해 Multi View 빈 칸에 나란히 엽니다.\n"
+        add_dir.setToolTip("Add Folder — 지금 목록은 그대로 두고 다른 폴더의 시리즈를 더해 Multi View 빈 칸에 나란히 엽니다.\n"
                            "같은 검사면 Crosslink · Ref Lines로 서로의 위치(스캔 범위)가 보입니다.")
         add_dir.triggered.connect(self._add_folder)
         file_menu.addAction(add_dir)
         file_menu.addSeparator()
-        library_add = QAction("★ Add to Library (현재 스터디)", self)
+        library_add = QAction("★ Add to Library", self)
+        library_add.setToolTip("현재 스터디를 Library(즐겨찾기)에 추가 (Ctrl+D)")
         library_add.setShortcut(QKeySequence("Ctrl+D"))
         library_add.setShortcutContext(Qt.WidgetShortcut)   # 실제 단축키는 창 액션이 처리 (중복 방지)
         library_add.triggered.connect(self._add_current_study_to_library)
@@ -553,7 +555,7 @@ class MainWindow(QMainWindow):
         export_video_action.setShortcut(QKeySequence("Ctrl+Shift+E"))
         export_video_action.triggered.connect(self._export_video)
         file_menu.addAction(export_video_action)
-        batch_video_action = QAction("Batch Export Videos... (여러 시리즈)", self)
+        batch_video_action = QAction("Batch Export Videos...", self)
         batch_video_action.setToolTip("불러온 시리즈를 골라 한 번에 MP4 · AVI · GIF로 내보냅니다")
         batch_video_action.triggered.connect(self._batch_export_videos)
         file_menu.addAction(batch_video_action)
@@ -586,14 +588,13 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
         file_menu.addAction(self._act_save_ann)
-        file_menu.addAction(self._act_library_add)
         file_menu.addAction(self._act_load_ann)
         file_menu.addAction(self._act_export_keys)
         file_menu.addSeparator()
         file_menu.addAction(self._act_send)
         file_menu.addAction(self._act_print)
         file_menu.addSeparator()
-        self._act_settings.setText("⚙ Settings… (환경설정)")
+        self._act_settings.setText("⚙ Settings…")
         file_menu.addAction(self._act_settings)
         # macOS 앱 메뉴(DabbaView ▸ 설정)에도 하나 더 — 두 곳 어디서나 열림
         mac_prefs = QAction("Preferences…", self)
@@ -868,7 +869,6 @@ class MainWindow(QMainWindow):
         find = QPushButton(f"🔍  기능 검색…     {key}")
         find.setObjectName("FindBox")
         find.setCursor(Qt.PointingHandCursor)
-        find.setMinimumWidth(220)
         find.setFixedHeight(24)
         find.setToolTip("메뉴 · 도구 막대의 모든 기능을 이름으로 찾아 바로 실행합니다\n"
                         "한글 · 영어 · 비슷한 말 · 초성 모두 됩니다\n"
@@ -878,13 +878,15 @@ class MainWindow(QMainWindow):
             " border: 1px solid #3d8bfd; border-radius: 11px; padding: 0 12px; font-size: 12px; }"
             "QPushButton#FindBox:hover { background: #22324a; color: #fff; border-color: #6aa8ff; }")
         find.clicked.connect(self.open_command_palette)
-        corner = QWidget()
-        corner_layout = QHBoxLayout(corner)
-        corner_layout.setContentsMargins(0, 0, 8, 0)
-        corner_layout.setAlignment(Qt.AlignVCenter)
-        corner_layout.addWidget(find)
-        self._tab_widget.setCornerWidget(corner, Qt.TopRightCorner)
+        # 탭 줄 배치에 넣지 않고 오른쪽 끝에 띄움 → 탭(2D View · Multi View · MPR · 3D)이 뷰어 정가운데에
+        # (코너 위젯으로 두면 Qt가 그 폭만큼 빼고 가운데를 잡아 왼쪽으로 치우침 — Windows에서 두드러짐)
+        find.setParent(self._tab_widget)
+        find.resize(max(220, find.sizeHint().width()), 24)
+        find.setProperty("full_text", find.text())
+        find.raise_()
         self._find_box = find
+        self._tab_widget.installEventFilter(_GeometryWatcher(self._place_find_box, self))
+        QTimer.singleShot(0, self._place_find_box)
 
         # ─── 둘째 줄: 이미지 조작 + 동기화 + Key Image / Tile ───
         self.addToolBarBreak()
@@ -2680,6 +2682,28 @@ class MainWindow(QMainWindow):
         self._sync_volume_tabs()
         self._refresh_image_info()
         self._ai_panel.on_series_changed()
+
+    def _place_find_box(self):
+        """🔍 기능 검색 칸: 뷰어 탭 줄 오른쪽 끝, 탭 높이 가운데"""
+        box = getattr(self, "_find_box", None)
+        if box is None:
+            return
+        try:
+            bar = self._tab_widget.tabBar()
+            tabs_right = bar.mapTo(self._tab_widget, bar.tabRect(bar.count() - 1).topRight()).x()
+            full = 220
+            room = self._tab_widget.width() - 8 - tabs_right - 8
+            if room >= full:                 # 자리가 넉넉하면 '🔍 기능 검색… ⌘F'
+                box.setText(box.property("full_text") or box.text())
+                box.setFixedWidth(full)
+            else:                            # 좁으면 돋보기만 (탭을 가리지 않게)
+                box.setText("🔍")
+                box.setFixedWidth(34)
+            height = max(bar.height(), box.height())
+            box.move(max(0, self._tab_widget.width() - box.width() - 8), max(0, (height - box.height()) // 2))
+            box.raise_()
+        except RuntimeError:
+            pass
 
     def _place_drag_pads(self):
         """Zoom · W/L 칸을 뷰어(2D View … 3D Volume 영역) 가로 가운데, 상태바 세로 가운데에"""

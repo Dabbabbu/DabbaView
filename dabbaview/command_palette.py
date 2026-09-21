@@ -144,15 +144,18 @@ def score(query, action, path):
     #   '동영상으로 저장' → 동영상(video) + 저장(export) 둘 다 맞는 Export as Video가 맨 위
     keys = matched_keys(q)
     in_name = in_hay = 0
+    primary = False                   # 비슷한 말의 첫 번째 뜻('설정' → settings)이 이름에 있음
     for key in keys:
         targets = [normalize(t) for t in SYNONYMS[key]]
+        if targets and targets[0] and targets[0] in name and normalize(key) == q:
+            primary = True
         if any(t and t in name for t in targets):
             in_name += 1
         elif any(t and t in hay for t in targets):
             in_hay += 1
     if in_name:
         exact = len(keys) == 1 and normalize(keys[0]) == q
-        best = max(best, 85 if exact else 50 + 10 * in_name + 3 * in_hay)
+        best = max(best, (90 if primary else 85) if exact else 50 + 10 * in_name + 3 * in_hay)
     elif in_hay:
         best = max(best, 35 + 5 * in_hay)
     # 여러 낱말이면 낱말이 이름에 들어 있을 때마다 조금 더 ('화면 크기 크게' → 크게가 위로)
