@@ -120,17 +120,15 @@ class CloudBrowserDialog(QDialog):
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self._tree.itemDoubleClicked.connect(self._on_double_click)
         self._tree.itemSelectionChanged.connect(self._update_open_buttons)
+        self._tree.setMinimumHeight(300)          # 폴더를 한눈에 보도록
         layout.addWidget(self._tree, 1)
 
-        hint = QLabel("폴더는 더블클릭으로 들어갑니다. 파일·폴더를 골라(여러 개 가능) '열기'를 누르면 "
-                      "내려받아 불러옵니다. 폴더를 고르면 하위 폴더까지 DICOM 파일을 모두 받습니다 "
-                      "(로컬 Open Folder와 같은 기준).\n"
-                      "목록에 없는 폴더(구글 드라이브 '다른 컴퓨터'에 백업된 PC 폴더 등)는 "
-                      "위쪽 🔍 칸에 이름을 넣고 Enter로 찾으세요.\n"
-                      f"한 번 받은 파일은 캐시에 보관되어 다시 열 때 내려받지 않습니다: {cache.cache_root()}")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #999;")
-        layout.addWidget(hint)
+        # 긴 설명은 목록 공간을 잡아먹어서 빼고, 필요한 안내는 각 위젯 툴팁으로 옮김
+        self._tree.setToolTip(
+            "폴더는 더블클릭으로 들어갑니다. 파일·폴더를 골라(여러 개 가능) '선택 항목 열기'를 누르면 "
+            "내려받아 불러옵니다.\n"
+            "목록에 없는 폴더(구글 드라이브 '다른 컴퓨터'에 백업된 PC 폴더 등)는 위쪽 🔍 칸에서 찾으세요.\n"
+            f"한 번 받은 파일은 캐시에 남아 다시 받지 않습니다: {cache.cache_root()}")
         sum_row = QHBoxLayout()
         self._summary_label = QLabel("")
         self._summary_label.setStyleSheet("color:#cfe0f5;")
@@ -146,7 +144,7 @@ class CloudBrowserDialog(QDialog):
         self._summary_detail = QTreeWidget()
         self._summary_detail.setColumnCount(3)
         self._summary_detail.setHeaderLabels(["확장자 (많은 순)", "개수", "용량"])
-        self._summary_detail.setMaximumHeight(150)
+        self._summary_detail.setMaximumHeight(120)
         self._summary_detail.setVisible(False)
         self._summary_detail.setRootIsDecorated(False)
         self._summary_detail.itemChanged.connect(self._on_ext_toggled)
@@ -336,6 +334,7 @@ class CloudBrowserDialog(QDialog):
             label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.setMinimumWidth(880)
+        self.resize(980, 720)
 
     def _toggle_summary(self, on):
         self._summary_toggle.setText("▾ 접기" if on else "▸ 자세히")
