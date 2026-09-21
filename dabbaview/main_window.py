@@ -588,6 +588,15 @@ class MainWindow(QMainWindow):
         mac_prefs.setMenuRole(QAction.PreferencesRole)
         mac_prefs.triggered.connect(lambda: self._open_settings())
         file_menu.addAction(mac_prefs)
+        # 캐시: 기능 찾기(⌘F)에서 '캐시', 'cache', '임시 파일', '용량 정리'로도 찾을 수 있게 메뉴에 둠
+        cache_menu = file_menu.addMenu("🧹 캐시")
+        clear_cache = cache_menu.addAction("캐시 지우기… (임시 파일 · 받은 클라우드 사본 정리)")
+        clear_cache.setToolTip("캐시(폴더 메타데이터 · 썸네일 · 클라우드에서 받은 파일 사본)를 모두 지워 "
+                               "디스크 공간을 확보합니다")
+        clear_cache.triggered.connect(self._clear_cache)
+        cache_settings = cache_menu.addAction("캐시 용량 한도 · 사용량 보기…")
+        cache_settings.setToolTip("Settings ▸ Cache: 최대 용량(1~50 GB), 지금 쓰는 양, 캐시 폴더 열기")
+        cache_settings.triggered.connect(lambda: self._open_settings("cache"))
         file_menu.addSeparator()
 
         quit_action = QAction("Quit", self)
@@ -3153,6 +3162,30 @@ class MainWindow(QMainWindow):
         self._statusbar.showMessage(f"주석 {count}개 불러옴", 6000)
 
     # ─── 설정 / 네트워크 ───
+
+    def _clear_cache(self):
+        """캐시 전부 지우기 — 얼마나 쓰는지 보여 주고 확인. 클라우드에서 받는 중이면 끝난 뒤에"""
+        from . import cache
+        busy = [w for w, _i in self._live_popups() if getattr(w, "_worker", None) is not None]
+        if busy:
+            QMessageBox.information(self, "캐시 지우기",
+                                    "클라우드에서 받는 중에는 캐시를 지울 수 없습니다.\n받기가 끝난 뒤 다시 해 주세요.")
+            return
+        u = cache.usage()
+        if u["total"] <= 0:
+            self._statusbar.showMessage("캐시가 이미 비어 있습니다.", 5000)
+            return
+        answer = QMessageBox.question(
+            self, "캐시 지우기",
+            f"캐시 {cache.human_size(u['total'])}를 모두 지울까요?\n\n"
+            f"· 클라우드에서 받은 파일 사본 {cache.human_size(u['cloud'])}\n"
+            f"· 폴더 메타데이터 {cache.human_size(u['metadata'])} · 썸네일 {cache.human_size(u['thumbnails'])}\n\n"
+            "지금 열려 있는 영상과 '저장 위치'에 받아 둔 파일은 그대로 남습니다.\n"
+            "다음에 같은 클라우드 폴더를 열면 다시 내려받습니다.")
+        if answer != QMessageBox.Yes:
+            return
+        cache.clear()
+        self._statusbar.showMessage(f"캐시 {cache.human_size(u['total'])}를 지웠습니다.", 8000)
 
     def _open_settings(self, tab="mouse"):
         dialog = SettingsDialog(self._app_settings, self, tab=tab)

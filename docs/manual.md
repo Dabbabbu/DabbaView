@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 3.7.1 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 3.8.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -430,6 +430,7 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 
 - 영어 메뉴 이름뿐 아니라 **한글 · 비슷한 말**로도 찾습니다. 예) `내보내기` · `export` · `저장` · `동영상` · `동영상으로 저장` · `mp4` → **Export as Video…**, **Batch Export Videos…**, Export as Image…, Capture
 - 초성만 쳐도 됩니다: `ㄷㅇㅅ` → 동영상
+- `캐시` · `cache` · `임시 파일` · `용량 정리`로 **File ▸ 🧹 캐시 ▸ 캐시 지우기…**(쓰는 양을 보여 주고 확인 후 삭제)와 **캐시 용량 한도 · 사용량 보기…**를 찾을 수 있습니다
 - 결과에는 메뉴 위치(`File ▸ Export as Video...`)와 단축키가 함께 나옵니다. **↑↓**로 고르고 **Enter**(또는 더블클릭)로 실행, **Esc**로 닫습니다.
 - 지금 쓸 수 없는 기능(영상을 먼저 열어야 하는 것 등)은 흐리게 목록 뒤쪽에 나옵니다.
 
