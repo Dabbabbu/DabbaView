@@ -85,6 +85,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     window_adjusted = pyqtSignal(float, float)  # 사용자가 W/L 변경 (동기화 윈도잉용)
     profile_measured = pyqtSignal(object)  # 라인 프로파일 결과 dict (하단 패널 그래프)
     selection_changed = pyqtSignal(list)   # 선택한 주석 id 목록 (ROI Manager 동기화)
+    select_tool_requested = pyqtSignal()   # Esc: 점 찍기 등 도구에서 Select로 돌아가기
 
     # 도구 모드
     TOOL_WINDOW = 0
@@ -437,25 +438,28 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             position = (img_pos[0] - 0.5, img_pos[1] - 0.5, float(self._current_slice))
         ds = self.current_dataset()
         point = self._landmarks.add(position, frame_uid=str(getattr(ds, "FrameOfReferenceUID", "")),
-                                    series_uid=self._series.series_uid)
+                                    series_uid=self._series.series_uid,
+                                    study_uid=str(getattr(ds, "StudyInstanceUID", "") or ""),
+                                    slice_index=int(self._current_slice),
+                                    series_desc=self._series.description or "")
         text = ", ".join(f"{v:.1f}" for v in point["position"])
         self.status_message.emit(f"랜드마크 {point['name']}: ({text}) mm")
 
     def _landmarks_here(self):
-        """현재 슬라이스에 보이는 랜드마크 [(이름, 영상 좌표)]"""
+        """현재 슬라이스에 보이는 랜드마크 [(번호, 이름, 영상 좌표)]"""
         store, series = self._landmarks, self._series
         if store is None or not len(store) or series is None:
             return []
         geom = series.geometry
         if geom is None:
-            return [(p["name"], (p["position"][0] + 0.5, p["position"][1] + 0.5))
-                    for p in store if p.get("series_uid") == series.series_uid
+            return [(i, p["name"], (p["position"][0] + 0.5, p["position"][1] + 0.5))
+                    for i, p in enumerate(store) if p.get("series_uid") == series.series_uid
                     and int(round(p["position"][2])) == self._current_slice]
         spacing = geom.slice_spacing()
         tolerance = (spacing / 2 if spacing else 1.0) + 0.01
         frame = str(getattr(self.current_dataset(), "FrameOfReferenceUID", ""))
         points = list(store)
-        return [(points[i]["name"], (col + 0.5, row + 0.5))
+        return [(i, points[i]["name"], (col + 0.5, row + 0.5))
                 for i, col, row, _dist in store.points_near(geom, self._current_slice,
                                                             tolerance, frame)]
 
@@ -495,12 +499,27 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     def add_overlay_painter(cls, fn):
         cls._overlay_painters.append(fn)
 
-    def _draw_analysis(self, painter):
-        """랜드마크 + 라인 프로파일 선"""
+    # 랜드마크 표시 (View ▸ 📍 랜드마크 표시): 영상을 가리지 않게
+    #   "subtle": 가운데를 비운 작은 반투명 표시, 이름은 마우스를 가까이 댈 때만 (기본)
+    #   "full": 예전처럼 원 + 십자 + 이름   "hover": 마우스를 가까이 댈 때만   "hidden": 숨김
+    LANDMARK_DISPLAYS = ("subtle", "full", "hover", "hidden")
+    landmark_display = "subtle"
+    LANDMARK_HOVER_PX = 28
+
+    def flash_landmark(self, index, seconds=1.8):
+        """목록에서 고른 랜드마크를 잠깐 크게 표시 (어디 있는지 보이게)"""
+        self._landmark_flash = (index, time.monotonic() + seconds)
+        self.update()
+        QTimer.singleShot(int(seconds * 1000) + 50, self.update)
+
+    def _draw_landmark(self, painter, p, name, mode, near, flash):
         color = QColor(120, 255, 120)
-        painter.setFont(self._overlay_font())
-        for name, img_pos in self._landmarks_here():
-            p = self._image_to_screen_f(img_pos)
+        if flash:
+            painter.setPen(QPen(QColor(0, 0, 0), 4))
+            painter.drawEllipse(p, 14, 14)
+            painter.setPen(QPen(QColor(255, 230, 80), 2))
+            painter.drawEllipse(p, 14, 14)
+        if mode == "full" or flash or (near and mode in ("subtle", "hover")):
             painter.setPen(QPen(QColor(0, 0, 0), 3))
             painter.drawEllipse(p, 5, 5)
             painter.setPen(QPen(color, 1.5))
@@ -508,6 +527,31 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             painter.drawLine(QPointF(p.x() - 8, p.y()), QPointF(p.x() - 3, p.y()))
             painter.drawLine(QPointF(p.x() + 3, p.y()), QPointF(p.x() + 8, p.y()))
             self._draw_text_shadow(painter, int(p.x() + 9), int(p.y() - 6), name)
+            return
+        if mode != "subtle":
+            return
+        # 가운데 4px는 비우고 짧은 눈금 네 개만 반투명으로 → 찍은 곳의 영상이 그대로 보임
+        color.setAlpha(150)
+        painter.setPen(QPen(color, 1.2))
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            painter.drawLine(QPointF(p.x() + dx * 4, p.y() + dy * 4),
+                             QPointF(p.x() + dx * 8, p.y() + dy * 8))
+
+    def _draw_analysis(self, painter):
+        """랜드마크 + 라인 프로파일 선"""
+        painter.setFont(self._overlay_font())
+        mode = self.landmark_display
+        flash_index, until = getattr(self, "_landmark_flash", (None, 0.0))
+        flashing = time.monotonic() < until
+        hover = getattr(self, "_hover_pos", None) if self.underMouse() else None
+        for i, name, img_pos in self._landmarks_here():
+            flash = flashing and i == flash_index
+            if mode == "hidden" and not flash:
+                continue
+            p = self._image_to_screen_f(img_pos)
+            near = hover is not None and math.hypot(hover.x() - p.x(),
+                                                    hover.y() - p.y()) <= self.LANDMARK_HOVER_PX
+            self._draw_landmark(painter, p, name, mode, near, flash)
         line = self._profile_line
         if line is not None and line[0] == self._image_key():
             a, b = self._image_to_screen_f(line[1]), self._image_to_screen_f(line[2])
@@ -1122,6 +1166,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         elif key == Qt.Key_Escape:
             if self._draft is None:
                 self.clear_cursor3d()
+                if self._current_tool not in (self.TOOL_SELECT, self.TOOL_WINDOW):
+                    self.select_tool_requested.emit()   # 그리던 게 없으면 Esc = Select로
             self._draft = None
             self.update()
         elif key in (Qt.Key_Up, Qt.Key_Down):
@@ -1553,9 +1599,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     def sync_geometry(self):
         return self._series.geometry if self._series else None
 
+    # Crosslink가 켜져 있을 때 Select · W/L 좌클릭으로 기준점을 찍던 동작 (예전 방식).
+    # 영상을 보려고 누를 때마다 점이 찍혀 불편 → 끔: 위치 찍기는 3D Cursor 도구(6)에서만
+    # (3D Cursor는 Crosslink가 켜져 있으면 같은 좌표계의 다른 칸에도 전파됨)
+    CLICK_PLACES_REFERENCE = False
+
     def _cursor_mode_active(self):
-        # 측정/팬/줌 도구 사용 중에는 해당 도구 동작 유지
-        return (self._sync_cursor_enabled and self._series is not None
+        return (self.CLICK_PLACES_REFERENCE and self._sync_cursor_enabled
+                and self._series is not None
                 and self._current_tool in (self.TOOL_SELECT, self.TOOL_WINDOW))
 
     def _place_cursor(self, screen_pos):

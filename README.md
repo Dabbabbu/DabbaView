@@ -45,7 +45,7 @@ Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 
 | 🔌 **PACS · 연동** | C-STORE(DICOM Send) · DICOM Print, 익명화, Google Drive · OneDrive 열기, 포맷 변환(NIfTI ↔ DICOM 등) |
 | 🎬 **내보내기** | 화면 캡처, 동영상(MP4 · AVI · GIF), **여러 시리즈 일괄 동영상**, PNG 시퀀스 |
 
-<!-- version -->**Version** 4.2.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
+<!-- version -->**Version** 4.3.0 — 버전은 `dabbaview/__init__.py`의 `__version__` 하나로 관리합니다 (앱 번들·타이틀 바·About·시작 화면이 이 값을 사용하고, 빌드할 때 이 줄도 자동으로 맞춰집니다).
 
 > ⚠️ 진단용으로 인증된 의료기기가 아닙니다. 학습·연구·참고용으로 사용하세요.
 
@@ -145,7 +145,7 @@ AI Research 패널의 **🧰 Image Tools** 탭, **Process** 메뉴, 하단 **His
 |---|---|
 | Image Registration | 두 시리즈 선택 → Rigid / Affine (SimpleITK, Mutual Information · Mean Squares · Correlation, 다해상도). 결과는 기준 격자에 맞춘 새 시리즈 + 자동 융합 표시. 변환 `.tfm` 저장/불러오기 |
 | Image Fusion | 기준 시리즈 위에 다른 시리즈를 컬러로 (예: CT 흑백 + PET Hot). 환자 좌표로 다시 샘플링하므로 해상도·방향이 달라도 겹침. 투명도, Overlay / Add / Multiply / Checkerboard, 컬러바 |
-| Landmarks | Landmark 도구(**F**)로 점 찍기 → 이름·라벨 편집, 환자 좌표(mm) CSV / 3D Slicer `.mrk.json` 내보내기·불러오기, 같은 좌표계의 모든 시리즈와 3D 뷰에 표시 |
+| Landmarks | Landmark 도구(**F**)로 점 찍기 → **📍 Landmarks 목록(Shift+F)**에서 모아 보기 · 누르면 그 영상으로 이동 · 이름·라벨 편집, 검사별 자동 저장(다시 열면 복원), 시리즈 카드에 📍 개수, 표시 방식(작게·반투명 / 가까이 댈 때만 / 숨김), 환자 좌표(mm) CSV / 3D Slicer `.mrk.json` 내보내기·불러오기, 같은 좌표계의 모든 시리즈와 3D 뷰에 표시 |
 | Surface Model | AI 세그멘테이션 라벨 → Marching Cubes → 스무딩·데시메이션 → 3D 뷰, STL/OBJ/PLY 내보내기, 표면적·부피 |
 | Filters (Process) | Gaussian, Median, Unsharp Mask, Sobel, Canny, Erosion/Dilation/Opening/Closing — 2D(슬라이스별) 또는 3D, 미리보기, **결과는 새 시리즈** (원본 보존) |
 | Histogram | 현재 슬라이스 / 전체 볼륨 / ROI / AI 라벨 영역, Mean·StdDev·Min·Max·Median·Mode, log, CSV |

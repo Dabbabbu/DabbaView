@@ -394,10 +394,7 @@ class AnalysisTab(QWidget):
             self.main._landmarks.update(item.row(), **{field: item.text()})
 
     def _go_to_landmark(self, row, _col):
-        points = list(self.main._landmarks)
-        if 0 <= row < len(points):
-            vp = self.main._target_viewport()
-            vp.set_reference_point(np.array(points[row]["position"]))
+        self.main.go_to_landmark(row)   # 그 시리즈 · 슬라이스로 이동하고 점을 잠깐 강조
 
     def _delete_landmark(self):
         self.main._landmarks.remove(self._lm_table.currentRow())

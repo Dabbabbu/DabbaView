@@ -183,6 +183,25 @@ class SeriesCardDelegate(QStyledItemDelegate):
             painter.drawText(QRectF(text_rect.left(), text_rect.top() + 58,
                                     text_rect.width(), 16), Qt.AlignLeft, folder)
 
+        n_landmarks, n_keys = self._panel.marks_for(index.data(ROLE_UID))
+        chips = ([(f"★ {n_keys}", "#4a3f0a", "#ffd84a")] if n_keys else []) + \
+            ([(f"📍 {n_landmarks}", "#12391c", "#8dff9a")] if n_landmarks else [])
+        if chips:                                    # 의미 있는 영상이 있는 시리즈 (Key Image · 랜드마크)
+            font.setPointSize(8)
+            font.setBold(True)
+            painter.setFont(font)
+            fm = QFontMetrics(font)
+            bottom = thumb_rect.bottom() - 2          # 썸네일 오른쪽 아래에 위로 쌓음 (모달리티는 왼쪽 아래)
+            for text, back, fore in chips:
+                width = fm.horizontalAdvance(text) + 8
+                chip = QRectF(thumb_rect.right() - width - 2, bottom - 14, width, 14)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(back))
+                painter.drawRoundedRect(chip, 3, 3)
+                painter.setPen(QColor(fore))
+                painter.drawText(chip, Qt.AlignCenter, text)
+                bottom -= 16
+
         missing = self._panel.failed_count(index.data(ROLE_UID))
         if missing:                                  # 같은 폴더에서 읽지 못한 파일 → 일부가 빠졌을 수 있음
             font.setPointSize(8)
@@ -331,6 +350,15 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         """폴더 → 읽지 못한 파일 수. 그 폴더의 시리즈 카드에 ⚠ (영상 일부가 빠졌을 수 있음)"""
         self._failed_folders = dict(counts)
         self.viewport().update()
+
+    def set_marks(self, landmarks, key_images):
+        """시리즈 UID → 랜드마크 수 · Key Image 수 (카드 아래쪽에 📍 N · ★ N — 다시 볼 영상이 있는 시리즈)"""
+        self._marks = (dict(landmarks), dict(key_images))
+        self.viewport().update()
+
+    def marks_for(self, uid):
+        landmarks, keys = getattr(self, "_marks", ({}, {}))
+        return landmarks.get(uid, 0), keys.get(uid, 0)
 
     def failed_count(self, uid):
         folder = getattr(self, "_folder_by_uid", {}).get(uid)

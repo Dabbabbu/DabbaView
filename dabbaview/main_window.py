@@ -272,6 +272,13 @@ class MainWindow(QMainWindow):
         self._ai_panel.hide()
         # 분석 (3D Slicer / ImageJ 스타일): 랜드마크·매크로 공유, 하단 도크 두 개(탭)
         self._landmarks = LandmarkStore(self)
+        # 찍은 랜드마크는 검사별로 자동 저장 (다음에 같은 검사를 열면 다시 나옴)
+        self._landmark_save_timer = QTimer(self)
+        self._landmark_save_timer.setSingleShot(True)
+        self._landmark_save_timer.setInterval(600)
+        self._landmark_save_timer.timeout.connect(self._landmarks.save_studies)
+        self._landmarks.changed.connect(self._on_landmarks_changed)
+        self._annotation_store.changed.connect(self._refresh_series_marks)   # ★ Key Image 수
         self._macros = MacroStore(parent=self)
         self._plot_dock = AnalysisPlotDock(self)
         self._console = PythonConsoleDock(self)
@@ -631,6 +638,7 @@ class MainWindow(QMainWindow):
         self._init_ui_scale_menu(view_menu)
         self._init_arrow_menu(view_menu)
         self._init_link_menu(view_menu)
+        self._init_landmark_display_menu(view_menu)
         self._act_drag_pads = view_menu.addAction("🔍◐ 맨 아래 Zoom · W/L 조절 칸")
         self._act_drag_pads.setCheckable(True)
         self._act_drag_pads.setChecked(self._settings.value("ui/drag_pads", True, type=bool))
@@ -703,6 +711,7 @@ class MainWindow(QMainWindow):
         tools_menu.addSeparator()
         tools_menu.addAction(self._act_key)
         tools_menu.addAction(self._act_key_view)
+        tools_menu.addAction(self._act_landmarks)
 
         file_menu.insertAction(export_video_action, self._act_capture)
 
@@ -837,7 +846,8 @@ class MainWindow(QMainWindow):
             ("Cobb", V.TOOL_COBB, "B", "Cobb 각: 첫 번째 선 드래그 → 두 번째 선 드래그"),
             None,
             ("3D Cursor", V.TOOL_CURSOR3D, "6",
-             "3D 커서: 클릭 위치의 환자 좌표(mm)\nCrosslink가 켜져 있으면 다른 뷰에도 전파"),
+             "3D 커서: 클릭 위치의 환자 좌표(mm)\nCrosslink가 켜져 있으면 다른 뷰에도 전파\n"
+             "Esc: 커서 지우고 Select로 돌아가기"),
             ("Magnify", V.TOOL_MAGNIFY, "7", "돋보기: 누르고 있는 동안 확대 (휠로 2x/3x/4x)"),
             None,
             ("ROI", V.TOOL_ROI, "8", "Freehand ROI: 면적·Mean·SD·Min·Max"),
@@ -849,8 +859,8 @@ class MainWindow(QMainWindow):
             ("Text", V.TOOL_TEXT, "A", "텍스트 메모: 클릭 → 내용·크기·색상"),
             None,
             ("📍 Landmark", V.TOOL_LANDMARK, "F",
-             "랜드마크/Fiducial: 클릭한 위치(환자 좌표 mm)에 점 추가\n"
-             "AI 패널 → Analysis → Landmarks에서 이름·내보내기(CSV/JSON)"),
+             "랜드마크/Fiducial: 클릭한 위치(환자 좌표 mm)에 점 추가 (Esc: Select로)\n"
+             "📍 Landmarks(Shift+F) 목록에서 모아 보기 · 누르면 그 영상으로 이동 · 이름 · 내보내기"),
             ("Profile", V.TOOL_PROFILE, "Shift+L",
              "라인 프로파일: 드래그한 선을 따라 픽셀 값 그래프 (하단 패널)"),
         ]
@@ -913,7 +923,7 @@ class MainWindow(QMainWindow):
             "Crosslink (C) — 스캔 범위 보기\n"
             "Multi View의 다른 칸 시리즈가 덮는 전체 슬라이스 위치를 이 영상 위에 점선으로,\n"
             "그 칸이 지금 보고 있는 슬라이스는 노란 실선으로 표시합니다 (스크롤하면 실선이 따라 움직임).\n"
-            "3D Cursor·클릭 위치도 같은 좌표계의 다른 칸에 전파됩니다.")
+            "켜 두어도 좌클릭으로 점이 찍히지 않습니다 — 위치를 찍어 다른 칸에 보내려면 3D Cursor 도구(6).")
         self._sync_action.toggled.connect(self._cursor_sync.set_enabled)
         self._sync_action.toggled.connect(self._multi_viewport.set_crosslink)
         view_bar.addAction(self._sync_action)
@@ -921,7 +931,7 @@ class MainWindow(QMainWindow):
                        self._act_sync_window, self._act_value_lens):
             view_bar.addAction(action)
         view_bar.addSeparator()
-        for action in (self._act_key, self._act_key_view, self._act_tile):
+        for action in (self._act_key, self._act_key_view, self._act_landmarks, self._act_tile):
             view_bar.addAction(action)
         self._tile_grid = QComboBox()
         self._tile_grid.addItems([f"{n}x{n}" for n in range(2, 7)])
@@ -1035,6 +1045,9 @@ class MainWindow(QMainWindow):
                              self._toggle_key_image)
         self._act_key_view = make("Key Images", "Shift+K", "Key Image만 모아보기 (Tile)",
                                   self._show_key_images)
+        self._act_landmarks = make("📍 Landmarks", "Shift+F",
+                                   "랜드마크 목록: 찍어 둔 점을 모아 보고, 누르면 그 영상으로 이동",
+                                   self.show_landmark_list)
         self._act_tile = make("▦ Tile", "Shift+T", "Stack ↔ Tile 모드 (여러 슬라이스를 격자로)",
                               self._set_tile_mode, checkable=True)
         self._act_compare = make("Compare", "", "같은 환자의 이전 검사와 나란히 비교\n"
@@ -2308,7 +2321,8 @@ class MainWindow(QMainWindow):
 
     def select_tool_by_id(self, name):
         V = DicomViewport
-        tool = {"landmark": V.TOOL_LANDMARK, "profile": V.TOOL_PROFILE}[name]
+        tool = {"landmark": V.TOOL_LANDMARK, "profile": V.TOOL_PROFILE,
+                "select": V.TOOL_SELECT}[name]
         action = self._tool_actions.get(tool)
         if action is not None:
             action.trigger()
@@ -2405,8 +2419,10 @@ class MainWindow(QMainWindow):
     def _update_series_list(self, select_uid=None):
         """썸네일 패널 + 트리 갱신 후 첫 시리즈(또는 select_uid)를 표시"""
         series_list = self._loader.get_series_list()
+        self._load_study_landmarks()
         self._series_tree.populate(series_list, select_uid=select_uid, emit=False)
         self._series_panel.populate(series_list, select_uid=select_uid)
+        self._refresh_series_marks()
         uid = select_uid or self._series_panel.current_uid()
         series = self._loader.get_series_by_uid(uid) if uid else None
         if series is not None:
@@ -2900,6 +2916,108 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda _c=False, k=key: self._set_link_mode(k))
             group.addAction(action)
 
+    LANDMARK_DISPLAY_TEXT = {"subtle": "작게 · 반투명 (이름은 마우스를 가까이 댈 때)",
+                             "full": "크게 (원 · 십자 · 이름 항상)",
+                             "hover": "마우스를 가까이 댈 때만",
+                             "hidden": "숨기기"}
+
+    def _init_landmark_display_menu(self, menu):
+        """View ▸ 📍 랜드마크 표시 — 찍은 점이 보려는 곳을 가리지 않게"""
+        mode = self._settings.value("view/landmark_display", "subtle", type=str)
+        DicomViewport.landmark_display = mode if mode in DicomViewport.LANDMARK_DISPLAYS else "subtle"
+        sub = menu.addMenu("📍 랜드마크 표시")
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        self._landmark_display_actions = {}
+        for key in DicomViewport.LANDMARK_DISPLAYS:
+            action = sub.addAction(self.LANDMARK_DISPLAY_TEXT[key])
+            action.setCheckable(True)
+            action.setChecked(key == DicomViewport.landmark_display)
+            action.triggered.connect(lambda _c=False, k=key: self._set_landmark_display(k))
+            group.addAction(action)
+            self._landmark_display_actions[key] = action
+        sub.addSeparator()
+        sub.addAction("📍 랜드마크 목록…", self.show_landmark_list)
+
+    def _set_landmark_display(self, mode):
+        DicomViewport.landmark_display = mode
+        self._settings.setValue("view/landmark_display", mode)
+        action = getattr(self, "_landmark_display_actions", {}).get(mode)
+        if action is not None:
+            action.setChecked(True)
+        for vp in self._all_viewports():
+            vp.update()
+        self._statusbar.showMessage(f"랜드마크 표시: {self.LANDMARK_DISPLAY_TEXT[mode]}", 5000)
+
+    # ─── 📍 랜드마크 목록 · 이동 · 자동 저장 ───
+    def show_landmark_list(self):
+        dialog = getattr(self, "_landmark_dialog", None)
+        if dialog is None:
+            from .landmark_panel import LandmarkListDialog
+            dialog = self._landmark_dialog = LandmarkListDialog(self)
+        dialog.refresh()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def go_to_landmark(self, index):
+        """랜드마크가 찍힌 영상(시리즈 · 슬라이스)을 열고 그 점을 잠깐 강조"""
+        points = list(self._landmarks)
+        if not 0 <= index < len(points):
+            return False
+        point = points[index]
+        loader = self._loader
+        series = loader.get_series_by_uid(point.get("series_uid")) if loader is not None else None
+        vp = self._target_viewport()
+        if series is None and vp.series is not None and vp.series.geometry is not None \
+                and (not point.get("frame_uid") or point["frame_uid"] == str(
+                    getattr(vp.current_dataset(), "FrameOfReferenceUID", ""))):
+            series = vp.series        # 원래 시리즈는 없지만 같은 좌표계의 영상이 열려 있음
+        if series is None:
+            self._statusbar.showMessage(
+                f"랜드마크 {point['name']}: 찍은 시리즈({point.get('series_desc') or '-'})가 "
+                "열려 있지 않습니다. 그 검사를 열면 이동할 수 있습니다.", 8000)
+            return False
+        if self._tab_widget.currentWidget() not in (self._multi_viewport,
+                                                     getattr(self, "_page2d", None)):
+            self._tab_widget.setCurrentWidget(getattr(self, "_page2d", self._stack2d))
+            vp = self._target_viewport()
+        if vp.series is not series:
+            self._select_series(series)
+            vp = self._target_viewport()
+        geom = series.geometry
+        slice_index = point.get("slice")
+        if geom is not None:
+            slice_index, _distance = geom.nearest_slice(point["position"])
+        if slice_index is not None and 0 <= int(slice_index) < series.num_slices:
+            vp.go_to_slice(int(slice_index))
+            if vp is self._viewport:
+                self._slice_slider.setValue(int(slice_index))
+        vp.flash_landmark(index)
+        vp.setFocus()
+        text = ", ".join(f"{v:.1f}" for v in point["position"])
+        self._statusbar.showMessage(f"📍 {point['name']} {point.get('label', '')} — "
+                                    f"{series.description} · 영상 {int(slice_index or 0) + 1} · ({text}) mm", 8000)
+        return True
+
+    def _on_landmarks_changed(self):
+        self._landmark_save_timer.start()      # 여러 번 바뀌어도 잠시 뒤 한 번만 저장
+        self._refresh_series_marks()
+
+    def _load_study_landmarks(self):
+        if self._loader is not None:
+            self._landmarks.load_studies({s.study_uid for s in self._loader.get_series_list()
+                                          if s.study_uid})
+
+    def _refresh_series_marks(self):
+        """시리즈 카드의 📍(랜드마크) · ★(Key Image) 개수"""
+        keys = {}
+        for _key, info in self._annotation_store.key_images():
+            uid = info.get("series_uid")
+            if uid:
+                keys[uid] = keys.get(uid, 0) + 1
+        self._series_panel.set_marks(self._landmarks.count_by_series(), keys)
+
     def _set_link_mode(self, mode):
         from . import geometry
         geometry.link_mode = mode
@@ -2949,6 +3067,7 @@ class MainWindow(QMainWindow):
             vp.set_annotation_store(self._annotation_store)
             vp.set_segmentation(self._seg)
             vp.set_landmark_store(self._landmarks)
+            vp.select_tool_requested.connect(lambda: self.select_tool_by_id("select"))
             vp.profile_measured.connect(self._plot_dock.show_profile)
             vp.slice_changed.connect(self._on_any_slice_changed)
         self._tile_view.set_annotation_store(self._annotation_store)
@@ -3696,6 +3815,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Capture", f"저장하지 못했습니다:\n{filepath}")
 
     def closeEvent(self, event):
+        if self._landmark_save_timer.isActive():   # 방금 찍은 랜드마크도 저장하고 닫음
+            self._landmark_save_timer.stop()
+            self._landmarks.save_studies()
         if not self._ask_save_work_on_exit():   # 저장하지 않은 ROI · 측정 · 주석
             event.ignore()
             self._pending_update = None          # 닫기를 취소하면 업데이트도 미룸

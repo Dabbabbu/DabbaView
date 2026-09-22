@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 4.2.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 4.3.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -231,7 +231,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 3. 선 끝의 `S6:136`은 시리즈 번호 : 슬라이스입니다.
 4. cine처럼 한 위치에 위상이 여러 장이면 위치마다 한 번만 그립니다.
 5. 점선만 끄려면 **View ▸ 오버레이 항목 ▸ 스캔 커버리지 선** (T 키로 오버레이를 끄면 점선도 숨김, 노란 실선은 남음).
-6. Crosslink를 켜면 3D Cursor와 클릭 위치도 같은 좌표계의 다른 칸으로 전파됩니다.
+6. Crosslink를 켜 두어도 **좌클릭으로 점이 찍히지 않습니다** (영상을 보려고 누를 때마다 점이 찍히던 것을 없앴습니다). 위치를 찍어 같은 좌표계의 다른 칸에 보내려면 **3D Cursor 도구(6)**를 쓰세요 — Crosslink가 켜져 있으면 다른 칸도 그 위치로 이동합니다.
 
 #### Reference Line — 현재 슬라이스 한 줄
 
@@ -267,6 +267,15 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 - 대응되는 칸은 좌표에 가장 가까운 슬라이스로 자동으로 이동합니다.
 - 커서와 좌표는 **3D Cursor 도구일 때만** 영상에 그려집니다. 다른 도구로 바꾸면 화면이 깨끗해집니다 (상태 막대의 좌표·HU 표시는 그대로).
+- 점 찍기 도구(3D Cursor · Landmark 등)에서 **Esc**를 누르면 커서를 지우고 **Select**로 돌아갑니다. 기본 좌클릭(Select)은 영상 선택 · 주석 고르기만 하고 점을 찍지 않습니다.
+
+### 📍 랜드마크 (Landmark)
+
+1. **F** 키(또는 도구 막대 📍 Landmark)를 고르고 영상을 클릭하면 그 자리(환자 좌표 mm)에 F-1, F-2… 점이 생깁니다. 다 찍었으면 **Esc**로 Select로 돌아갑니다.
+2. **표시 방식** — **View ▸ 📍 랜드마크 표시**: 기본은 **작게 · 반투명**(가운데를 비운 짧은 눈금 네 개라 찍은 곳의 영상이 가려지지 않고, 이름은 마우스를 가까이 댈 때만), **크게**(원 · 십자 · 이름 항상), **마우스를 가까이 댈 때만**, **숨기기**.
+3. **📍 Landmarks 목록 (Shift+F)** — 도구 막대 · Tools 메뉴 · 기능 검색에서 엽니다. 이름 · 설명 · 시리즈 · 영상 번호 · 좌표가 나오고, **행을 누르면 그 시리즈 · 슬라이스로 바로 이동**해 점을 잠깐 노란 원으로 강조합니다. 이름 · 설명은 더블클릭해서 고치고, 삭제 · CSV · 3D Slicer JSON 내보내기도 여기서 합니다. 기본은 지금 연 검사만 보이고, 체크를 끄면 전체가 보입니다.
+4. **시리즈 목록 표시** — 랜드마크를 찍은 시리즈 카드의 썸네일 오른쪽 아래에 **📍 N**, Key Image가 있는 시리즈에는 **★ N**이 붙어 다시 볼 영상이 있는 시리즈를 바로 알 수 있습니다.
+5. **자동 저장** — 찍은 점은 검사별로 이 컴퓨터의 앱 데이터 폴더(`…/DabbaView/landmarks`)에 저장되어, 같은 검사를 다시 열면 그대로 나옵니다 (영상 파일은 건드리지 않음).
 
 ## 9. 측정 도구
 
@@ -483,7 +492,7 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | Shift+E | 사각형 ROI | Shift+D | 경로 길이 |
 | Ctrl+C / Ctrl+V | ROI 복사 / 붙이기 | Ctrl+Shift+M | ROI Manager |
 | Ctrl+M | Measure | Delete | 선택 ROI 삭제 |
-| Ctrl+D | 현재 스터디를 Library에 추가 | F | Landmark |
+| Ctrl+D | 현재 스터디를 Library에 추가 | F / Shift+F | Landmark / 📍 Landmarks 목록 |
 | Shift+L | Line Profile | F3 | Python 콘솔 |
 | Ctrl+Shift+L | ★ Library 탭 열기/닫기 | ⌘Q | 끝내기 (클라우드 경고창이 떠 있어도) |
 | ↑ / ↓ | 슬라이스 (위상 영상: 위상 고정 · 메뉴에서 바꿈) | ← / → | 위상 (위상 영상만) |
