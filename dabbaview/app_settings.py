@@ -13,6 +13,8 @@ import copy
 import json
 import os
 
+from .mouse_feel import FEEL_DEFAULTS, clean_feel
+
 
 # ─── 마우스 매핑 ───
 
@@ -73,6 +75,7 @@ DEFAULT_MOUSE_BINDINGS = {
     "fast_scroll_step": 5,
     "roi_window_method": "mean2sd",  # Ctrl+드래그 ROI W/L: 평균±2SD (잡음·이상값에 강함)
 }
+DEFAULT_MOUSE_BINDINGS.update(FEEL_DEFAULTS)   # 조작감 (감도 · 무게감 · 관성)
 MOUSE_BINDINGS_VERSION = 2  # 2: Ctrl+좌클릭 = Zoom → ROI 자동 W/L
 
 
@@ -94,6 +97,10 @@ class MouseBindings:
                     self._values[key] = max(1, min(50, int(value)))
                 except (TypeError, ValueError):
                     pass
+            elif key in FEEL_DEFAULTS:
+                value = clean_feel(key, value)
+                if value is not None:
+                    self._values[key] = value
             elif key in MOUSE_BINDING_LABELS:
                 choices = MOUSE_BINDING_LABELS[key][1]
                 if value in choices:

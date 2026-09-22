@@ -13,6 +13,7 @@ Axial, Sagittal, Coronal 3평면 재구성 + Oblique(사선) 회전
   - 각 평면 영상은 scipy.ndimage.affine_transform으로 볼륨에서 임의 각도 추출
 """
 import math
+import time
 
 import numpy as np
 from scipy.ndimage import affine_transform
@@ -240,8 +241,15 @@ class MPRSliceView(QWidget):
 
     def wheelEvent(self, event):
         delta = event.angleDelta().y()
-        if delta:
-            self.scrolled.emit(self.plane_name, -1 if delta > 0 else 1)
+        if not delta:
+            return
+        # 한 칸마다 한 장, 빠르게 연달아 굴리면 가속, 트랙패드는 모이는 만큼 (2D 뷰와 같음)
+        if not hasattr(self, "_wheel_accel"):
+            from .mouse_feel import WheelAccel
+            self._wheel_accel = WheelAccel()
+        steps = self._wheel_accel.feed(delta, time.monotonic() * 1000.0)
+        for _ in range(min(abs(steps), 20)):
+            self.scrolled.emit(self.plane_name, -1 if steps > 0 else 1)
 
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton or self._pixmap is None:

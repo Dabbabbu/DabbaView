@@ -9,11 +9,14 @@ Tile 모드: 여러 슬라이스를 격자로 한눈에 (2x2 ~ 6x6)
 - 더블클릭: 해당 슬라이스를 Stack 모드로 열기
 - Key Image 모아보기: 여러 시리즈의 (series, index) 목록도 표시 가능
 """
+import time
+
 import numpy as np
 from PyQt5.QtWidgets import QWidget
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui import QImage, QPainter, QColor, QFont, QPen
 
+from . import mouse_feel
 from .annotations import image_key
 
 
@@ -190,6 +193,8 @@ class TileView(QWidget):
 
     def mousePressEvent(self, event):
         self._drag_pos = event.pos()
+        self._drag_ms = time.monotonic() * 1000.0
+        self._drag_unit = mouse_feel.wl_unit(self._window[1])   # 드래그 동안 고정 (2D 뷰와 같은 감도)
         if event.button() == Qt.LeftButton:
             self._selected = self._item_at(event.pos())
             self.update()
@@ -200,8 +205,13 @@ class TileView(QWidget):
         dx = event.pos().x() - self._drag_pos.x()
         dy = event.pos().y() - self._drag_pos.y()
         self._drag_pos = event.pos()
+        now = time.monotonic() * 1000.0
+        speed = (dx * dx + dy * dy) ** 0.5 / max(4.0, now - getattr(self, "_drag_ms", now - 16))
+        self._drag_ms = now
+        # 천천히 = 정밀, 빠르게 = 가속 (Settings ▸ Mouse ▸ 조작감의 W/L 감도 · 가속은 기본값)
+        step = getattr(self, "_drag_unit", 4.0) * mouse_feel.speed_gain(speed)
         wc, ww = self._window
-        self.set_window(wc + dy * 4, ww + dx * 4)
+        self.set_window(wc + dy * step, ww + dx * step)
         self.window_changed.emit(*self._window)
 
     def mouseReleaseEvent(self, event):

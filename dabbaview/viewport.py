@@ -33,6 +33,7 @@ from PyQt5.QtGui import (QImage, QPixmap, QPainter, QPen, QColor, QFont,
 from . import __version__, dicom_info
 from .annotations import ROI_TYPES, AnnotationStore, image_key
 from .annotation_edit import AnnotationEditMixin, fmt_area, fmt_length
+from . import mouse_feel
 from . import roi_tools
 from .app_settings import MouseBindings
 from .geometry import reference_line
@@ -117,6 +118,18 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self.setMinimumSize(512, 512)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
+
+        # 조작감 (mouse_feel): 비선형 감도 · 보간(무게감) · Pan 관성 · 휠 가속
+        self._smooth = mouse_feel.Smoother()
+        self._fling = mouse_feel.Fling()
+        self._velocity = mouse_feel.VelocityTracker()
+        self._wheel_accel = mouse_feel.WheelAccel()
+        self._smooth_anchor = None
+        self._last_move_ms = None
+        self._motion_last_ms = None
+        self._motion_timer = QTimer(self)
+        self._motion_timer.setInterval(16)          # 약 60 fps
+        self._motion_timer.timeout.connect(self._motion_tick)
 
         # 시리즈 데이터
         self._series = None
@@ -206,6 +219,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
 
     def set_series(self, series):
         """표시할 시리즈 설정"""
+        self.stop_motion()
         self._series = series
         self._current_slice = 0
         self._ref_point = None
@@ -766,6 +780,10 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._mouse_button = event.button()
         self._last_mouse_pos = event.pos()
         self._scroll_accum = 0.0
+        self._fling.stop()                 # 미끄러지던 화면은 잡는 순간 멈춤
+        self._velocity.reset()
+        self._wl_drag_unit = None
+        self._last_move_ms = time.monotonic() * 1000.0
         self._drag_action = self._drag_action_for(event)
         self._zoom_anchor = event.pos()
         if self._drag_action == "tool":
@@ -894,21 +912,18 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         dy = pos.y() - self._last_mouse_pos.y()
         action = self._drag_action
 
-        if action == "window":
-            self._adjust_window(dx, dy)
-        elif action == "pan":
-            self._pan_x += dx
-            self._pan_y += dy
-        elif action == "zoom":
-            self._zoom_by(1.0 + dy * 0.005, self._zoom_anchor)
+        speed = self._drag_speed(dx, dy)
+        if action in ("window", "pan", "zoom"):
+            self._feel_drag(action, dx, dy, speed)
         elif action == "roi_window":
             if self._wl_roi is not None and img_pos:
                 self._wl_roi[1] = img_pos
         elif action == "chord_scroll":
             self._chord_scroll_move(dx, dy)
         elif action == "scroll":
-            # 세로 드래그 8px마다 한 장
-            self._scroll_accum += dy / 8.0
+            # 세로 드래그 8px마다 한 장 — 천천히는 한 장씩, 빠르게 끌면 가속
+            self._scroll_accum += dy / 8.0 * self._feel_scale("feel_scroll") * \
+                mouse_feel.speed_gain(speed, self._feel("feel_accel"))
             steps = int(self._scroll_accum)
             if steps:
                 self._scroll_accum -= steps
@@ -916,14 +931,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         elif action == "tool" and self._edit is not None:
             self.edit_move(img_pos, bool(event.modifiers() & Qt.ShiftModifier))
         elif action == "tool":
-            self._tool_move(pos, img_pos, dx, dy)
+            self._tool_move(pos, img_pos, dx, dy, speed)
         elif action == "seg":
             self._seg.move(img_pos)
 
         self._last_mouse_pos = pos
         self.update()
 
-    def _tool_move(self, pos, img_pos, dx, dy):
+    def _tool_move(self, pos, img_pos, dx, dy, speed=0.45):
         tool = self._current_tool
         draft = self._draft
         if self._placing_cursor:
@@ -956,12 +971,11 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         elif tool == self.TOOL_CURSOR3D and img_pos:
             self._place_cursor3d(img_pos)
         elif tool == self.TOOL_WINDOW:
-            self._adjust_window(dx, dy)
+            self._feel_drag("window", dx, dy, speed)
         elif tool == self.TOOL_PAN:
-            self._pan_x += dx
-            self._pan_y += dy
+            self._feel_drag("pan", dx, dy, speed)
         elif tool == self.TOOL_ZOOM:
-            self._zoom_by(1.0 + dy * 0.005, self._zoom_anchor)
+            self._feel_drag("zoom", dx, dy, speed)
 
     def mouseReleaseEvent(self, event):
         action = self._drag_action
@@ -974,6 +988,15 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             self.set_tool_cursor()
             self.update()
             return
+        self._wl_drag_unit = None
+        panning = action == "pan" or (action == "tool" and self._current_tool == self.TOOL_PAN)
+        if panning and self._feel("feel_inertia"):
+            now = time.monotonic() * 1000.0
+            if self._last_move_ms is not None and now - self._last_move_ms < 50:   # 멈췄다 놓으면 관성 없음
+                vx, vy = self._velocity.velocity(now)
+                scale = self._feel_scale("feel_pan")
+                if self._fling.start(vx * scale, vy * scale):
+                    self._start_motion()
         self._mouse_pressed = False
         self._mouse_button = Qt.NoButton
         self._drag_action = None
@@ -1090,28 +1113,141 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         else:
             action = self._mouse.get("wheel")
 
-        direction = -1 if delta > 0 else 1  # 위로 = 이전 슬라이스
         if action == "zoom":
-            # 위로 = 확대, 아래로 = 축소 (커서 아래 지점을 고정)
-            self._zoom_by(1.1 if delta > 0 else 1 / 1.1, event.pos())
-        elif action == "scroll":
-            target = self.slice_navigator(self._current_slice, direction, "wheel") \
-                if self.slice_navigator is not None else None
-            self._go_to_slice(target if target is not None else self._current_slice + direction, user=True)
-        elif action == "fast_scroll":
+            # 위로 = 확대, 아래로 = 축소 (커서 아래 지점을 고정). 한 칸 = 1.1배, 부드럽게 따라감
+            amount = math.log(1.1) * (delta / 120.0) * self._feel_scale("feel_zoom")
+            self._smooth_anchor = event.pos()
+            self._smooth.add("zoom", amount)
+            self._start_motion()
+            return
+        if action not in ("scroll", "fast_scroll"):
+            self.update()
+            return
+        # 한 칸(120)마다 한 장 — 트랙패드는 모이는 만큼, 빠르게 연달아 굴리면 가속
+        steps = self._wheel_accel.feed(delta, time.monotonic() * 1000.0,
+                                       accelerate=bool(self._feel("feel_wheel_accel"))
+                                       and action == "scroll")
+        if not steps:
+            return
+        direction = -1 if steps > 0 else 1  # 위로 = 이전 슬라이스
+        if action == "scroll":
+            index = self._current_slice
+            for _ in range(abs(steps)):
+                target = self.slice_navigator(index, direction, "wheel") \
+                    if self.slice_navigator is not None else None
+                index = target if target is not None else index + direction
+            self._go_to_slice(index, user=True)
+        else:
             step = self._mouse.get("fast_scroll_step")
-            self._go_to_slice(self._current_slice + direction * step, user=True)
+            self._go_to_slice(self._current_slice + direction * step * abs(steps), user=True)
         self.update()
 
     def _zoom_by(self, factor, anchor=None):
         """줌. anchor(화면 좌표)가 있으면 그 아래의 영상 지점이 그대로 머물도록 팬 보정"""
         before = self._screen_to_image(anchor) if anchor is not None else None
-        self._zoom = max(0.1, min(20.0, self._zoom * factor))
+        # 최대 20배 — 단, 작은 영상은 화면 맞춤만으로 20배를 넘을 수 있으니 확대하다 도로 작아지지 않게
+        self._zoom = max(0.1, min(max(20.0, self._zoom), self._zoom * factor))
         if before is not None:
             after = self._image_to_screen_f(before)
             self._pan_x += anchor.x() - after.x()
             self._pan_y += anchor.y() - after.y()
         self.zoom_changed.emit(self._zoom)
+
+    # ─── 조작감: 비선형 감도 · 보간 · 관성 (mouse_feel) ───
+
+    def _feel(self, key):
+        value = self._mouse.get(key) if self._mouse is not None else None
+        return mouse_feel.FEEL_DEFAULTS[key] if value is None else value
+
+    def _feel_scale(self, key):
+        return float(self._feel(key)) / 100.0
+
+    def _drag_speed(self, dx, dy):
+        """지난 움직임부터의 속도 (px/ms) — 감도 커브 · 관성에 씀"""
+        now = time.monotonic() * 1000.0
+        last = self._last_move_ms if self._last_move_ms is not None else now - 16.0
+        self._last_move_ms = now
+        self._velocity.add(now, dx, dy)
+        return math.hypot(dx, dy) / max(4.0, now - last)
+
+    def _feel_drag(self, kind, dx, dy, speed):
+        """W/L · Pan · Zoom 드래그를 바로 적용하지 않고 쌓아 두었다가 부드럽게 따라감"""
+        if kind == "window":
+            # 느리면 정밀, 빠르면 가속. 한 픽셀 = 지금 Width의 1/100 (좁은 창일수록 섬세)
+            gain = mouse_feel.speed_gain(speed, self._feel("feel_accel")) * self._feel_scale("feel_wl")
+            unit = getattr(self, "_wl_drag_unit", None)
+            if unit is None:     # 드래그를 시작할 때의 Width로 고정 (드래그 중에 불어나지 않게)
+                unit = self._wl_drag_unit = mouse_feel.wl_unit(
+                    self._window_width + self._smooth.pending.get("ww", 0.0))
+            self._smooth.add("ww", dx * unit * gain)
+            self._smooth.add("wc", dy * unit * gain)
+        elif kind == "pan":
+            scale = self._feel_scale("feel_pan")     # Pan은 손을 따라 1:1 (가속하면 영상이 손에서 미끄러짐)
+            self._smooth.add("px", dx * scale)
+            self._smooth.add("py", dy * scale)
+        elif kind == "zoom":
+            gain = mouse_feel.speed_gain(speed, self._feel("feel_accel")) * self._feel_scale("feel_zoom")
+            self._smooth_anchor = self._zoom_anchor
+            self._smooth.add("zoom", dy * 0.005 * gain)
+        self._start_motion()
+
+    def _start_motion(self):
+        """보간 시간이 0이면 바로 적용, 아니면 60fps로 따라감"""
+        if float(self._feel("feel_smooth_ms")) <= 0:
+            self._apply_motion(self._smooth.flush())
+            if self._fling.active():
+                self._motion_last_ms = None
+                if not self._motion_timer.isActive():
+                    self._motion_timer.start()
+            return
+        if not self._motion_timer.isActive():
+            self._motion_last_ms = None
+            self._motion_timer.start()
+
+    def _motion_tick(self):
+        now = time.monotonic() * 1000.0
+        dt = 16.0 if self._motion_last_ms is None else min(64.0, now - self._motion_last_ms)
+        self._motion_last_ms = now
+        parts = self._smooth.step(dt, float(self._feel("feel_smooth_ms")))
+        if self._fling.active() and not self._mouse_pressed:
+            fx, fy = self._fling.step(dt)
+            parts["px"] = parts.get("px", 0.0) + fx
+            parts["py"] = parts.get("py", 0.0) + fy
+        self._apply_motion(parts)
+        if not self._smooth.active() and not self._fling.active():
+            rest = self._smooth.flush()
+            if rest:
+                self._apply_motion(rest)
+            self._motion_timer.stop()
+
+    def _apply_motion(self, parts):
+        if not parts:
+            return
+        wc, ww = parts.get("wc", 0.0), parts.get("ww", 0.0)
+        if wc or ww:
+            self._window_width = max(1, self._window_width + ww)
+            self._window_center += wc
+            self._cache_valid = False
+            self.window_changed.emit(self._window_center, self._window_width)
+            self.window_adjusted.emit(self._window_center, self._window_width)
+        self._pan_x += parts.get("px", 0.0)
+        self._pan_y += parts.get("py", 0.0)
+        zoom = parts.get("zoom", 0.0)
+        if zoom:
+            self._zoom_by(math.exp(zoom), self._smooth_anchor)
+        self.update()
+
+    def settle_motion(self):
+        """따라가던 움직임을 즉시 끝냄 (캡처 · 테스트 · 동기화 전에)"""
+        self._fling.stop()
+        self._apply_motion(self._smooth.flush())
+        self._motion_timer.stop()
+
+    def stop_motion(self):
+        """움직임을 버림 (다른 시리즈 · 뷰 리셋)"""
+        self._smooth.clear()
+        self._fling.stop()
+        self._motion_timer.stop()
 
     # ─── ROI 자동 W/L (Ctrl+좌클릭 드래그) ───
 
@@ -1211,14 +1347,6 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self.update()
         if user:
             self.stepped.emit(kind, direction)
-
-    def _adjust_window(self, dx, dy):
-        # 좌우 = Width, 상하 = Center
-        self._window_width = max(1, self._window_width + dx * 4)
-        self._window_center += dy * 4
-        self._cache_valid = False
-        self.window_changed.emit(self._window_center, self._window_width)
-        self.window_adjusted.emit(self._window_center, self._window_width)
 
     # ─── 슬라이스 이동 ───
 
@@ -2471,6 +2599,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
 
     def set_window(self, center, width, user=False):
         """user=True: 사용자가 바꾼 경우 (프리셋 등) → window_adjusted로 동기화 전파"""
+        self._smooth.pending.pop("wc", None)      # 따라가던 W/L 드래그가 프리셋을 덮지 않게
+        self._smooth.pending.pop("ww", None)
         self._window_center = center
         self._window_width = max(1, width)
         self._cache_valid = False
@@ -2492,6 +2622,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
 
     def reset_view(self):
         """회전/반전을 원래대로 하고 화면에 맞춤"""
+        self.stop_motion()
         self._orient = np.eye(2, dtype=int)
         self._fit_to_window()
         self.update()

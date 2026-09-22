@@ -68,25 +68,25 @@ class SettingsDialog(QDialog):
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(720, 520)
+        self.resize(860, 640)
         self._settings = app_settings
 
         layout = QVBoxLayout(self)
         self._tabs = QTabWidget()
-        self._tabs.addTab(self._mouse_tab(), "Mouse")
-        self._tabs.addTab(self._presets_tab(), "W/L Presets")
-        self._tabs.addTab(self._hanging_tab(), "Hanging Protocols")
-        self._tabs.addTab(self._nodes_tab(), "DICOM Nodes")
-        self._tabs.addTab(self._reading_tab(), "Reading")
-        self._tabs.addTab(self._ai_tab(), "AI")
-        self._tabs.addTab(self._cloud_tab(), "Cloud")
-        self._tabs.addTab(self._cache_tab(), "Cache")
+        self._tabs.addTab(self._scrolled(self._mouse_tab()), "Mouse")
+        self._tabs.addTab(self._scrolled(self._presets_tab()), "W/L Presets")
+        self._tabs.addTab(self._scrolled(self._hanging_tab()), "Hanging Protocols")
+        self._tabs.addTab(self._scrolled(self._nodes_tab()), "DICOM Nodes")
+        self._tabs.addTab(self._scrolled(self._reading_tab()), "Reading")
+        self._tabs.addTab(self._scrolled(self._ai_tab()), "AI")
+        self._tabs.addTab(self._scrolled(self._cloud_tab()), "Cloud")
+        self._tabs.addTab(self._scrolled(self._cache_tab()), "Cache")
         from .clinical.tools_acr import ACRCriteriaWidget
         self._acr = ACRCriteriaWidget(app_settings)
-        self._tabs.addTab(self._acr, "ACR QC")
-        self._tabs.addTab(self._display_tab(), "Display")
-        self._tabs.addTab(self._work_tab(), "작업 저장")
-        self._tabs.addTab(self._loading_tab(), "불러오기")
+        self._tabs.addTab(self._scrolled(self._acr), "ACR QC")
+        self._tabs.addTab(self._scrolled(self._display_tab()), "Display")
+        self._tabs.addTab(self._scrolled(self._work_tab()), "작업 저장")
+        self._tabs.addTab(self._scrolled(self._loading_tab()), "불러오기")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -95,6 +95,16 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    @staticmethod
+    def _scrolled(page):
+        """항목이 많은 탭은 스크롤로 (작은 노트북 화면에서도 창이 넘치지 않게)"""
+        from PyQt5.QtWidgets import QFrame, QScrollArea
+        area = QScrollArea()
+        area.setWidget(page)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.NoFrame)
+        return area
 
     # ─── 표시 ───
     def _display_tab(self):
@@ -248,6 +258,7 @@ class SettingsDialog(QDialog):
     def _mouse_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.addWidget(self._feel_group())     # 조작감 (감도 · 무게감 · 관성)이 먼저 보이게
         layout.addWidget(QLabel("버튼별 동작은 선택한 도구와 관계없이 항상 적용됩니다.\n"
                                 "좌클릭 드래그의 '선택한 도구'는 툴바에서 고른 도구를 뜻합니다."))
         form = QFormLayout()
@@ -277,7 +288,84 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return page
 
+    # ─── 조작감 (감도 · 무게감 · 관성) ───
+    FEEL_LABELS = (("feel_wl", "W/L 감도", "%", "Width · Level을 바꾸는 빠르기 (한 픽셀 = 지금 Width의 1/100 × 감도)"),
+                   ("feel_pan", "Pan 감도", "%", "끄는 만큼 영상이 움직이는 비율"),
+                   ("feel_zoom", "Zoom 감도", "%", "Zoom 드래그 · 휠 확대 빠르기"),
+                   ("feel_scroll", "드래그 넘기기 감도", "%", "끌어서 슬라이스 넘길 때 빠르기"),
+                   ("feel_accel", "빠르게 끌 때 가속", "%",
+                    "0 = 속도와 관계없이 일정\n100 = 천천히 0.4배(정밀) … 빠르게 최대 3배"),
+                   ("feel_smooth_ms", "무게감 (보간 시간)", " ms",
+                    "끈 만큼을 이 시간에 걸쳐 따라가 부드럽게 멈춤. 0 = 즉시 반영"))
+
+    def _feel_group(self):
+        from PyQt5.QtWidgets import QGroupBox
+        from .mouse_feel import FEEL_PRESETS, FEEL_RANGES
+        box = QGroupBox("조작감 — W/L · Pan · Zoom · 넘기기")
+        form = QFormLayout(box)
+        self._feel_preset = QComboBox()
+        self._feel_preset.addItem("직접 조절", "")
+        for key, (text, _values) in FEEL_PRESETS.items():
+            self._feel_preset.addItem(text, key)
+        self._feel_preset.activated.connect(self._apply_feel_preset)
+        form.addRow("한 번에 고르기:", self._feel_preset)
+        self._feel_boxes = {}
+        for key, label, suffix, tip in self.FEEL_LABELS:
+            spin = QSpinBox()
+            spin.setRange(*FEEL_RANGES[key])
+            spin.setSingleStep(5)
+            spin.setSuffix(suffix)
+            spin.setToolTip(tip)
+            spin.setValue(int(self._settings.mouse.get(key)))
+            spin.valueChanged.connect(self._sync_feel_preset)
+            self._feel_boxes[key] = spin
+            form.addRow(label + ":", spin)
+        self._feel_inertia = QCheckBox("Pan 관성 — 던지듯 놓으면 잠깐 미끄러지다 멈춤 (W/L · Zoom은 손을 떼면 그 자리)")
+        self._feel_inertia.setChecked(bool(self._settings.mouse.get("feel_inertia")))
+        self._feel_wheel = QCheckBox("휠 가속 — 천천히 굴리면 한 장씩, 빠르게 연달아 굴리면 여러 장씩")
+        self._feel_wheel.setChecked(bool(self._settings.mouse.get("feel_wheel_accel")))
+        for check in (self._feel_inertia, self._feel_wheel):
+            check.toggled.connect(self._sync_feel_preset)
+            form.addRow("", check)
+        self._sync_feel_preset()
+        return box
+
+    def _feel_values(self):
+        values = {key: spin.value() for key, spin in self._feel_boxes.items()}
+        values["feel_inertia"] = self._feel_inertia.isChecked()
+        values["feel_wheel_accel"] = self._feel_wheel.isChecked()
+        return values
+
+    def _set_feel_values(self, values):
+        for key, spin in self._feel_boxes.items():
+            spin.blockSignals(True)
+            spin.setValue(int(values[key]))
+            spin.blockSignals(False)
+        for check, key in ((self._feel_inertia, "feel_inertia"), (self._feel_wheel, "feel_wheel_accel")):
+            check.blockSignals(True)
+            check.setChecked(bool(values[key]))
+            check.blockSignals(False)
+        self._sync_feel_preset()
+
+    def _apply_feel_preset(self, _index=None):
+        from .mouse_feel import FEEL_PRESETS
+        key = self._feel_preset.currentData()
+        if key in FEEL_PRESETS:
+            self._set_feel_values(FEEL_PRESETS[key][1])
+
+    def _sync_feel_preset(self, *_args):
+        """지금 값이 어느 한 번에 고르기와 같으면 그것을, 아니면 '직접 조절'을 표시"""
+        from .mouse_feel import FEEL_PRESETS
+        current = self._feel_values()
+        match = next((key for key, (_t, values) in FEEL_PRESETS.items()
+                      if all(values[k] == current[k] for k in current)), "")
+        self._feel_preset.blockSignals(True)
+        self._feel_preset.setCurrentIndex(max(0, self._feel_preset.findData(match)))
+        self._feel_preset.blockSignals(False)
+
     def _reset_mouse(self):
+        from .mouse_feel import FEEL_DEFAULTS
+        self._set_feel_values(FEEL_DEFAULTS)
         for key, combo in self._mouse_combos.items():
             combo.setCurrentIndex(combo.findData(DEFAULT_MOUSE_BINDINGS[key]))
         self._fast_step.setValue(DEFAULT_MOUSE_BINDINGS["fast_scroll_step"])
@@ -728,6 +816,7 @@ class SettingsDialog(QDialog):
         values = {key: combo.currentData() for key, combo in self._mouse_combos.items()}
         values["fast_scroll_step"] = self._fast_step.value()
         values["roi_window_method"] = self._roi_method.currentData()
+        values.update(self._feel_values())
         self._settings.save_mouse(values)
         self._settings.save_window_presets(presets)
         self._settings.save_hanging_protocols(protocols)

@@ -90,6 +90,7 @@ class DragPadStrip(QWidget):
         for pad in (self.zoom, self.wl):
             pad.released.connect(lambda p=pad: p.setText(p.base_text))
             layout.addWidget(pad)
+        self.wl.released.connect(self._end_window)
 
     def _viewport(self):
         vp = self.target()
@@ -108,10 +109,14 @@ class DragPadStrip(QWidget):
         vp = self._viewport()
         if vp is None:
             return
-        vp._adjust_window(dx, dy)
-        vp.update()
+        vp._feel_drag("window", dx, dy, vp._drag_speed(dx, dy))   # 뷰포트와 같은 감도 커브 · 무게감
         center, width = vp.window_level
         self.wl.setText(f"◐ W {width:.0f} L {center:.0f}")
+
+    def _end_window(self):
+        vp = self._viewport()
+        if vp is not None:
+            vp._wl_drag_unit = None    # 다음 드래그는 그때의 Width로 감도를 다시 정함
 
     def _fit(self):
         vp = self._viewport()
