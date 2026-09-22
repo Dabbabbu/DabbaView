@@ -16,6 +16,7 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import OrderedDict
@@ -39,7 +40,16 @@ DICOM_EXTENSIONS = {'', '.dcm', '.dicom'}
 PIXEL_CACHE_SIZE = 100
 
 # 파일 하나를 읽거나 디코딩하는 데 이보다 오래 걸리면 건너뜀 (네트워크 드라이브 멈춤, 손상 파일)
+# 설정(불러오기)에서 바꿀 수 있음 → configure_limits
 FILE_TIMEOUT_S = 10.0
+# 네트워크 드라이브(SMB · NFS · WebDAV) · 클라우드 가상 드라이브(Google Drive G: 등)에서는
+# 파일을 받는 데 시간이 걸리므로 한도를 늘리고 동시에 읽는 수를 줄임
+# (32개를 한꺼번에 요청하면 모두 줄을 서다 10초 한도에 걸려 대부분 건너뛰던 문제)
+NETWORK_TIMEOUT_S = 30.0
+NETWORK_WORKERS = 6
+# 다시 시도할 때는 한도를 이만큼 늘리고, 더 적게 동시에 읽음
+RETRY_TIMEOUT_FACTOR = 2.0
+RETRY_WORKERS = 3
 
 # 클라우드(OneDrive·iCloud·Google Drive 등) 동기화 폴더에서 아직 이 컴퓨터에 받지 않은 파일.
 # 읽는 순간 OS가 다운로드를 시작하는데, 동기화 앱이 멈춰 있으면 read()가 끝나지 않음.
@@ -50,7 +60,10 @@ CLOUD_TIMEOUT_S = 30.0            # 파일 하나 다운로드 대기 한도
 MIXED_IMAGE_LIMIT = 300
 # 영상과 같은 폴더에 함께 있는 텍스트 메모 (Reading 기록으로 연결)
 TEXT_REPORT_EXTENSIONS = (".txt",)
-CLOUD_MAX_CONSECUTIVE_FAILS = 5   # 연속으로 이만큼 실패하면 나머지는 시도하지 않고 건너뜀
+CLOUD_MAX_CONSECUTIVE_FAILS = 20  # 연속으로 이만큼 실패하면 나머지는 시도하지 않고 건너뜀 (재시도 가능)
+# 시스템 메모리 사용률이 이만큼(%)을 넘으면 불러오기를 잠시 멈춤 (None: 끔)
+MEMORY_PAUSE_PERCENT = 90.0
+MEMORY_RESUME_MARGIN = 5.0        # 이만큼 내려가면 저절로 다시 시작
 _SF_DATALESS = 0x40000000         # macOS: 내용이 로컬에 없는 파일 (File Provider)
 _WIN_CLOUD_ATTRS = 0x00400000 | 0x00040000 | 0x00001000   # RECALL_ON_DATA_ACCESS/OPEN, OFFLINE
 
@@ -85,7 +98,89 @@ def cloud_provider(path):
         for key, label in _CLOUD_NAMES[:3]:
             if part.startswith(key):
                 return label
+        if part in _GDRIVE_PARTS:
+            return "Google Drive"
     return None
+
+
+# Google Drive 가상 드라이브 (Windows G: 아래 "내 드라이브" · "My Drive" · "공유 드라이브")
+_GDRIVE_PARTS = ("mydrive", "내드라이브", "shareddrives", "공유드라이브", "googledrive")
+_NETWORK_FS = ("smbfs", "afpfs", "nfs", "webdav", "cifs", "ftp", "macfuse", "osxfuse",
+               "fusefs", "fuse", "sshfs", "davfs", "9p")
+_mount_cache = {"at": 0.0, "mounts": []}
+
+
+def _mounts():
+    """(마운트 위치, 파일시스템 종류) 목록 — 긴 위치부터 (macOS · Linux). 30초 동안 재사용"""
+    now = time.monotonic()
+    if now - _mount_cache["at"] < 30 and _mount_cache["at"]:
+        return _mount_cache["mounts"]
+    mounts = []
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(["/sbin/mount"], capture_output=True, text=True, timeout=3).stdout
+            for line in out.splitlines():   # "//u@srv/share on /Volumes/share (smbfs, nodev, …)"
+                m = re.match(r"^.+? on (.+) \(([^,)]+)", line)
+                if m:
+                    mounts.append((m.group(1), m.group(2).strip().lower()))
+        elif os.path.exists("/proc/mounts"):
+            with open("/proc/mounts") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        mounts.append((parts[1].replace("\\040", " "), parts[2].lower()))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    mounts.sort(key=lambda m: -len(m[0]))
+    _mount_cache.update(at=now, mounts=mounts)
+    return mounts
+
+
+def is_network_path(path):
+    """네트워크 드라이브 · 원격 마운트인지 (파일을 읽을 때 네트워크를 거침)"""
+    try:
+        full = os.path.abspath(path)
+    except (OSError, ValueError):
+        return False
+    if sys.platform == "win32":
+        if full.startswith("\\\\"):                       # \\서버\공유
+            return True
+        try:
+            import ctypes
+            root = os.path.splitdrive(full)[0] + "\\"
+            return ctypes.windll.kernel32.GetDriveTypeW(root) == 4   # DRIVE_REMOTE
+        except (AttributeError, OSError, ValueError):
+            return False
+    for mount_point, fstype in _mounts():
+        if mount_point != "/" and (full == mount_point or full.startswith(mount_point.rstrip("/") + "/")):
+            return any(fstype.startswith(kind) for kind in _NETWORK_FS)
+    return False
+
+
+def configure_limits(file_timeout=None, network_timeout=None, cloud_timeout=None,
+                     cloud_max_fails=None, memory_pause=_UNSET):
+    """설정 창의 값으로 한도를 바꿈 (None은 그대로). memory_pause=None이면 메모리 일시정지 끔"""
+    global FILE_TIMEOUT_S, NETWORK_TIMEOUT_S, CLOUD_TIMEOUT_S, CLOUD_MAX_CONSECUTIVE_FAILS
+    global MEMORY_PAUSE_PERCENT
+    if file_timeout:
+        FILE_TIMEOUT_S = float(file_timeout)
+    if network_timeout:
+        NETWORK_TIMEOUT_S = float(network_timeout)
+    if cloud_timeout:
+        CLOUD_TIMEOUT_S = float(cloud_timeout)
+    if cloud_max_fails is not None:
+        CLOUD_MAX_CONSECUTIVE_FAILS = int(cloud_max_fails)
+    if memory_pause is not _UNSET:
+        MEMORY_PAUSE_PERCENT = float(memory_pause) if memory_pause else None
+
+
+RETRYABLE_PREFIXES = ("시간 초과", "클라우드", "읽기 오류")
+
+
+def is_retryable(reason):
+    """다시 시도하면 읽힐 수 있는 실패인지 (시간 초과 · 클라우드 · 디스크/네트워크 오류)
+    — DICOM이 아닌 파일 · 손상된 파일은 다시 해도 같으므로 제외"""
+    return str(reason).startswith(RETRYABLE_PREFIXES)
 
 
 _CAT = shutil.which("cat")
@@ -315,6 +410,9 @@ def _short_error(exc):
         return f"클라우드: {exc}"
     if isinstance(exc, TimeoutError):
         return f"시간 초과: {exc}"
+    if isinstance(exc, OSError) and not isinstance(exc, (FileNotFoundError, IsADirectoryError)):
+        # 네트워크 끊김 · 입출력 오류 등 — 다시 시도하면 읽힐 수 있음
+        return f"읽기 오류: {(exc.strerror or str(exc) or type(exc).__name__)[:160]}"
     text = str(exc).strip().splitlines()
     text = text[0] if text else type(exc).__name__
     if "all available plugins" in text or "missing dependenc" in text or "plugins are missing" in text:
@@ -442,6 +540,12 @@ def series_order_key(series):
     return (series.study_date, _time_text(series.study_time), series.study_uid or "",
             series.series_datetime, number is None, number if number is not None else 0,
             series.description, series.series_uid)
+
+
+def _slice_key(ds):
+    """같은 영상인지 가리는 키 (파일 · 프레임, 없으면 SOPInstanceUID)"""
+    return (str(getattr(ds, "filename", "") or ""), getattr(ds, "_dv_frame", None),
+            str(getattr(ds, "SOPInstanceUID", "") or ""))
 
 
 class DicomSeries:
@@ -738,7 +842,47 @@ class DicomLoader:
         self.phase = ""              # 진행 단계 설명 (파일 목록 확인 / 메타데이터 읽기)
         self.cache_thread = None     # 메타데이터 캐시를 뒤에서 저장하는 스레드 (테스트에서 join)
         self.cached_count = 0  # 캐시에서 바로 읽은 파일 수 (상태 표시용)
+        self.retry = False     # 실패한 파일 다시 읽기: 한도를 늘리고 천천히, 연속 실패로 멈추지 않음
+        self.remote = False    # 네트워크 · 클라우드 폴더였는지 (설명용)
+        # 일시정지: 메모리가 한도를 넘거나(자동) 사용자가 누르면 새 파일을 읽지 않고 기다림
+        self._pause = threading.Event()
+        self.pause_reason = ""       # "memory" | "user" | ""
+        self._memory_ignored = False  # '그래도 계속'을 누른 뒤에는 메모리로 다시 멈추지 않음
         self._reset_extras()
+
+    # ─── 일시정지 ───
+    @property
+    def paused(self):
+        return self._pause.is_set()
+
+    def pause(self, reason="user"):
+        self.pause_reason = reason
+        self._pause.set()
+
+    def resume(self, ignore_memory=False):
+        """다시 시작. ignore_memory=True면 이번 불러오기에서는 메모리로 다시 멈추지 않음"""
+        if ignore_memory or self.pause_reason == "memory":
+            self._memory_ignored = self._memory_ignored or ignore_memory
+        self.pause_reason = ""
+        self._pause.clear()
+
+    def _check_memory(self):
+        """메모리 한도를 넘으면 멈추고, 충분히 내려가면 저절로 다시 시작 (메모리로 멈춘 경우만)"""
+        limit = MEMORY_PAUSE_PERCENT
+        if not limit or self._memory_ignored:
+            return
+        from .memory_monitor import system_percent
+        percent = system_percent()
+        if percent is None:
+            return
+        if not self.paused and percent >= limit:
+            self.memory_percent = percent
+            gc.collect()           # 읽는 동안 꺼 둔 순환 GC를 한 번 돌려 되찾을 수 있는 만큼 되찾음
+            self.pause("memory")
+        elif self.paused and self.pause_reason == "memory" and percent < limit - MEMORY_RESUME_MARGIN:
+            self.resume()
+        if self.paused and self.pause_reason == "memory":
+            self.memory_percent = percent
 
     def _reset_extras(self):
         self.volume_masks = {}       # series_uid -> 함께 읽은 마스크 (NumPy _mask 등)
@@ -954,6 +1098,19 @@ class DicomLoader:
             return loaded
         cloud_options = dict(max_workers=CLOUD_WORKERS, timeout=CLOUD_TIMEOUT_S + 10,
                              max_consecutive_failures=CLOUD_MAX_CONSECUTIVE_FAILS)
+        # 네트워크 드라이브 · 클라우드 폴더(이미 받은 파일 포함): 한도를 늘리고 동시에 적게 읽음
+        self.remote = bool(provider) or any(is_network_path(p) for p in paths)
+        local_options = dict(max_workers=max_workers)
+        if self.remote:
+            local_options = dict(max_workers=min(max_workers or NETWORK_WORKERS, NETWORK_WORKERS),
+                                 timeout=max(NETWORK_TIMEOUT_S, FILE_TIMEOUT_S))
+        if self.retry:
+            # 다시 시도: 한도를 늘리고 천천히 — 연속 실패로 나머지를 포기하지 않음
+            base = local_options.get("timeout", FILE_TIMEOUT_S)
+            local_options = dict(max_workers=RETRY_WORKERS, timeout=base * RETRY_TIMEOUT_FACTOR)
+            cloud_options = dict(max_workers=RETRY_WORKERS,
+                                 timeout=(CLOUD_TIMEOUT_S + 10) * RETRY_TIMEOUT_FACTOR,
+                                 max_consecutive_failures=None)
         if isinstance(policy, tuple) and policy[0] == "copy":
             # 로컬로 복사한 뒤 복사본을 읽음 (받지 않은 파일은 프로세스로 받아 복사)
             mapping = self._copy_targets(files, paths, policy[1])
@@ -970,17 +1127,21 @@ class DicomLoader:
                 if not same:   # 이전에 복사해 둔 같은 크기 파일은 다시 받지 않음
                     fetch_in_process(path, dest)
                 return _read_metadata(dest)
-            groups = [(local, dict(max_workers=max_workers, reader=copy_reader,
+            groups = [(local, dict(local_options, reader=copy_reader,
                                    phase="로컬로 복사하며 읽는 중"))]
             if cloud:
                 groups.append((cloud, dict(cloud_options, reader=copy_reader,
                                            phase="클라우드에서 받아 로컬로 복사하는 중")))
             cloud = []
         else:
-            groups = [(local, dict(max_workers=max_workers))]
+            groups = [(local, dict(local_options, phase=("다시 읽는 중" if self.retry else
+                                                         "네트워크 폴더에서 읽는 중" if self.remote
+                                                         else "메타데이터 읽는 중")))]
         if cloud and policy == "download":
+            fetch_timeout = CLOUD_TIMEOUT_S * (RETRY_TIMEOUT_FACTOR if self.retry else 1)
+
             def download_reader(path):
-                fetch_in_process(path)   # 별도 프로세스가 받는 동안 멈추면 kill
+                fetch_in_process(path, timeout=fetch_timeout)   # 별도 프로세스가 받는 동안 멈추면 kill
                 return _read_metadata(path)
             groups.append((cloud, dict(cloud_options, reader=download_reader,
                                        phase="클라우드에서 다운로드하며 읽는 중")))
@@ -1030,7 +1191,7 @@ class DicomLoader:
                     continue
                 datasets = [parsed[f] for f in dicom_files if parsed.get(f) is not None]
                 errors = [(f, failed[f]) for f in dicom_files if f in failed]
-                if any(e.startswith(("시간 초과", "클라우드")) for _f, e in errors):
+                if any(is_retryable(e) for _f, e in errors):
                     continue   # 일시적인 멈춤일 수 있으니 다음에 다시 읽도록 캐시하지 않음
                 if datasets:
                     to_save.append((folder, recursive, signature, datasets, errors))
@@ -1114,6 +1275,10 @@ class DicomLoader:
         def work():
             name = threading.current_thread().name
             while not stop.is_set():
+                while self._pause.is_set() and not stop.is_set():
+                    time.sleep(0.2)   # 일시정지: 새 파일을 읽지 않고 기다림 (읽던 것은 마저 읽음)
+                if stop.is_set():
+                    return
                 try:
                     path = tasks.get_nowait()
                 except queue.Empty:
@@ -1138,11 +1303,16 @@ class DicomLoader:
         remaining = set(files)
         skipped = set()
         fails = 0
+        next_memory_check = 0.0
         try:
             while remaining:
                 if cancel_event is not None and cancel_event.is_set():
                     kill_fetch_processes()
                     return
+                now = time.monotonic()
+                if now >= next_memory_check:
+                    next_memory_check = now + 1.0
+                    self._check_memory()
                 # 도착한 결과를 한 번에 최대 100개씩 모아 처리 (파일마다 깨어나지 않도록)
                 batch = []
                 try:
@@ -1255,7 +1425,15 @@ class DicomLoader:
         """
         uids = []
         for series in other.get_series_list():
-            self.series_dict.setdefault(series.series_uid, series)
+            mine = self.series_dict.setdefault(series.series_uid, series)
+            if mine is not series:
+                # 같은 시리즈의 나머지 영상 (실패한 파일을 다시 읽은 경우) → 빠진 것만 더함
+                have = {_slice_key(ds) for ds in mine.slices}
+                added = [ds for ds in series.slices if _slice_key(ds) not in have]
+                for ds in added:
+                    mine.add_slice(ds)
+                if added:
+                    mine.sort_slices()
             uids.append(series.series_uid)
         self.load_errors.extend(other.load_errors)
         self.volume_masks.update(other.volume_masks)

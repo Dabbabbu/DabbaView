@@ -7,6 +7,8 @@
 - 단계 이름 · 파일 수 · 퍼센트 · 경과 시간 · 속도 · 남은 시간 예상
 - 응답이 없는 파일이 있으면 파일 이름과 몇 초째인지 표시
 - [취소] 지금까지 읽은 영상만 열기   [강제 중단] 기다리지 않고 바로 닫기
+- [⏸ 일시정지] / [▶ 계속] — 메모리가 한도를 넘으면 저절로 멈추고 [그래도 계속]
+- 끝난 뒤 건너뛴 파일이 있으면 [⟳ 실패 N개 재시도]
 """
 import time
 
@@ -42,6 +44,8 @@ class LoadProgressDialog(QDialog):
 
     canceled = pyqtSignal()        # 취소: 지금까지 읽은 것으로 진행
     force_stopped = pyqtSignal()   # 강제 중단: 기다리지 않고 바로 끝냄
+    pause_toggled = pyqtSignal(bool)   # True: 일시정지 / False: 계속 (메모리 한도도 무시)
+    retry_requested = pyqtSignal()     # 끝난 뒤 '실패 N개 재시도'
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -106,9 +110,20 @@ class LoadProgressDialog(QDialog):
         self.force_button.setToolTip("기다리지 않고 바로 닫습니다 (읽던 파일은 버립니다)")
         self.force_button.clicked.connect(self._on_force)
         self.force_button.setVisible(False)
+        self.pause_button = QPushButton("⏸ 일시정지")
+        self.pause_button.setToolTip("새 파일을 읽지 않고 잠시 멈춥니다 (읽던 파일은 마저 읽음)")
+        self.pause_button.clicked.connect(self._on_pause)
+        self._paused = False
+        self.retry_button = QPushButton("")
+        self.retry_button.setVisible(False)
+        self.retry_button.setToolTip("시간 초과 · 클라우드 · 읽기 오류로 건너뛴 파일을\n"
+                                     "한도를 두 배로 늘려 천천히 다시 읽습니다")
+        self.retry_button.clicked.connect(self._on_retry)
         self.cancel_button = QPushButton("취소")
         self.cancel_button.setToolTip("여기까지 읽은 영상만 열립니다")
         self.cancel_button.clicked.connect(self._on_cancel)
+        row.addWidget(self.pause_button)
+        row.addWidget(self.retry_button)
         row.addWidget(self.force_button)
         row.addWidget(self.cancel_button)
         row.addWidget(self.close_button)
@@ -215,6 +230,50 @@ class LoadProgressDialog(QDialog):
         self.detail.setText(text or "")
         self.detail.setVisible(bool(text))
 
+    # ─── 일시정지 ───
+    def set_paused(self, paused, reason="", percent=None):
+        """로더 상태를 창에 반영 (메모리로 멈추면 이유와 '그래도 계속')"""
+        if paused == self._paused and not paused:
+            return
+        self._paused = paused
+        if paused:
+            self.pause_button.setText("▶ 그래도 계속" if reason == "memory" else "▶ 계속")
+            self.pause_button.setToolTip("메모리 한도를 무시하고 이어서 읽습니다" if reason == "memory"
+                                         else "이어서 읽습니다")
+            if reason == "memory":
+                pct = f" {percent:.0f}%" if percent is not None else ""
+                self.set_warning(f"⏸ 시스템 메모리 사용{pct} — 한도를 넘어 불러오기를 잠시 멈췄습니다.\n"
+                                 "다른 앱을 닫으면 저절로 다시 시작합니다. 지금까지 읽은 영상만 보려면 '취소'.")
+            else:
+                self.set_warning("⏸ 일시정지했습니다. '▶ 계속'을 누르면 이어서 읽습니다.")
+            if not self.label.text().startswith("⏸"):
+                self.label.setText("⏸ 일시정지 — " + self.label.text())
+        else:
+            self.label.setText(self.label.text().replace("⏸ 일시정지 — ", "", 1))
+            self.pause_button.setText("⏸ 일시정지")
+            self.pause_button.setToolTip("새 파일을 읽지 않고 잠시 멈춥니다 (읽던 파일은 마저 읽음)")
+            self.set_warning("")
+
+    def is_paused(self):
+        return self._paused
+
+    def _on_pause(self):
+        self.pause_toggled.emit(not self._paused)
+
+    def offer_retry(self, count):
+        """끝났는데 다시 시도할 수 있는 실패가 있으면 버튼을 켜고 창을 닫지 않음"""
+        self._retry_count = count
+        self.retry_button.setText(f"⟳ 실패 {count:,}개 재시도")
+        self.retry_button.setVisible(count > 0)
+        if count > 0:
+            self.retry_button.setDefault(True)
+            self.retry_button.setFocus()
+
+    def _on_retry(self):
+        self.retry_button.setEnabled(False)
+        self.close()
+        self.retry_requested.emit()
+
     # ─── 버튼 ───
     def _on_cancel(self):
         self.cancel_button.setEnabled(False)
@@ -261,6 +320,7 @@ class LoadProgressDialog(QDialog):
         self.detail.setVisible(False)
         self.force_button.setVisible(False)
         self.cancel_button.setVisible(False)
+        self.pause_button.setVisible(False)
         self.close_button.setEnabled(True)          # 창만 닫음 — 받기·불러오기는 계속됨
         self.close_button.setToolTip("창만 닫습니다. 받기와 불러오기는 뒤에서 계속됩니다")
         self.setWindowTitle("불러오는 중 — 받는 대로 추가")
@@ -286,9 +346,10 @@ class LoadProgressDialog(QDialog):
         self.detail.setVisible(False)
         self.force_button.setVisible(False)
         self.cancel_button.setVisible(False)
+        self.pause_button.setVisible(False)
         self.close_button.setEnabled(True)
-        self.close_button.setDefault(True)
+        self.close_button.setDefault(not self.retry_button.isVisible())
         self.close_button.setToolTip("")
         self.setWindowTitle("불러오기 완료" if ok else "불러오기 중단")
-        if self.auto_close.isChecked():
-            QTimer.singleShot(1200, self.close)   # '완료'를 잠깐 보여 주고 닫음
+        if self.auto_close.isChecked() and not self.retry_button.isVisible():
+            QTimer.singleShot(1200, self.close)   # '완료'를 잠깐 보여 주고 닫음 (재시도할 게 있으면 남김)

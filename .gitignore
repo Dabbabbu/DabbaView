@@ -29,6 +29,7 @@ docs/acr_comparison_report.pdf
 
 # 클라우드에서 받은 영상 (저장 위치가 이 폴더일 때) — 절대 올리지 않음
 google_*/
+g_[0-9]*/
 onedrive_*/
 gdrive_*/
 dist-installer/

@@ -20,7 +20,8 @@ from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings, QObject, QE
                           QVariantAnimation, QEasingCurve, QTimer, QUrl, QPoint)
 from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices, QColor
 
-from .dicom_loader import CLOUD_TIMEOUT_S as DL_CLOUD_TIMEOUT, DicomLoader
+from . import dicom_loader as _dl
+from .dicom_loader import DicomLoader
 from .viewport import DicomViewport
 from .tag_viewer import TagViewer
 from .multi_viewport import MultiViewport
@@ -116,6 +117,7 @@ class DirectoryLoadWorker(QThread):
         self.last_progress = time.monotonic()
         self._policy_answer = None
         self._policy_event = threading.Event()
+        self.retry = False          # 실패한 파일 다시 읽기 (클라우드 질문 없이 받으며 읽음)
 
     def answer_placeholders(self, policy):
         """메인 스레드가 클라우드 파일 처리 방법을 정하면 호출 (download / skip / cancel)"""
@@ -124,6 +126,8 @@ class DirectoryLoadWorker(QThread):
 
     def _ask_placeholders(self, info):
         # 로더 스레드에서 호출됨: 메인 스레드에 물어보고 답을 기다림 (취소하면 바로 끝)
+        if self.retry:
+            return "download"       # 다시 읽기는 이미 한 번 고른 것 — 다시 묻지 않음
         self.placeholders_found.emit(info)
         while not self._policy_event.wait(0.2):
             if self._cancel_event.is_set():
@@ -246,6 +250,7 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("DabbaView", "DabbaView")
         migrate_legacy_settings(self._settings)
         self._app_settings = AppSettings(self._settings)
+        self._app_settings.apply_load_limits()   # 파일 대기 한도 · 메모리 일시정지 (설정 › 불러오기)
         self._annotation_store = AnnotationStore(self)
         self._report_store = ReportStore()
         self._report_library = ReportLibrary(self)
@@ -402,6 +407,7 @@ class MainWindow(QMainWindow):
         self._series_stack.addWidget(self._series_panel)
         self._series_stack.addWidget(self._series_tree)
         left_layout.addWidget(self._series_stack)
+        self._series_left_layout = left_layout   # 아래에 '불러오지 못한 파일' 상자를 붙임 (_init_statusbar)
 
         splitter.addWidget(left_panel)
 
@@ -1102,7 +1108,14 @@ class MainWindow(QMainWindow):
         from .load_errors import LoadErrorButton, LoadErrorLog
         self._load_errors = LoadErrorLog(self)
         dicom_loader.decode_error_listeners.append(self._load_errors.add_decode_error)
-        self._statusbar.addPermanentWidget(LoadErrorButton(self._load_errors, self))
+        error_button = LoadErrorButton(self._load_errors, self, retry=self.retry_failed_loads)
+        self._statusbar.addPermanentWidget(error_button)
+        # 성공한 시리즈는 목록에 그대로, 읽지 못한 폴더는 목록 아래에 따로 (더블클릭 = 다시 읽기)
+        from .load_errors import FailedFoldersBox
+        self._failed_box = FailedFoldersBox(self._load_errors, self.retry_failed_loads,
+                                            error_button.show_dialog, self)
+        self._series_left_layout.addWidget(self._failed_box)
+        self._load_errors.changed.connect(self._mark_failed_series)
         # 불러오는 동안 메모리 사용량 (시스템 메모리 80% 넘으면 빨간색 + 진행창 경고)
         self._status_ram = QLabel()
         self._status_ram.setVisible(False)
@@ -1230,7 +1243,7 @@ class MainWindow(QMainWindow):
         clear.triggered.connect(self._clear_recent_paths)
 
     def load_directory_async(self, paths, target_viewport=None,
-                             remember=True, merge=False, quiet=False, cloud_batch=False):
+                             remember=True, merge=False, quiet=False, cloud_batch=False, retry=False):
         """백그라운드 스레드에서 로딩. UI는 시그널로만 갱신"""
         if self._load_worker is not None:
             self._statusbar.showMessage("이미 불러오는 중입니다.", 3000)
@@ -1247,12 +1260,16 @@ class MainWindow(QMainWindow):
         worker.merge = merge          # True: 지금 목록에 더하기 (클라우드에서 한 시리즈씩 도착할 때)
         worker.quiet = quiet          # True: 진행 창 없이 상태바로만
         worker.cloud_batch = cloud_batch   # True: 클라우드에서 받는 중 도착한 묶음 (경고창 띄우지 않음)
+        worker.retry = worker.loader.retry = retry   # True: 실패한 파일 다시 읽기 (목록에 더함)
+        if retry:
+            progress.setWindowTitle("실패한 파일 다시 읽는 중")
         worker.progress.connect(self._on_load_progress)
         worker.finished_loading.connect(self._on_load_finished)
         worker.placeholders_found.connect(self._on_placeholders_found)
         worker.finished.connect(worker.deleteLater)
         progress.canceled.connect(worker.cancel)
         progress.force_stopped.connect(self._force_stop_load)
+        progress.pause_toggled.connect(self._toggle_load_pause)
         if not quiet:
             progress.show()
             self.register_popup(progress, "⏳")
@@ -1727,7 +1744,7 @@ class MainWindow(QMainWindow):
         if count:
             detail = (f"DICOM 파일 {total:,}개 ({size_gb:.1f} GB) 중 {count:,}개는 아직 이 Mac에 "
                       "다운로드되지 않았습니다. 이 파일들은 읽을 때 다운로드되며, "
-                      f"동기화 앱이 응답하지 않으면 {DL_CLOUD_TIMEOUT:.0f}초 뒤 건너뜁니다.")
+                      f"동기화 앱이 응답하지 않으면 {_dl.CLOUD_TIMEOUT_S:.0f}초 뒤 건너뜁니다.")
         else:
             detail = f"DICOM 파일 {total:,}개 ({size_gb:.1f} GB) 모두 이 Mac에 다운로드되어 있습니다."
         box.setInformativeText(detail + "\n\n받지 못한 파일은 상태바 ⚠ 목록에 표시됩니다.")
@@ -1819,6 +1836,20 @@ class MainWindow(QMainWindow):
         if worker is None or progress is None:
             return
         memory_warning = self._update_ram()
+        loader = worker.loader
+        if loader.paused:
+            # 일시정지(메모리 · 사용자) 중에는 '진행이 없다' 경고 대신 멈춘 이유를 보여 줌
+            worker.last_progress = time.monotonic()
+            if getattr(worker, "quiet", False):
+                self._statusbar.showMessage("⏸ 메모리가 부족해 불러오기를 잠시 멈췄습니다 "
+                                            "(다른 앱을 닫으면 이어서 읽습니다)", 3000)
+                return
+            if not progress.isVisible():
+                progress.show()
+            progress.set_paused(True, loader.pause_reason, getattr(loader, "memory_percent", None))
+            return
+        if progress.is_paused():
+            progress.set_paused(False)          # 메모리가 내려가 저절로 다시 시작함
         idle = time.monotonic() - worker.last_progress
         if idle < self.LOAD_STALL_S or not worker.loader.slow_files(1):
             progress.set_warning(memory_warning)
@@ -1832,8 +1863,10 @@ class MainWindow(QMainWindow):
         lines = [f"⚠ {idle:.0f}초째 진행이 없습니다."]
         for path, seconds in slow[:3]:
             lines.append(f"   {os.path.basename(path)} — {seconds:.0f}초째 응답 없음")
-        from .dicom_loader import FILE_TIMEOUT_S
-        lines.append(f"{FILE_TIMEOUT_S:.0f}초가 지난 파일은 자동으로 건너뜁니다. "
+        limit = _dl.NETWORK_TIMEOUT_S if loader.remote else _dl.FILE_TIMEOUT_S
+        if loader.retry:
+            limit *= _dl.RETRY_TIMEOUT_FACTOR
+        lines.append(f"{limit:.0f}초가 지난 파일은 건너뛰고, 끝난 뒤 다시 시도할 수 있습니다. "
                      "'취소'는 지금까지 읽은 영상을 열고, '강제 중단'은 기다리지 않고 바로 닫습니다.")
         if memory_warning:
             lines.append(memory_warning)
@@ -1851,6 +1884,76 @@ class MainWindow(QMainWindow):
         phase = self._load_worker.loader.phase if self._load_worker is not None else ""
         self._load_label = phase or "DICOM 파일 읽는 중"
         progress.update_load(self._load_label, current, total)
+
+    def _toggle_load_pause(self, pause):
+        """진행 창의 ⏸/▶: 사용자가 멈춤 · 계속 (메모리로 멈춘 경우 '그래도 계속'은 한도를 무시)"""
+        worker, progress = self._load_worker, self._load_progress
+        if worker is None:
+            return
+        loader = worker.loader
+        if pause:
+            loader.pause("user")
+        else:
+            loader.resume(ignore_memory=loader.pause_reason == "memory")
+            worker.last_progress = time.monotonic()
+        if progress is not None:
+            progress.set_paused(pause, "user")
+
+    def retry_failed_loads(self, paths=None):
+        """건너뛴 파일(시간 초과 · 클라우드 · 읽기 오류)을 한도를 늘려 다시 읽고 지금 목록에 더함"""
+        if paths is None:
+            paths = self._load_errors.retryable_paths()
+        paths = list(dict.fromkeys(paths))
+        if not paths:
+            self._statusbar.showMessage("다시 시도할 파일이 없습니다 "
+                                        "(DICOM이 아니거나 손상된 파일은 다시 해도 같습니다).", 6000)
+            return
+        if self._load_worker is not None:
+            self._statusbar.showMessage("불러오기가 끝난 뒤 다시 시도하세요.", 4000)
+            return
+        self._statusbar.showMessage(f"실패한 파일 {len(paths):,}개를 다시 읽습니다…", 4000)
+        self.load_directory_async(paths, remember=False, retry=True)
+
+    def _finish_retry(self, loader, loaded, paths, cancelled):
+        """다시 읽기 끝: 성공한 영상은 원래 목록(시리즈)에 합치고, 실패 목록을 새로 고침"""
+        tried = set(paths)
+        if cancelled:
+            # 취소: 끝까지 가지 못한 파일은 원래 이유 그대로 두고, 읽은 것만 반영
+            done = {p for p, _r in loader.load_errors}
+            tried = {p for p in tried if p in done} | {
+                str(getattr(ds, "filename", "")) for s in loader.series_dict.values() for ds in s.slices}
+        self._load_errors.discard(tried)
+        self._load_errors.extend(loader.load_errors)
+        still = len(loader.load_errors)
+        if self._loader is None or (getattr(self, "_retry_replaces", False) and loader.series_dict):
+            # 처음 연 폴더에서 하나도 못 읽었던 경우: 다시 읽은 영상으로 목록을 새로 채움
+            self._retry_replaces = False
+            self._loader = loader
+            self._library.apply_display(loader.get_series_list())
+            self._update_series_list()
+            self._report_library.set_studies(self._studies_for_matching())
+        else:
+            self._loader.load_errors[:] = [e for e in self._loader.load_errors if e[0] not in tried]
+            had = self._current_series
+            before = {uid: s.num_slices for uid, s in self._loader.series_dict.items()}
+            new_uids = self._loader.merge(loader)
+            if loader.series_dict:
+                self._library.apply_display(self._loader.get_series_list())
+                grown = [u for u in new_uids if u not in before
+                         or self._loader.series_dict[u].num_slices != before[u]]
+                select = had.series_uid if had is not None else (grown[0] if grown else None)
+                self._update_series_list(select_uid=select)
+                self._report_library.set_studies(self._studies_for_matching())
+        ok = max(0, len(paths) - still)
+        message = f"다시 읽기: {len(paths):,}개 중 {ok:,}개 성공"
+        if still:
+            message += f", {still:,}개는 여전히 실패 — 시리즈 목록 아래 ⚠에서 다시 시도할 수 있습니다"
+        self._statusbar.showMessage(message, 12000)
+
+    def _mark_failed_series(self):
+        """읽지 못한 파일이 있는 폴더의 시리즈에 ⚠ 표시 (일부 영상이 빠졌을 수 있음)"""
+        counts = {folder: n for folder, n, _r, _k in self._load_errors.by_folder()}
+        self._series_panel.set_failed_folders(counts)
 
     def _force_stop_load(self):
         """강제 중단: 읽던 파일을 기다리지 않고 바로 끝냄
@@ -1895,6 +1998,8 @@ class MainWindow(QMainWindow):
 
     def _on_load_finished(self, loader, loaded):
         cancelled = self._load_worker.was_cancelled()
+        retry = getattr(self._load_worker, "retry", False)
+        worker_paths = list(self._load_worker.paths)
         target_viewport = self._load_worker.target_viewport
         merge_quiet = getattr(self._load_worker, "merge", False)
         cloud_batch = getattr(self._load_worker, "cloud_batch", False)
@@ -1917,6 +2022,15 @@ class MainWindow(QMainWindow):
                     summary, ok = "불러올 영상이 없습니다", False
                 else:
                     summary, ok = f"{loaded:,}개 파일 · 시리즈 {nseries}개", True
+                if retry:
+                    still = len(loader.load_errors)
+                    summary = f"다시 읽기 — {max(0, len(worker_paths) - still):,}개 성공"
+                    summary += f", {still:,}개 여전히 실패" if still else ""
+                    ok = True
+                retryable = sum(_dl.is_retryable(r) for _p, r in loader.load_errors)
+                if retryable and not cloud_batch:
+                    progress.offer_retry(retryable)
+                    progress.retry_requested.connect(lambda: self.retry_failed_loads())
                 if cloud_batch and not cancelled and getattr(self, "_ready_state", (0, 0))[1] > 1:
                     # 클라우드 여러 폴더: 첫 묶음만 연 것 → '완료'가 아니라 받는 대로 누적해서 보여 줌
                     self._cloud_progress = progress
@@ -1924,6 +2038,9 @@ class MainWindow(QMainWindow):
                 else:
                     progress.finish(summary, ok)
 
+        if retry:
+            self._finish_retry(loader, loaded, worker_paths, cancelled)
+            return
         if cancelled and not loader.series_dict:
             self._statusbar.showMessage("Loading cancelled", 5000)
             return
@@ -1940,11 +2057,18 @@ class MainWindow(QMainWindow):
         if loaded == 0:
             if loader.load_errors:
                 self._load_errors.reset(loader.load_errors)
-                QMessageBox.warning(
-                    self, "Warning",
-                    f"영상을 하나도 불러오지 못했습니다. {len(loader.load_errors)}개 파일을 건너뛰었습니다.\n\n"
-                    f"예: {os.path.basename(loader.load_errors[0][0])} — {loader.load_errors[0][1]}\n\n"
-                    "상태바 오른쪽 아래 ⚠ 버튼으로 전체 목록을 볼 수 있습니다.")
+                self._retry_replaces = True   # 다시 읽어 영상이 나오면 지금 목록을 바꿈 (다른 검사와 섞지 않음)
+                box = QMessageBox(QMessageBox.Warning, "Warning",
+                                  f"영상을 하나도 불러오지 못했습니다. {len(loader.load_errors)}개 파일을 건너뛰었습니다.\n\n"
+                                  f"예: {os.path.basename(loader.load_errors[0][0])} — {loader.load_errors[0][1]}\n\n"
+                                  "상태바 오른쪽 아래 ⚠ 버튼으로 전체 목록을 볼 수 있습니다.", parent=self)
+                retryable = len(self._load_errors.retryable_paths())
+                again = (box.addButton(f"⟳ 실패 {retryable:,}개 재시도", QMessageBox.AcceptRole)
+                         if retryable else None)
+                box.addButton("닫기", QMessageBox.RejectRole)
+                box.exec_()
+                if again is not None and box.clickedButton() is again:
+                    QTimer.singleShot(0, self.retry_failed_loads)
             else:
                 QMessageBox.warning(
                     self, "Warning",
@@ -1979,6 +2103,7 @@ class MainWindow(QMainWindow):
             self._ready_first = False          # 이후 도착분은 목록에 더함
         if target_viewport is None:
             self._loader = loader
+            self._retry_replaces = False
             self._load_errors.reset(loader.load_errors)
             pending, self._pending_select_uid = self._pending_select_uid, None
             self._update_series_list(

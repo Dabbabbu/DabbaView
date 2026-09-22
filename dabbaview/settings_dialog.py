@@ -62,7 +62,8 @@ def _append_row(table, values):
 
 class SettingsDialog(QDialog):
 
-    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache", "acr", "display", "work")
+    TABS = ("mouse", "presets", "hanging", "nodes", "reading", "ai", "cloud", "cache", "acr", "display", "work",
+            "loading")
 
     def __init__(self, app_settings, parent=None, tab="mouse"):
         super().__init__(parent)
@@ -85,6 +86,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._acr, "ACR QC")
         self._tabs.addTab(self._display_tab(), "Display")
         self._tabs.addTab(self._work_tab(), "작업 저장")
+        self._tabs.addTab(self._loading_tab(), "불러오기")
         if tab in self.TABS:
             self._tabs.setCurrentIndex(self.TABS.index(tab))
         layout.addWidget(self._tabs)
@@ -167,6 +169,80 @@ class SettingsDialog(QDialog):
         layout.addWidget(folder)
         layout.addStretch(1)
         return page
+
+    # ─── 불러오기 (시간 한도 · 메모리) ───
+    def _loading_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        v = self._settings.load_limits()
+        form = QFormLayout()
+
+        def seconds(value, low, high, tip):
+            box = QSpinBox()
+            box.setRange(low, high)
+            box.setSuffix(" 초")
+            box.setValue(int(value))
+            box.setToolTip(tip)
+            return box
+        self._load_file_timeout = seconds(v["file_timeout"], 2, 300,
+                                          "이 컴퓨터 디스크의 파일 하나를 읽는 데 이보다 오래 걸리면 건너뜁니다")
+        self._load_network_timeout = seconds(v["network_timeout"], 5, 600,
+                                             "네트워크 드라이브 · Google Drive · OneDrive 폴더의 파일 하나 한도")
+        self._load_cloud_timeout = seconds(v["cloud_timeout"], 5, 600,
+                                           "아직 이 컴퓨터에 받지 않은 클라우드 파일 하나를 받는 한도")
+        form.addRow("파일 하나 (내 디스크):", self._load_file_timeout)
+        form.addRow("파일 하나 (네트워크 · 클라우드 폴더):", self._load_network_timeout)
+        form.addRow("클라우드 파일 받기:", self._load_cloud_timeout)
+        self._load_max_fails = QSpinBox()
+        self._load_max_fails.setRange(0, 1000)
+        self._load_max_fails.setSpecialValueText("끝까지 시도")
+        self._load_max_fails.setSuffix(" 개")
+        self._load_max_fails.setValue(int(v["cloud_max_fails"]))
+        self._load_max_fails.setToolTip("클라우드 파일이 연속으로 이만큼 실패하면 나머지는 나중에 다시 시도하도록 남겨 둡니다")
+        form.addRow("연속 실패 시 멈춤:", self._load_max_fails)
+        layout.addLayout(form)
+
+        row = QHBoxLayout()
+        self._load_memory_pause = QCheckBox("시스템 메모리가")
+        self._load_memory_pause.setChecked(bool(v["memory_pause"]))
+        self._load_memory_percent = QSpinBox()
+        self._load_memory_percent.setRange(50, 98)
+        self._load_memory_percent.setSuffix(" %")
+        self._load_memory_percent.setValue(int(v["memory_percent"]))
+        self._load_memory_pause.toggled.connect(self._load_memory_percent.setEnabled)
+        self._load_memory_percent.setEnabled(self._load_memory_pause.isChecked())
+        row.addWidget(self._load_memory_pause)
+        row.addWidget(self._load_memory_percent)
+        row.addWidget(QLabel("를 넘으면 불러오기를 일시정지"))
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        restore = QPushButton("기본값으로")
+        restore.clicked.connect(self._reset_load_limits)
+        restore_row = QHBoxLayout()
+        restore_row.addWidget(restore)
+        restore_row.addStretch(1)
+        layout.addLayout(restore_row)
+        note = QLabel(
+            "• 한도를 넘긴 파일은 건너뛰고 나머지를 계속 읽습니다. 건너뛴 파일은 불러오기가 끝난 뒤\n"
+            "  '⟳ 실패 N개 재시도' 버튼이나 시리즈 목록 아래 '불러오지 못한 파일'에서 다시 읽을 수 있습니다\n"
+            "  (다시 읽을 때는 한도를 두 배로 늘리고 천천히 읽습니다).\n"
+            "• 네트워크 · 클라우드 폴더는 동시에 읽는 파일 수를 줄여 한꺼번에 시간 초과가 나지 않게 합니다.\n"
+            "• 메모리로 일시정지되면 메모리가 내려갈 때 저절로 다시 시작하고,\n"
+            "  진행 창의 '그래도 계속'으로 바로 이어 갈 수도 있습니다.")
+        note.setStyleSheet("color: #9aa7b5;")
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return page
+
+    def _reset_load_limits(self):
+        d = self._settings.LOAD_DEFAULTS
+        self._load_file_timeout.setValue(d["file_timeout"])
+        self._load_network_timeout.setValue(d["network_timeout"])
+        self._load_cloud_timeout.setValue(d["cloud_timeout"])
+        self._load_max_fails.setValue(d["cloud_max_fails"])
+        self._load_memory_pause.setChecked(d["memory_pause"])
+        self._load_memory_percent.setValue(d["memory_percent"])
 
     # ─── 마우스 ───
     def _mouse_tab(self):
@@ -668,6 +744,13 @@ class SettingsDialog(QDialog):
         self._settings.set_exit_save(self._exit_save.currentData())
         self._settings.set_restore_work(self._restore_work.currentData())
         self._settings.set_update_check(self._update_check.isChecked())
+        self._settings.set_load_limits({
+            "file_timeout": self._load_file_timeout.value(),
+            "network_timeout": self._load_network_timeout.value(),
+            "cloud_timeout": self._load_cloud_timeout.value(),
+            "cloud_max_fails": self._load_max_fails.value(),
+            "memory_pause": self._load_memory_pause.isChecked(),
+            "memory_percent": self._load_memory_percent.value()})
         self._settings.set_monai_url(self._monai_url.text())
         self._settings.set_monai_token(self._monai_token.text())
         for key, widget in (("python", self._model_python), ("nnunet_folder", self._nnunet_folder),

@@ -232,6 +232,35 @@ class AppSettings:
     def set_overlay_items(self, items):
         self._save_json("overlay_items", {k: bool(v) for k, v in items.items()})
 
+    # 불러오기 한도 (파일 하나 대기 시간 · 연속 실패 · 메모리 일시정지)
+    LOAD_DEFAULTS = {"file_timeout": 10, "network_timeout": 30, "cloud_timeout": 30,
+                     "cloud_max_fails": 20, "memory_pause": True, "memory_percent": 90}
+
+    def load_limits(self):
+        values = dict(self.LOAD_DEFAULTS)
+        for key, default in self.LOAD_DEFAULTS.items():
+            kind = bool if isinstance(default, bool) else int
+            try:
+                values[key] = self._qs.value(f"load/{key}", default, type=kind)
+            except (TypeError, ValueError):
+                pass
+        return values
+
+    def set_load_limits(self, values):
+        for key, value in values.items():
+            if key in self.LOAD_DEFAULTS:
+                self._qs.setValue(f"load/{key}", value)
+        self.apply_load_limits()
+
+    def apply_load_limits(self):
+        """저장된 한도를 로더에 반영 (시작할 때 · 설정을 저장할 때)"""
+        from . import dicom_loader
+        v = self.load_limits()
+        dicom_loader.configure_limits(
+            file_timeout=max(2, v["file_timeout"]), network_timeout=max(5, v["network_timeout"]),
+            cloud_timeout=max(5, v["cloud_timeout"]), cloud_max_fails=max(0, v["cloud_max_fails"]),
+            memory_pause=v["memory_percent"] if v["memory_pause"] else None)
+
     # 작업 저장 (ROI · 측정 · 주석)
     def autosave_enabled(self):
         return self._qs.value("work/autosave", False, type=bool)

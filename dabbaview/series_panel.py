@@ -183,6 +183,20 @@ class SeriesCardDelegate(QStyledItemDelegate):
             painter.drawText(QRectF(text_rect.left(), text_rect.top() + 58,
                                     text_rect.width(), 16), Qt.AlignLeft, folder)
 
+        missing = self._panel.failed_count(index.data(ROLE_UID))
+        if missing:                                  # 같은 폴더에서 읽지 못한 파일 → 일부가 빠졌을 수 있음
+            font.setPointSize(8)
+            font.setBold(True)
+            painter.setFont(font)
+            label = f"⚠ {missing:,} 누락"
+            width = QFontMetrics(font).horizontalAdvance(label) + 8
+            warn = QRectF(card.right() - width - 4, card.top() + 4, width, 14)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#5a3d10"))
+            painter.drawRoundedRect(warn, 3, 3)
+            painter.setPen(QColor("#ffcf7a"))
+            painter.drawText(warn, Qt.AlignCenter, label)
+
         if selected:
             painter.setPen(QPen(SELECT_COLOR, 2))
             painter.setBrush(Qt.NoBrush)
@@ -230,6 +244,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         self.blockSignals(True)
         self.clear()
         self._items_by_uid = {}
+        self._folder_by_uid = {}
         self._series_by_uid = {s.series_uid: s for s in series_list}
         self._headers = []
         self._first_uid = {}
@@ -284,6 +299,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
                     from .source_info import folder_of
                     short, full = folder_of(s)
                     item.setData(ROLE_SOURCE, short)
+                    self._folder_by_uid[s.series_uid] = full
                     if ds is not None:
                         item.setToolTip(dicom_info.sequence_tooltip(
                             ds, f"#{s.series_number}  {s.description}"
@@ -311,6 +327,15 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
             self.setCurrentItem(selected)  # → series_selected
 
     # 접기 / 펼치기
+    def set_failed_folders(self, counts):
+        """폴더 → 읽지 못한 파일 수. 그 폴더의 시리즈 카드에 ⚠ (영상 일부가 빠졌을 수 있음)"""
+        self._failed_folders = dict(counts)
+        self.viewport().update()
+
+    def failed_count(self, uid):
+        folder = getattr(self, "_folder_by_uid", {}).get(uid)
+        return getattr(self, "_failed_folders", {}).get(folder, 0) if folder else 0
+
     def _apply_visibility(self):
         for row in range(self.count()):
             item = self.item(row)
