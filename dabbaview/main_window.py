@@ -55,7 +55,7 @@ from .hanging import find_protocol, assign_slots, protocol_from_layout
 from .settings_dialog import SettingsDialog
 from .network_dialogs import DicomSendDialog, DicomPrintDialog
 from .render import render_8bit
-from .multi_viewport import LAYOUTS
+from . import layouts as _layouts
 from .series_tree import group_series
 from .reading import ReadingDialog, ReportStore, ReportLibrary
 from .dicom_info import orientation_name
@@ -458,6 +458,7 @@ class MainWindow(QMainWindow):
 
         # 탭 2: 다중 뷰포트
         self._multi_viewport = MultiViewport()
+        self._multi_viewport.set_app_settings(self._app_settings)   # 레이아웃 목록 · Auto
         self._tab_widget.addTab(self._multi_viewport, "Multi View")
 
         # 탭 3: MPR
@@ -639,6 +640,12 @@ class MainWindow(QMainWindow):
         self._init_arrow_menu(view_menu)
         self._init_link_menu(view_menu)
         self._init_landmark_display_menu(view_menu)
+        bar_action = view_menu.addAction("▤ 영상 오른쪽 슬라이스 막대")
+        bar_action.setCheckable(True)
+        bar_action.setChecked(self._settings.value("view/slice_bar", True, type=bool))
+        bar_action.setToolTip("칸마다 오른쪽에 슬라이스 막대를 붙여 끌어서 빠르게 넘깁니다 (한 장짜리 영상은 숨김)")
+        bar_action.toggled.connect(self._set_slice_bar)
+        DicomViewport.slice_bar_enabled = bar_action.isChecked()
         self._act_drag_pads = view_menu.addAction("🔍◐ 맨 아래 Zoom · W/L 조절 칸")
         self._act_drag_pads.setCheckable(True)
         self._act_drag_pads.setChecked(self._settings.value("ui/drag_pads", True, type=bool))
@@ -2939,6 +2946,15 @@ class MainWindow(QMainWindow):
         sub.addSeparator()
         sub.addAction("📍 랜드마크 목록…", self.show_landmark_list)
 
+    def _set_slice_bar(self, on):
+        """영상 오른쪽 슬라이스 막대 켜고 끄기 (모든 칸)"""
+        DicomViewport.slice_bar_enabled = bool(on)
+        self._settings.setValue("view/slice_bar", bool(on))
+        for vp in self._all_viewports():
+            vp.refresh_slice_bar()
+            vp.update()
+        self._statusbar.showMessage("슬라이스 막대: " + ("켬" if on else "끔"), 4000)
+
     def _set_landmark_display(self, mode):
         DicomViewport.landmark_display = mode
         self._settings.setValue("view/landmark_display", mode)
@@ -3100,7 +3116,7 @@ class MainWindow(QMainWindow):
             self._multi_viewport.show_series(study)
         else:
             layout = choice.lower()
-            rows, cols = LAYOUTS[layout]
+            rows, cols = _layouts.parse(layout) or (2, 2)
             # 현재 시리즈부터 검사 순서대로 채움
             start = next((i for i, s in enumerate(study) if s is self._current_series), 0)
             ordered = study[start:] + study[:start]
@@ -3119,7 +3135,7 @@ class MainWindow(QMainWindow):
         slots = assign_slots(protocol, study) if protocol else []
         if protocol and any(slots):
             layout = protocol.get("layout", "2x2")
-            self._multi_viewport.show_series(slots, layout=layout if layout in LAYOUTS else None)
+            self._multi_viewport.show_series(slots, layout=_layouts.clean(layout) or None)
             self._tab_widget.setCurrentWidget(self._multi_viewport)
             self._statusbar.showMessage(f"Hanging Protocol: {protocol['name']}", 6000)
             return protocol["name"]

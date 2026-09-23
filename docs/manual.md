@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 4.4.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 4.5.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -189,11 +189,14 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 
 ![Multi View 2x2 — SAX cine · 4CH · 2CH · LGE](images/m08_multiview.jpg)
 
-1. 위쪽 **Multi View** 탭을 누르거나 레이아웃 목록에서 `1X1` ~ `4X4`를 고릅니다.
+1. 위쪽 **Multi View** 탭을 누르고, 왼쪽 위 **레이아웃 드롭다운**에서 칸 나누기를 고릅니다 (`1X1` ~ `4X5`, 이름은 **행 x 열** — 2X3은 2줄 3칸). 자주 쓰는 `1X1 · 1X2 · 2X1 · 2X2`는 옆 버튼으로 바로 고를 수 있습니다.
+   - **Auto**: 영상을 펼칠 때 시리즈 수에 맞는 칸 나누기를 스스로 고릅니다 (3개면 2X2, 5개면 2X3 …).
+   - **⚙ Config**: 드롭다운에 나올 목록을 고르고 순서를 바꿉니다. 왼쪽이 고를 수 있는 레이아웃(Default), 오른쪽이 실제로 쓸 목록(User define)이고, 행 · 열을 직접 넣어 새 레이아웃(예: 3X5)도 만들 수 있습니다. 설정은 다음에 켤 때도 그대로입니다.
 2. 왼쪽 시리즈 카드를 원하는 칸으로 끌어다 놓습니다 (예: SAX cine · 4CH · 2CH · LGE를 한 화면에).
 3. 칸을 클릭하면 그 칸이 활성(노란 테두리)이 되고, 도구와 W/L은 활성 칸에 적용됩니다.
 4. **Space**를 누르면 활성 칸만 크게 보고, 다시 누르면 돌아옵니다.
 5. 같은 좌표계의 시리즈끼리는 **Sync Scroll / Sync W/L / Crosslink(C) / Ref Lines**로 연동됩니다 (아래 표 참고).
+6. **영상 오른쪽 슬라이스 막대**: 칸마다 오른쪽 끝에 세로 막대가 붙어 지금 몇 번째인지 보이고, 끌면 빠르게 넘어갑니다 (빈 곳을 누르면 그 자리로, 막대 위에서 휠도 됩니다). 손잡이 길이는 전체 장수에 맞춰 달라지고, 한 장짜리 영상에는 나오지 않습니다. **View ▸ ▤ 영상 오른쪽 슬라이스 막대**로 끄고 켭니다.
 
 ### 여러 칸 함께 움직이기
 
@@ -209,7 +212,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
   - 예: SA CINE(270장)의 100번째 → 2CH CINE(30장)의 11번째
 - Compare로 묶은 칸은 예전처럼 간격을 유지합니다.
 - 칸을 고르면 Sync Scroll 버튼보다 **선택이 우선**입니다 (고른 칸끼리만 움직임).
-6. 레이아웃 `Default`는 Hanging Protocol로 자동 배치하고, `ALL`은 검사의 모든 시리즈를 띄웁니다.
+7. 레이아웃 `Default`는 Hanging Protocol로 자동 배치하고, `ALL`은 검사의 모든 시리즈를 띄웁니다.
 
 ### 세 가지 연동 기능 구분
 

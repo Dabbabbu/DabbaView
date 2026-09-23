@@ -239,6 +239,22 @@ class AppSettings:
     def set_overlay_items(self, items):
         self._save_json("overlay_items", {k: bool(v) for k, v in items.items()})
 
+    # Multi View 레이아웃 (드롭다운에 나올 목록 · Auto)
+    def layout_presets(self):
+        from .layouts import DEFAULT_ACTIVE, clean_list
+        return clean_list(self._load_json("layout_presets", DEFAULT_ACTIVE), DEFAULT_ACTIVE)
+
+    def set_layout_presets(self, values):
+        from .layouts import clean_list
+        self._save_json("layout_presets", clean_list(values))
+
+    def layout_auto(self):
+        """Auto: 열린 시리즈 수에 맞는 레이아웃을 스스로 고름"""
+        return self._qs.value("layout_auto", True, type=bool)
+
+    def set_layout_auto(self, on):
+        self._qs.setValue("layout_auto", bool(on))
+
     # 불러오기 한도 (파일 하나 대기 시간 · 연속 실패 · 메모리 일시정지)
     LOAD_DEFAULTS = {"file_timeout": 10, "network_timeout": 30, "cloud_timeout": 30,
                      "cloud_max_fails": 20, "memory_pause": True, "memory_percent": 90}

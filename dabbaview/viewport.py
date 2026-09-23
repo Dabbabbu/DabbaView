@@ -34,6 +34,7 @@ from . import __version__, dicom_info
 from .annotations import ROI_TYPES, AnnotationStore, image_key
 from .annotation_edit import AnnotationEditMixin, fmt_area, fmt_length
 from . import mouse_feel
+from .slice_bar import SliceScrollBar, WIDTH as SLICE_BAR_W
 from . import roi_tools
 from .app_settings import MouseBindings
 from .geometry import reference_line
@@ -130,6 +131,11 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._motion_timer = QTimer(self)
         self._motion_timer.setInterval(16)          # 약 60 fps
         self._motion_timer.timeout.connect(self._motion_tick)
+
+        # 영상 오른쪽 슬라이스 막대 (INFINITT 방식) — 칸마다 하나, 끌어서 빠르게 넘김
+        self._slice_bar = SliceScrollBar(self)
+        self._slice_bar.set_enabled_by_user(DicomViewport.slice_bar_enabled)
+        self._slice_bar.slice_requested.connect(lambda i: self.go_to_slice(i))
 
         # 시리즈 데이터
         self._series = None
@@ -236,6 +242,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             self.slice_changed.emit(0, series.num_slices)
 
         self._fit_to_window()
+        self.refresh_slice_bar()
         self.update()
 
     def current_dataset(self):
@@ -414,7 +421,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         layer = self._fusion
         if layer is not None and layer.lut is not None:
             bars.append((layer.lut, layer.window[0], layer.window[1], "Fusion"))
-        x = self.width() - 26
+        x = self._content_right() - 26
         for lut, center, width, name in bars:
             self._draw_colorbar(painter, lut, center, width, name, x)
             x -= 64
@@ -1361,6 +1368,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             if self._draft and self._draft["type"] in ("angle", "cobb", "distance"):
                 self._draft = None
             self.slice_changed.emit(index, self._series.num_slices)
+            self.refresh_slice_bar()
             if user:
                 self.scrolled.emit(index)
 
@@ -2498,7 +2506,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         fm = painter.fontMetrics()
         line_h = fm.height()
         margin = 8
-        right = self.width() - margin
+        right = self._content_right() - margin
 
         y = margin + fm.ascent()
         for line in corners["tl"]:
@@ -2541,7 +2549,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         text = f"W:{self._window_width:.0f} L:{self._window_center:.0f}"
         painter.setFont(self._overlay_font())
         fm = painter.fontMetrics()
-        x = self.width() - 10 - fm.horizontalAdvance(text)
+        x = self._content_right() - 10 - fm.horizontalAdvance(text)
         if above_scale_bar:
             y = self.height() - self.SCALE_BAR_OFFSET - self.SCALE_TICK - 4 - fm.descent()
         else:
@@ -2558,7 +2566,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             return False
         length_px = length_mm / mm_per_px
         margin = 10
-        x1 = self.width() - margin
+        x1 = self._content_right() - margin
         x0 = x1 - length_px
         y = self.height() - self.SCALE_BAR_OFFSET
         tick_mm = 10 if length_mm >= 20 else (1 if length_mm <= 10 else 5)
@@ -2590,10 +2598,30 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         painter.drawRect(self.rect().adjusted(half, half, -half - 1 + width % 2,
                                               -half - 1 + width % 2))
 
+    # 슬라이스 막대 (모든 뷰포트 공통 — View ▸ 슬라이스 막대)
+    slice_bar_enabled = True
+
+    def refresh_slice_bar(self):
+        """막대 위치 · 범위를 지금 상태에 맞춤 (칸 크기가 바뀌거나 시리즈 · 슬라이스가 바뀔 때)"""
+        bar = getattr(self, "_slice_bar", None)
+        if bar is None:
+            return
+        bar.set_enabled_by_user(DicomViewport.slice_bar_enabled)
+        bar.place(self.width(), self.height(), top=4, bottom=4)
+        bar.set_range(self._current_slice, self._series.num_slices if self._series else 0)
+        if bar.isVisible():
+            bar.raise_()
+
+    def _content_right(self):
+        """오버레이 글자 · 스케일 바가 쓸 수 있는 오른쪽 끝 (슬라이스 막대를 비켜서)"""
+        bar = getattr(self, "_slice_bar", None)
+        return self.width() - (SLICE_BAR_W + 2 if bar is not None and bar.isVisible() else 0)
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._series:
             self._cache_valid = False
+        self.refresh_slice_bar()
 
     # ─── 공개 API ───
 

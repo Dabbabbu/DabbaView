@@ -15,7 +15,7 @@ from PyQt5.QtCore import Qt
 from .app_settings import (MOUSE_BINDING_LABELS, DEFAULT_MOUSE_BINDINGS,
                            DEFAULT_WINDOW_PRESETS, DEFAULT_HANGING_PROTOCOLS,
                            ROI_WINDOW_METHODS)
-from .multi_viewport import LAYOUTS
+from . import layouts as _layouts
 from . import dicom_net as net
 
 
@@ -414,7 +414,8 @@ class SettingsDialog(QDialog):
         layout.addWidget(QLabel(
             "Body: StudyDescription/BodyPartExamined/시리즈 설명에 포함될 키워드 ('|'로 구분)\n"
             "Slots: 칸 순서대로 SeriesDescription 키워드, 쉼표로 구분 (예: T1, T2, FLAIR, DWI)\n"
-            f"Layout: {', '.join(LAYOUTS)}"))
+            f"Layout: {', '.join(_layouts.DEFAULT_LAYOUTS)} 등 '행x열' "
+            f"(최대 {_layouts.MAX_ROWS}x{_layouts.MAX_COLS})"))
         self._hanging_table = _table(["Name", "Modality", "Body", "Layout", "Slots"])
         self._fill_hanging(self._settings.hanging_protocols())
         layout.addWidget(self._hanging_table)
@@ -434,9 +435,11 @@ class SettingsDialog(QDialog):
         protocols = []
         t = self._hanging_table
         for r in range(t.rowCount()):
-            layout = _cell(t, r, 3).lower()
-            if layout not in LAYOUTS:
-                raise ValueError(f"프로토콜 {r + 1}행: Layout '{layout}'은(는) 지원하지 않습니다.")
+            layout = _layouts.clean(_cell(t, r, 3))
+            if not layout or layout == _layouts.AUTO:
+                raise ValueError(f"프로토콜 {r + 1}행: Layout '{_cell(t, r, 3)}'은(는) 쓸 수 없습니다 "
+                                 f"(행x열, 최대 {_layouts.MAX_ROWS}x{_layouts.MAX_COLS} · "
+                                 f"{_layouts.MAX_CELLS}칸).")
             protocols.append({"name": _cell(t, r, 0) or f"Protocol {r + 1}",
                               "modality": _cell(t, r, 1).upper(),
                               "body": _cell(t, r, 2), "layout": layout,

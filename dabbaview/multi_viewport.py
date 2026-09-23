@@ -4,7 +4,8 @@
 """
 다중 뷰포트 레이아웃 매니저
 
-- 1x1 ~ 4x4 레이아웃 (최대 16칸)
+- 가로·세로를 자유롭게 고르는 레이아웃 (1x1 ~ 4x5 · 최대 24칸, layouts.py)
+  드롭다운에서 고르고 ⚙ Config에서 목록을 편집 · Auto는 시리즈 수에 맞춰 스스로
 - 동기화 스크롤: 같은 Frame of Reference + 평행한 시리즈는 물리적 위치로,
   비교(Compare) 연결된 칸은 슬라이스 간격(offset)을 유지하며 함께 이동
 - 동기화 윈도잉: 같은 모달리티 칸에 W/L 전파
@@ -12,32 +13,27 @@
 - 드래그 앤 드롭: 시리즈 트리/패널, Finder 파일·폴더
 """
 from PyQt5.QtWidgets import (QWidget, QGridLayout, QVBoxLayout, QHBoxLayout,
-                             QPushButton, QButtonGroup)
+                             QComboBox, QPushButton, QButtonGroup, QToolButton)
 from PyQt5.QtCore import Qt, QEvent, pyqtSignal
 
+from . import layouts
 from .viewport import DicomViewport
 from .series_tree import SERIES_MIME_TYPE
 
 ACTIVE_BORDER = ("#ffd400", 2)       # GE 스타일 노란 테두리 (활성 칸)
 SELECTED_BORDER = ("#3d8bfd", 2)     # 함께 움직이는 칸 (Ctrl·Shift 클릭으로 고름)
 DROP_TARGET_BORDER = ("#ff8c00", 4)
-MAX_VIEWPORTS = 16
+MAX_VIEWPORTS = layouts.MAX_CELLS
 
-LAYOUTS = {
-    "1x1": (1, 1), "1x2": (1, 2), "2x1": (2, 1), "2x2": (2, 2),
-    "2x3": (2, 3), "3x3": (3, 3), "3x4": (3, 4), "4x4": (4, 4),
-}
-LAYOUT_BUTTONS = [("1x1", "▣"), ("1x2", "◫"), ("2x1", "◩"), ("2x2", "⊞"),
-                  ("3x3", "3×3"), ("4x4", "4×4")]
+# 이름 → (행, 열). 예전 코드·설정과 호환되도록 기본 목록을 그대로 담아 둔다
+# (없는 이름도 layouts.parse로 해석되므로 set_layout은 "5x2" 같은 것도 받는다)
+LAYOUTS = {layout_id: layouts.parse(layout_id) for layout_id in layouts.DEFAULT_LAYOUTS}
+LAYOUT_BUTTONS = [("1x1", "▣"), ("1x2", "◫"), ("2x1", "⊟"), ("2x2", "⊞")]
 
 
 def grid_for_count(n):
     """n칸이 들어가는 가장 작은 레이아웃 이름"""
-    for name in ("1x1", "1x2", "2x2", "2x3", "3x3", "3x4", "4x4"):
-        rows, cols = LAYOUTS[name]
-        if rows * cols >= n:
-            return name
-    return "4x4"
+    return layouts.for_count(n)
 
 
 
@@ -79,6 +75,8 @@ class MultiViewport(QWidget):
         self._compare_offsets = {}  # (i, j) → j 슬라이스 - i 슬라이스
         self._syncing = False
         self._maximized = False  # Space: 활성 칸만 크게
+        self._app_settings = None              # 드롭다운 목록 · Auto 설정 (main_window가 넘김)
+        self._auto_layout = True               # Auto: 시리즈 수에 맞춰 스스로 고름
         self._init_ui()
 
     def _init_ui(self):
@@ -102,12 +100,33 @@ class MultiViewport(QWidget):
                 QPushButton:checked { background: #007acc; color: white; }
                 QPushButton:hover { background: #444; }
             """)
-            btn.clicked.connect(lambda checked, lid=layout_id: self.set_layout(lid))
+            btn.clicked.connect(lambda checked, lid=layout_id: self.set_layout(lid, user=True))
             self._btn_group.addButton(btn)
             self._layout_buttons[layout_id] = btn
             btn_layout.addWidget(btn)
+
+        # 레이아웃 드롭다운 (INFINITT의 Image set layout) + ⚙ Config
+        self._layout_combo = QComboBox()
+        self._layout_combo.setFixedHeight(28)
+        self._layout_combo.setMinimumWidth(150)
+        self._layout_combo.setToolTip("칸 나누기 (행 x 열) — Auto는 열린 시리즈 수에 맞춥니다")
+        self._layout_combo.setStyleSheet(
+            "QComboBox { background: #333; color: #ddd; border: 1px solid #555; padding: 2px 6px; }")
+        self._layout_combo.activated.connect(self._on_combo_chosen)
+        btn_layout.addSpacing(6)
+        btn_layout.addWidget(self._layout_combo)
+        config = QToolButton()
+        config.setText("⚙")
+        config.setFixedSize(28, 28)
+        config.setToolTip("레이아웃 목록 편집 (Config) — 쓰는 레이아웃만 골라 두고 순서도 바꿉니다")
+        config.setStyleSheet(
+            "QToolButton { background: #333; color: #ccc; border: 1px solid #555; }"
+            "QToolButton:hover { background: #444; }")
+        config.clicked.connect(self.open_layout_config)
+        btn_layout.addWidget(config)
         btn_layout.addStretch()
         self._main_layout.addLayout(btn_layout)
+        self._rebuild_layout_combo()
 
         # 뷰포트 그리드 컨테이너
         self._grid_container = QWidget()
@@ -131,6 +150,72 @@ class MultiViewport(QWidget):
             self._viewports.append(vp)
 
         self._apply_layout()
+
+    # ─── 레이아웃 목록 (드롭다운 · Config · Auto) ───
+
+    def set_app_settings(self, app_settings):
+        """사용자가 고른 레이아웃 목록 · Auto 설정을 쓰게 함"""
+        self._app_settings = app_settings
+        self._auto_layout = app_settings.layout_auto()
+        self._rebuild_layout_combo()
+
+    def active_layouts(self):
+        if self._app_settings is not None:
+            return self._app_settings.layout_presets()
+        return list(layouts.DEFAULT_ACTIVE)
+
+    def _rebuild_layout_combo(self):
+        combo = getattr(self, "_layout_combo", None)
+        if combo is None:
+            return
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(layouts.label(layouts.AUTO), layouts.AUTO)
+        for layout_id in self.active_layouts():
+            combo.addItem(layouts.label(layout_id), layout_id)
+        if self._current_layout not in self.active_layouts():
+            combo.addItem(layouts.label(self._current_layout), self._current_layout)
+        wanted = layouts.AUTO if self._auto_layout else self._current_layout
+        combo.setCurrentIndex(max(0, combo.findData(wanted)))
+        combo.blockSignals(False)
+
+    def _on_combo_chosen(self, _index):
+        layout_id = self._layout_combo.currentData()
+        if layout_id == layouts.AUTO:
+            self.set_auto_layout(True)
+            self.apply_auto_layout()
+        else:
+            self.set_auto_layout(False)
+            self.set_layout(layout_id, user=True)
+
+    def set_auto_layout(self, on):
+        self._auto_layout = bool(on)
+        if self._app_settings is not None:
+            self._app_settings.set_layout_auto(self._auto_layout)
+        self._rebuild_layout_combo()
+
+    @property
+    def auto_layout(self):
+        return self._auto_layout
+
+    def apply_auto_layout(self):
+        """Auto: 지금 영상이 들어 있는 칸 수에 맞춰 레이아웃을 고름"""
+        used = sum(1 for vp in self._viewports if vp.series is not None)
+        self.set_layout(layouts.for_count(max(1, used)))
+
+    def open_layout_config(self):
+        """⚙ Config: 드롭다운에 나올 레이아웃을 고르고 순서를 바꾸는 창"""
+        from .layout_config import LayoutConfigDialog
+        dialog = LayoutConfigDialog(self.active_layouts(), self._auto_layout, self)
+        if dialog.exec_() != dialog.Accepted:
+            return
+        chosen, auto = dialog.result_values()
+        if self._app_settings is not None:
+            self._app_settings.set_layout_presets(chosen)
+        self.set_auto_layout(auto)
+        self._rebuild_layout_combo()
+        if auto:
+            self.apply_auto_layout()
 
     # ─── 이벤트 (활성화 / 드래그 앤 드롭) ───
 
@@ -187,10 +272,13 @@ class MultiViewport(QWidget):
 
     # ─── 레이아웃 ───
 
-    def set_layout(self, layout_id):
-        """레이아웃 변경 ('1x1' ~ '4x4')"""
-        if layout_id not in LAYOUTS:
+    def set_layout(self, layout_id, user=False):
+        """레이아웃 변경 ('1x1' ~ '4x5' 등 '행x열'). user=True면 Auto를 끔"""
+        layout_id = layouts.clean(layout_id)
+        if not layout_id or layout_id == layouts.AUTO:
             return
+        if user:
+            self.set_auto_layout(False)
         self._maximized = False  # 레이아웃을 바꾸면 최대화 해제
         self._current_layout = layout_id
         btn = self._layout_buttons.get(layout_id)
@@ -205,6 +293,7 @@ class MultiViewport(QWidget):
         if self._active_index >= self.num_visible:
             self._active_index = 0
         self._apply_layout()
+        self._rebuild_layout_combo()
         self.layout_changed.emit(layout_id)
 
     @property
@@ -223,7 +312,7 @@ class MultiViewport(QWidget):
             vp.show()
             vp.set_highlight(None)
             return
-        rows, cols = LAYOUTS[self._current_layout]
+        rows, cols = layouts.parse(self._current_layout)
         for i in range(rows * cols):
             self._grid_layout.addWidget(self._viewports[i], i // cols, i % cols)
             self._viewports[i].show()
@@ -345,7 +434,8 @@ class MultiViewport(QWidget):
     def show_series(self, series_list, layout=None):
         """시리즈 목록을 칸 순서대로 배치 (None은 빈 칸). 레이아웃 자동 선택 가능"""
         series_list = list(series_list)[:MAX_VIEWPORTS]
-        self.set_layout(layout or grid_for_count(max(1, len(series_list))))
+        self.set_layout(layout or layouts.for_count(max(1, len(series_list)),
+                                                    self.active_layouts() if self._auto_layout else None))
         self._compare_offsets = {}
         for i in range(self.num_visible):
             s = series_list[i] if i < len(series_list) else None
@@ -355,7 +445,7 @@ class MultiViewport(QWidget):
 
     @property
     def num_visible(self):
-        rows, cols = LAYOUTS[self._current_layout]
+        rows, cols = layouts.parse(self._current_layout) or (1, 1)
         return rows * cols
 
     # ─── 동기화 / Reference Line ───
