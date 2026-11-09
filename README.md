@@ -95,7 +95,7 @@ Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 
 - **슬라이스 막대**: 칸마다 영상 오른쪽에 세로 막대 — 끌어서 빠르게 넘기고 지금 위치가 보입니다 (View 메뉴에서 끄고 켬)
 - **레이아웃 드롭다운**: `2D` / `1X1`~`3X3` / `Default`(Hanging Protocol) / `ALL`(검사의 모든 시리즈)
 - **Hanging Protocol**: 폴더를 열면 모달리티·부위에 맞춰 자동 배치 (예: Brain MRI → 2x2 T1/T2/FLAIR/DWI, Spine MRI → 1x2 Sag T1/T2). 편집하거나 현재 배치를 프로토콜로 저장 가능
-- **MPR**: Axial/Sagittal/Coronal 3평면 (mm 기준 실제 비율) — 원본이 Sagittal · Coronal로 찍혔어도 IOP/IPP로 방향을 읽어 실제 해부학적 평면으로 재구성 (원본 칸 · 재구성 칸 표시) + Oblique: 크로스헤어 끝 핸들 드래그로 각도 회전, Shift+드래그 1° 단위 미세 조절, 각도 오버레이·리셋
+- **MPR**: Axial/Sagittal/Coronal 3평면 (mm 기준 실제 비율) — 원본이 Sagittal · Coronal로 찍혔어도 IOP/IPP로 방향을 읽어 실제 해부학적 평면으로 재구성 (원본 칸 · 재구성 칸 표시); **촬영 평면 모드**로 심장 MRI의 SAX 스택을 같이 불러온 2CH · 4CH 평면으로 재구성 (2CH · 4CH 한 장짜리를 골라도 SAX에서 볼륨을 가져옴), cine은 위상 하나로 볼륨 구성 + 위상 전환 + Oblique: 크로스헤어 끝 핸들 드래그로 각도 회전, Shift+드래그 1° 단위 미세 조절, 각도 오버레이·리셋
 - **3D Volume Rendering**: VTK (macOS 앱 번들에 포함)
 
 ### 비교 / 동기화
