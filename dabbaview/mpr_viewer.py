@@ -4,6 +4,8 @@
 """
 2D MPR (Multi-Planar Reconstruction) 뷰어
 Axial, Sagittal, Coronal 3평면 재구성 + Oblique(사선) 회전
+원본 시리즈가 어느 방향(Axial · Sagittal · Coronal)으로 찍혔든 IOP/IPP로 환자 좌표계를
+읽어 세 뷰가 실제 해부학적 평면이 되게 한다 (anatomical_frames 참고).
 
 좌표계: 볼륨 mm 좌표 X = (k * Δk, row * Δrow, col * Δcol)
   - 세 평면이 공유하는 중심점 C(mm)를 지나고, 평면마다 직교 기저 (u, v, n)을 가짐
@@ -37,11 +39,70 @@ _E_ROW = np.array([0.0, 1.0, 0.0])
 _E_COL = np.array([0.0, 0.0, 1.0])
 
 # 표준 평면 기저 (u, v, n) - 볼륨 인덱스 축 (k, row, col) 기준
+# 위치 정보가 없어 원본 슬라이스를 Axial로 가정할 때 쓰는 기본값
 BASE_FRAMES = {
     "Axial": (_E_COL, _E_ROW, _E_K),           # x = col, y = row
     "Sagittal": (_E_ROW, -_E_K, _E_COL),       # x = row, y = -k (상하반전)
     "Coronal": (_E_COL, -_E_K, _E_ROW),        # x = col, y = -k (상하반전)
 }
+
+# 환자 좌표계(LPS: +x = Left, +y = Posterior, +z = Superior) 기준 표준 평면 기저 (u, v, n)
+#   Axial:    화면 오른쪽 = L, 아래 = P, 넘김 = S (방사선 관례: 발 쪽에서 올려다봄)
+#   Sagittal: 화면 오른쪽 = P, 아래 = I, 넘김 = L (앞쪽이 화면 왼쪽)
+#   Coronal:  화면 오른쪽 = L, 아래 = I, 넘김 = P
+PATIENT_FRAMES = {
+    "Axial": (np.array([1.0, 0, 0]), np.array([0, 1.0, 0]), np.array([0, 0, 1.0])),
+    "Sagittal": (np.array([0, 1.0, 0]), np.array([0, 0, -1.0]), np.array([1.0, 0, 0])),
+    "Coronal": (np.array([1.0, 0, 0]), np.array([0, 0, -1.0]), np.array([0, 1.0, 0])),
+}
+
+
+def volume_axes_patient(geometry):
+    """볼륨 인덱스 축 (k, row, col)이 환자 좌표계에서 향하는 단위 벡터 (3, 3) — 행 = 축
+
+    geometry.row_dirs는 열 인덱스(col) 증가 방향, col_dirs는 행 인덱스(row) 증가 방향.
+    k 방향은 슬라이스 법선 중 origins가 증가하는 쪽.
+    """
+    if geometry is None or geometry.num_slices < 2:
+        return None
+    n = geometry.normals[0]
+    sign = 1.0 if float((geometry.origins[-1] - geometry.origins[0]) @ n) >= 0 else -1.0
+    return np.array([sign * n, geometry.col_dirs[0], geometry.row_dirs[0]], dtype=float)
+
+
+def anatomical_frames(axes):
+    """환자 좌표계 표준 평면을 볼륨 축에 가장 가까운 축으로 스냅한 기저 {plane: (u, v, n)}
+
+    원본 시리즈가 Sagittal · Coronal로 찍혔어도 Axial/Sagittal/Coronal 뷰가 실제 해부학적
+    평면이 되게 한다. 축에 스냅하므로 표준 평면은 그대로 복셀 격자를 따라(보간 없이) 추출된다.
+    축이 겹치면(심하게 기울어진 oblique 촬영) None → 기본 BASE_FRAMES 사용.
+    """
+    if axes is None:
+        return None
+    frames = {}
+    for plane, vectors in PATIENT_FRAMES.items():
+        basis, used = [], set()
+        for p in vectors:
+            comp = axes @ p                       # 각 볼륨 축에 투영한 성분
+            axis = int(np.argmax(np.abs(comp)))
+            if axis in used:
+                return None
+            used.add(axis)
+            e = np.zeros(3)
+            e[axis] = 1.0 if comp[axis] >= 0 else -1.0
+            basis.append(e)
+        frames[plane] = tuple(basis)
+    return frames
+
+
+def source_orientation(axes):
+    """원본 슬라이스(k 축 법선)가 어느 표준 평면에 가장 가까운지 + 기울기(°)"""
+    if axes is None:
+        return None, 0.0
+    n = axes[0]
+    axis = int(np.argmax(np.abs(n)))
+    tilt = math.degrees(math.acos(min(1.0, abs(float(n[axis])))))
+    return ("Sagittal", "Coronal", "Axial")[axis], tilt
 
 MAX_OUTPUT_SIZE = 1024  # Oblique 재구성 영상 한 변 최대 픽셀
 HANDLE_RADIUS = 6       # 회전 핸들 반지름 (px)
@@ -320,6 +381,9 @@ class MPRWidget(QWidget):
         self._specs = {}                    # plane → 마지막 재구성 정보
         self._cval = 0.0
         self._rot_snapshot = None
+        self._base_frames = BASE_FRAMES        # 이 볼륨의 표준 평면 기저 (해부학적 평면 기준)
+        self._source_plane = None              # 원본 슬라이스가 가장 가까운 표준 평면
+        self._source_tilt = 0.0
         self._reset_frames()
         self._init_ui()
         self._connect_signals()
@@ -339,6 +403,12 @@ class MPRWidget(QWidget):
         self.info_panel = QWidget()
         self.info_panel.setStyleSheet("background-color: #1a1a1a;")
         info_layout = QVBoxLayout(self.info_panel)
+        self._source_label = QLabel()
+        self._source_label.setStyleSheet("color: #ddd; font-size: 12px;")
+        self._source_label.setAlignment(Qt.AlignTop)
+        self._source_label.setWordWrap(True)
+        info_layout.addWidget(self._source_label)
+
         self._info_label = QLabel("MPR Viewer\n\n"
                                    "마우스 휠: 슬라이스 이동\n"
                                    "좌클릭 드래그: 크로스헤어 이동\n"
@@ -382,8 +452,40 @@ class MPRWidget(QWidget):
     # ─── 평면 기하 ───
 
     def _reset_frames(self):
-        self._frames = {p: tuple(b.copy() for b in BASE_FRAMES[p]) for p in PLANES}
+        self._frames = {p: tuple(b.copy() for b in self._base_frames[p]) for p in PLANES}
         self._angles = {p: 0.0 for p in PLANES}
+
+    def _set_base_frames(self):
+        """위치 정보(IOP/IPP)로 원본 촬영 방향을 읽어 세 뷰를 실제 해부학적 평면에 맞춘다
+
+        Sagittal · Coronal로 찍은 시리즈도 Axial 뷰에는 axial 재구성, Sagittal 뷰에는 원본이
+        나오게 된다. 위치 정보가 없거나 심한 oblique면 원본 스택을 Axial로 보는 기본값.
+        """
+        axes = volume_axes_patient(self._geometry)
+        frames = anatomical_frames(axes)
+        self._base_frames = frames if frames is not None else BASE_FRAMES
+        self._source_plane, self._source_tilt = source_orientation(axes)
+        self._update_source_label()
+
+    def _is_source_plane(self, plane):
+        """plane의 표준 법선이 원본 슬라이스 스택(k 축)인지"""
+        return _is_axis_aligned(self._base_frames[plane][2]) and \
+            int(np.argmax(np.abs(self._base_frames[plane][2]))) == 0
+
+    def _update_source_label(self):
+        if self._volume is None or self._source_plane is None:
+            self._source_label.setText("")
+            return
+        src = next((p for p in PLANES if self._is_source_plane(p)), None)
+        text = f"원본 촬영: {self._source_plane}"
+        if self._source_tilt >= 0.5:
+            text += f" (기울기 {self._source_tilt:.1f}°)"
+        if src is not None:
+            others = " · ".join(p for p in PLANES if p != src)
+            text += f"\n{src} 뷰 = 원본 슬라이스, {others}는 재구성"
+        if self._base_frames is BASE_FRAMES and self._geometry is not None:
+            text += "\n(축을 나눌 수 없는 oblique 촬영 → 원본을 Axial로 표시)"
+        self._source_label.setText(text)
 
     def _box_corners(self):
         """볼륨 복셀 중심 범위의 8개 꼭짓점 (mm)"""
@@ -408,7 +510,7 @@ class MPRWidget(QWidget):
 
     def _tilt(self, plane):
         """표준 법선 대비 기울어진 각도 (°)"""
-        cos = abs(float(self._frames[plane][2] @ BASE_FRAMES[plane][2]))
+        cos = abs(float(self._frames[plane][2] @ self._base_frames[plane][2]))
         return math.degrees(math.acos(min(1.0, cos)))
 
     # ─── 재구성 ───
@@ -486,6 +588,8 @@ class MPRWidget(QWidget):
             total = int(round((t_max - t_min) / step)) + 1
             index = int(round((spec["t"] - t_min) / step)) + 1
             info = [f"Slice: {min(max(index, 1), total)}/{total}"]
+            if self._source_plane is not None and self._is_standard(plane):
+                info.append("원본" if self._is_source_plane(plane) else "재구성")
             angle, tilt = self._angles[plane], self._tilt(plane)
             if abs(angle) >= 0.05:
                 info.append(f"Angle: {angle:+.1f}°")
@@ -662,6 +766,7 @@ class MPRWidget(QWidget):
         wc, ww = series.get_default_window()
         for view in self._views.values():
             view.set_window(wc, ww)
+        self._set_base_frames()
         self._reset_frames()
         d, h, w = self._volume.shape
         self._center = np.array([d // 2, h // 2, w // 2], dtype=float) * self._spacing
