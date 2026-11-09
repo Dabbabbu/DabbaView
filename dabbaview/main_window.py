@@ -3897,7 +3897,8 @@ class MainWindow(QMainWindow):
             self._mpr_series = series
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
-                self._mpr_widget.set_series(series)
+                related = list(self._loader.series_dict.values()) if self._loader is not None else []
+                self._mpr_widget.set_series(series, related=related)
             finally:
                 QApplication.restoreOverrideCursor()
         elif current is self._volume_widget and self._volume_series is not series:
