@@ -11,6 +11,7 @@
  - 누르고 있는 동안 : 더 어둡게 + 아래로 1px 내려앉음 (실제로 눌린 느낌)
  - 기본 버튼(Enter) : 파란 테두리로 어느 것이 기본인지 보이게
  - 끌 수 없는 버튼  : 흐리게
+ - 버튼 차례       : 확인(Yes · OK)을 왼쪽에 (Windows 방식)
 
 도구 막대 · 영상 위 막대처럼 자기 스타일을 쓰는 곳은 그대로 둔다
 (QDialog · QMessageBox 안의 버튼만 고른다).
@@ -52,6 +53,13 @@ QDialog QPushButton:checked, QMessageBox QPushButton:checked {
     background: #1d3a5c;
     border-color: #5aa9ff;
     color: #cfe6ff;
+}
+
+/* 버튼 차례를 Windows 방식으로 — 확인(Yes · OK)이 왼쪽, 취소(No · Cancel)가 오른쪽.
+   macOS 기본은 반대(오른쪽이 확인)지만, 쓰는 분이 익숙한 차례로 맞춘다.
+   button-layout: 0 = WinLayout, 1 = MacLayout */
+QDialog QDialogButtonBox, QMessageBox QDialogButtonBox {
+    button-layout: 0;
 }
 """
 
