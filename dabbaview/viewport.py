@@ -525,6 +525,10 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     #   "full": 예전처럼 원 + 십자 + 이름   "hover": 마우스를 가까이 댈 때만   "hidden": 숨김
     LANDMARK_DISPLAYS = ("subtle", "full", "hover", "hidden")
     landmark_display = "subtle"
+
+    # 측정 숫자(Area · Mean · SD …) 표시 — 끄면 선만 남아 영상이 가려지지 않는다
+    # (View ▸ 🔢 측정 숫자 표시 · 도구 막대 · 하단 ✏️ 그리기 칸 우클릭에서 켜고 끈다)
+    show_measure_labels = True
     LANDMARK_HOVER_PX = 28
 
     def flash_landmark(self, index, seconds=1.8):
@@ -2005,7 +2009,11 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 continue
             kind = ann["type"]
             pts = [self._image_to_screen_f(p) for p in ann["pts"]]
-            lines = self._annotation_text(ann)
+            # 숫자를 끄면 선 · 도형만 그린다 (화살표 · 텍스트 주석은 글자가 본체라 그대로)
+            if self.show_measure_labels or kind in ("arrow", "text", "cursor3d"):
+                lines = self._annotation_text(ann)
+            else:
+                lines = [ann["name"]] if ann.get("name") else []
             custom = QColor(ann["color"]) if ann.get("color") else None
             width = 3 if ann.get("id") in self._selected_ids else 2
 

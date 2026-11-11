@@ -641,6 +641,7 @@ class MainWindow(QMainWindow):
         self._init_ui_scale_menu(view_menu)
         self._init_arrow_menu(view_menu)
         self._init_link_menu(view_menu)
+        self._init_measure_label_action(view_menu)
         self._init_landmark_display_menu(view_menu)
         bar_action = view_menu.addAction("▤ 영상 오른쪽 슬라이스 막대")
         bar_action.setCheckable(True)
@@ -946,7 +947,9 @@ class MainWindow(QMainWindow):
                        self._act_sync_window, self._act_value_lens):
             view_bar.addAction(action)
         view_bar.addSeparator()
-        for action in (self._act_key, self._act_key_view, self._act_landmarks, self._act_tile):
+        # 🔢 측정 숫자 토글은 View 메뉴(_init_menubar)에서 만든 것을 그대로 쓴다 (단축키 N 하나만)
+        for action in (self._act_key, self._act_key_view, self._act_measure_labels,
+                       self._act_landmarks, self._act_tile):
             view_bar.addAction(action)
         self._tile_grid = QComboBox()
         self._tile_grid.addItems([f"{n}x{n}" for n in range(2, 7)])
@@ -1130,11 +1133,22 @@ class MainWindow(QMainWindow):
                       ("사각", "rect", V.TOOL_RECT), ("타원", "ellipse", V.TOOL_ELLIPSE),
                       ("자유 ROI", "roi", V.TOOL_ROI), ("면적", "area", V.TOOL_AREA),
                       ("화살표", "arrow", V.TOOL_ARROW), ("텍스트", "text", V.TOOL_TEXT)]
+        # ✏️ 그리기 칸 우클릭 메뉴 — 측정 관련 기능과 단축키를 한곳에
+        extras = [
+            ("🔢 측정 숫자 표시", "N", self.toggle_measure_labels,
+             lambda: DicomViewport.show_measure_labels),
+            ("📍 랜드마크 표시", "", self._toggle_landmarks,
+             lambda: DicomViewport.landmark_display != "hidden"),
+            None,
+            ("📐 ROI Manager", "Ctrl+Shift+M", self._toggle_roi_manager, None),
+            ("📍 랜드마크 목록…", "Shift+F", self.show_landmark_list, None),
+        ]
         self._drag_pads = DragPadStrip(
             self._target_viewport, self._statusbar,
             draw_tools=draw_tools,
             set_tool=lambda t: self._set_tool_all(t if t is not None else V.TOOL_SELECT),
-            current_tool=lambda: getattr(self, "_current_tool_id", None))
+            current_tool=lambda: getattr(self, "_current_tool_id", None),
+            extras=extras)
         self._drag_pads.refresh_tool()
         self._drag_pads.adjustSize()
         self._pad_watcher = _GeometryWatcher(self._place_drag_pads, self)
@@ -2972,6 +2986,38 @@ class MainWindow(QMainWindow):
             vp.refresh_slice_bar()
             vp.update()
         self._statusbar.showMessage("슬라이스 막대: " + ("켬" if on else "끔"), 4000)
+
+    def _init_measure_label_action(self, menu):
+        """View ▸ 🔢 측정 숫자 표시 — ROI 통계가 영상을 가릴 때 끈다 (선·도형은 남는다)"""
+        on = self._settings.value("view/measure_labels", True, type=bool)
+        DicomViewport.show_measure_labels = bool(on)
+        action = QAction("🔢 측정 숫자 표시", self)
+        action.setCheckable(True)
+        action.setChecked(bool(on))
+        action.setShortcut(QKeySequence("N"))
+        action.setToolTip("ROI · 거리 · 각도의 숫자(Area · Mean · SD …)를 보이거나 숨깁니다 (N)\n"
+                          "끄면 선과 도형만 남아 영상이 가려지지 않습니다")
+        action.triggered.connect(self._set_measure_labels)
+        menu.addAction(action)
+        self._act_measure_labels = action
+
+    def _set_measure_labels(self, on):
+        DicomViewport.show_measure_labels = bool(on)
+        self._settings.setValue("view/measure_labels", bool(on))
+        action = getattr(self, "_act_measure_labels", None)
+        if action is not None and action.isChecked() != bool(on):
+            action.setChecked(bool(on))
+        for vp in self._all_viewports():
+            vp.update()
+        self._statusbar.showMessage("측정 숫자: " + ("보임" if on else "숨김 — 선만 남음"), 4000)
+
+    def toggle_measure_labels(self):
+        self._set_measure_labels(not DicomViewport.show_measure_labels)
+
+    def _toggle_landmarks(self):
+        """랜드마크를 영상에서 보이거나 숨기기 (자세한 단계는 View ▸ 📍 랜드마크 표시)"""
+        hidden = DicomViewport.landmark_display == "hidden"
+        self._set_landmark_display("subtle" if hidden else "hidden")
 
     def _set_landmark_display(self, mode):
         DicomViewport.landmark_display = mode

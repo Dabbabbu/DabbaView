@@ -77,6 +77,7 @@ class TapPad(QLabel):
     """끌지 않고 한 번 누르는 칸 (원본 W/L · 그리기)"""
 
     clicked = pyqtSignal()
+    right_clicked = pyqtSignal()
 
     def __init__(self, text, tip, width=116, parent=None):
         super().__init__(text, parent)
@@ -90,6 +91,8 @@ class TapPad(QLabel):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
+        elif event.button() == Qt.RightButton:
+            self.right_clicked.emit()
 
     def set_on(self, on):
         self.setProperty("on", "true" if on else "false")
@@ -105,12 +108,15 @@ class DragPadStrip(QWidget):
     set_tool    → 도구를 바꾸는 함수, current_tool → 지금 도구 번호를 돌려주는 함수
     """
 
-    def __init__(self, target, parent=None, draw_tools=(), set_tool=None, current_tool=None):
+    def __init__(self, target, parent=None, draw_tools=(), set_tool=None, current_tool=None,
+                 extras=()):
         super().__init__(parent)
         self.target = target
         self._draw_tools = list(draw_tools)
         self._set_tool = set_tool
         self._current_tool = current_tool
+        # 우클릭 메뉴에 넣을 것들: (글자, 단축키, 실행할 함수, 켜짐 여부 함수 또는 None)
+        self._extras = list(extras)
         self.setObjectName("DragPadStrip")
         self.setStyleSheet(PAD_STYLE)
         layout = QHBoxLayout(self)
@@ -139,6 +145,8 @@ class DragPadStrip(QWidget):
         # 그리기 — 눌러서 측정 도구 고르기
         self.draw = TapPad("✏️ 그리기", "측정 도구 고르기 — 거리 · 각도 · 사각 · 타원 · 자유 등")
         self.draw.clicked.connect(self._open_draw_menu)
+        self.draw.right_clicked.connect(self._open_draw_extras)
+        self.draw.setToolTip(self.draw.toolTip() + "\n우클릭: 측정 숫자 · 랜드마크 표시 · 모두 지우기")
         layout.addWidget(self.draw)
         if not self._draw_tools:
             self.draw.hide()
@@ -159,6 +167,24 @@ class DragPadStrip(QWidget):
             menu.addSeparator()
             off = menu.addAction(icons.icon("select"), "그리기 끄기 (Select로)")
             off.triggered.connect(lambda: self._choose_tool(None))
+        pos = self.draw.mapToGlobal(self.draw.rect().topLeft())
+        menu.exec_(pos - QPoint(0, menu.sizeHint().height() + 2))
+
+    def _open_draw_extras(self):
+        """✏️ 그리기 칸 우클릭 — 측정 관련 기능과 단축키를 한곳에"""
+        if not self._extras:
+            return
+        menu = QMenu(self)
+        for entry in self._extras:
+            if entry is None:
+                menu.addSeparator()
+                continue
+            label, shortcut, run, checked = entry
+            action = menu.addAction(f"{label}\t{shortcut}" if shortcut else label)
+            if checked is not None:
+                action.setCheckable(True)
+                action.setChecked(bool(checked()))
+            action.triggered.connect(lambda _c=False, fn=run: fn())
         pos = self.draw.mapToGlobal(self.draw.rect().topLeft())
         menu.exec_(pos - QPoint(0, menu.sizeHint().height() + 2))
 
