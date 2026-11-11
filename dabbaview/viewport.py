@@ -32,7 +32,7 @@ from PyQt5.QtGui import (QImage, QPixmap, QPainter, QPen, QColor, QFont,
 
 from . import __version__, dicom_info
 from .annotations import ROI_TYPES, AnnotationStore, image_key
-from .annotation_edit import AnnotationEditMixin, fmt_area, fmt_length
+from .annotation_edit import AnnotationEditMixin, PenSettings, fmt_area, fmt_length, simplify_polyline
 from . import mouse_feel
 from .slice_bar import SliceScrollBar, WIDTH as SLICE_BAR_W
 from . import roi_tools
@@ -108,11 +108,12 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     TOOL_PROFILE = 15    # 라인 프로파일
     TOOL_RECT = 16       # 사각형 ROI
     TOOL_PATH = 17       # 다중 점 경로 길이
+    TOOL_PEN = 18        # ✎ 프리드로잉 (설명용 자유 선, 측정 없음)
 
     # 좌클릭 드래그가 '그리기'인 도구 (더블클릭을 Fit으로 해석하지 않음)
     DRAWING_TOOLS = (TOOL_MEASURE, TOOL_ANGLE, TOOL_ROI, TOOL_AREA, TOOL_ARROW,
                      TOOL_ELLIPSE, TOOL_TEXT, TOOL_COBB, TOOL_LANDMARK, TOOL_PROFILE,
-                     TOOL_RECT, TOOL_PATH)
+                     TOOL_RECT, TOOL_PATH, TOOL_PEN)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -880,6 +881,11 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             # 누른 곳 = 화살촉, 드래그한 끝 = 꼬리
             self._draft = {"type": "arrow", "pts": [img_pos, img_pos]}
 
+        elif tool == self.TOOL_PEN and img_pos:
+            # 누른 채 끌어서 자유롭게 그림. Shift: 직선
+            self._draft = {"type": "pen", "pts": [img_pos], "straight": shift}
+            self._draft.update(PenSettings.stroke())
+
         elif tool == self.TOOL_TEXT and img_pos:
             self._add_text_annotation(img_pos)
 
@@ -954,6 +960,16 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             last = self._image_to_screen_f(draft["pts"][-1])
             if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 2:
                 draft["pts"].append(img_pos)
+        elif draft and draft["type"] == "pen" and img_pos:
+            if draft.get("straight"):
+                if len(draft["pts"]) == 1:
+                    draft["pts"].append(img_pos)
+                else:
+                    draft["pts"][-1] = img_pos
+            else:
+                last = self._image_to_screen_f(draft["pts"][-1])
+                if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 1.5:
+                    draft["pts"].append(img_pos)
         elif draft and draft["type"] == "rect" and img_pos:
             if draft.get("square"):
                 sp = self._spacing() or (1.0, 1.0)
@@ -1037,6 +1053,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                     self._draft.pop("press", None)
             elif kind == "arrow":
                 self._finish_arrow()
+            elif kind == "pen":
+                self._finish_pen()
             elif kind == "profile":
                 self._finish_profile()
             elif kind == "cobb" and len(self._draft["pts"]) == 4:
@@ -1653,6 +1671,63 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._add_annotation(ann)
         self.status_message.emit(" | ".join(self._annotation_text(ann)))
 
+    def _finish_pen(self):
+        """✎ 획 끝: 점을 줄여 저장 (한 점만 찍었으면 점 하나로 남김)"""
+        draft, self._draft = self._draft, None
+        pts = [tuple(p) for p in draft["pts"]]
+        if len(pts) >= 3 and not draft.get("straight"):
+            # 화면 픽셀 기준 0.6px 오차로 단순화 (확대해도 모양 유지)
+            zoom = max(self._zoom, 1e-6)
+            pts = simplify_polyline(pts, 0.6 / zoom)
+        ann = {"type": "pen", "pts": pts, "color": draft["color"], "width": draft["width"],
+               "highlighter": bool(draft.get("highlighter"))}
+        self._add_annotation(ann)
+
+    def _pen_qpen(self, ann, selected=False):
+        color = QColor(ann.get("color") or PenSettings.color)
+        width = float(ann.get("width", 3))
+        if ann.get("highlighter"):
+            color.setAlpha(110)
+            width = max(width * 3, 10)
+        if selected:
+            width += 1
+        pen = QPen(color, width)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        return pen
+
+    def _draw_pen_stroke(self, painter, pts, pen):
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        if len(pts) == 1:
+            dot = QPen(pen)
+            dot.setWidthF(max(pen.widthF() * 1.5, 4))
+            painter.setPen(dot)
+            painter.drawPoint(pts[0])
+        else:
+            path = QPainterPath(pts[0])
+            for p in pts[1:]:
+                path.lineTo(p)
+            painter.drawPath(path)
+        painter.restore()
+
+    def pen_annotations_here(self):
+        return [ann for ann in self.annotations_here() if ann.get("type") == "pen"]
+
+    def clear_pen_annotations(self):
+        """이 영상의 ✎ 펜 획만 지우기 (측정 · ROI는 그대로). 지운 개수"""
+        key = self._image_key()
+        pens = self.pen_annotations_here()
+        if not key or not pens:
+            return 0
+        with self._store.group():
+            for ann in pens:
+                self._store.remove(key, ann["id"])
+        self.update()
+        return len(pens)
+
     def _finish_ellipse(self):
         draft, self._draft = self._draft, None
         p1, p2 = draft["pts"]
@@ -2082,6 +2157,9 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 mid = (pts[0] + pts[1] + pts[2] + pts[3]) / 4
                 self._draw_label(painter, QPoint(int(mid.x()) + 10, int(mid.y())),
                                  lines, COLOR_COBB, occupied)
+            elif kind == "pen":
+                self._draw_pen_stroke(painter, pts,
+                                      self._pen_qpen(ann, ann.get("id") in self._selected_ids))
             elif kind == "text":
                 font = QFont()
                 font.setPointSize(int(ann.get("size", 14)))
@@ -2144,6 +2222,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         elif kind == "profile":
             painter.setPen(QPen(QColor(255, 200, 0), 2, Qt.DashLine))
             painter.drawLine(pts[0], pts[1])
+        elif kind == "pen":
+            self._draw_pen_stroke(painter, pts, self._pen_qpen(draft))
 
     def _draw_reference_lines(self, painter):
         """다른 뷰포트 시리즈의 위치 (Scout / Reference Line)

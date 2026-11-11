@@ -38,7 +38,7 @@ Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 
 | | |
 |---|---|
 | 🖼 **보기 Viewing** | 2D · Tile · Multi View(최대 4×4) · MPR · 3D Volume, Crosslink · Reference Lines · Sync Scroll, 3D Cursor, Cine 재생 · Phase 보기 |
-| 📏 **측정 Measure** | 거리 · 각도 · Cobb · 면적 · ROI(원 · 사각 · 자유형) · 프로파일 · 랜드마크, ROI Manager, 주석 저장 · 복원 |
+| 📏 **측정 Measure** | 거리 · 각도 · Cobb · 면적 · ROI(원 · 사각 · 자유형) · 프로파일 · 랜드마크 · ✎ Pen 프리드로잉, ROI Manager, 주석 저장 · 복원 |
 | ❤️ **Cardiac MRI** | EF · 심근 두께 · Bull's-eye, T1/T2 mapping, Perfusion, Flow(Qp/Qs), LGE 정량 |
 | 🧪 **ACR QC** | 대형 팬텀 7항목 자동 측정, 수동 절차와 같은 단계별 증빙 46장, PDF · DOCX · XLSX 보고서, **DICOM Secondary Capture** 내보내기, 추이 그래프 |
 | 🤖 **AI** | TotalSegmentator · MONAI · nnU-Net · MedSAM · SAM, 라벨 편집, DICOM SEG 입출력 |
@@ -105,7 +105,7 @@ Python · PyQt5로 만들어 **macOS(.app)와 Windows(.exe)** 로 빌드되며, 
 - **Compare**: 같은 환자의 다른 날짜 검사를 나란히 비교 (슬라이스 간격을 유지하며 함께 스크롤)
 
 ### 측정 / 주석
-- 거리, 각도, **Cobb 각**, **Freehand ROI**, **타원 ROI**(면적·Mean·SD·Min·Max), Freehand 면적, 2D 화살표(라벨), **텍스트 메모**(크기·색상)
+- 거리, 각도, **Cobb 각**, **Freehand ROI**, **타원 ROI**(면적·Mean·SD·Min·Max), Freehand 면적, 2D 화살표(라벨), **텍스트 메모**(크기·색상), **✎ Pen 프리드로잉**(설명용 자유 선 · 직선 · 형광펜, 색·굵기 선택, 획 단위 이동·삭제·되돌리기)
 - **3D Cursor**: 클릭 위치의 환자 좌표 (R/L, A/P, S/I). Crosslink 여부와 관계없이 같은 좌표계의 다른 칸·MPR에도 같은 위치를 표시 (각 시리즈의 픽셀 값, 슬라이스에서 벗어나면 Δ mm)
 - **Pixel Probe**: 상태바에 좌표(x, y, z mm)와 픽셀 값 (CT: HU, MR: SI, PET: SUVbw)
 - 측정·주석은 영상(SOPInstanceUID)별로 저장되며 **JSON 저장/불러오기** 가능

@@ -23,10 +23,10 @@ ROI_FILE_VERSION = 1
 
 DEFAULT_COLORS = {"roi": "#ff8c00", "ellipse": "#50ff78", "rect": "#ff5ad2",
                   "distance": "#ffff00", "path": "#ffd24a", "angle": "#00ffff",
-                  "area": "#78dcff", "cobb": "#ffc83c"}
+                  "area": "#78dcff", "cobb": "#ffc83c", "pen": "#ff3b30"}
 TYPE_NAMES = {"roi": "Freehand", "ellipse": "Ellipse", "rect": "Rectangle",
               "distance": "Distance", "path": "Path", "angle": "Angle", "area": "Area",
-              "cobb": "Cobb", "arrow": "Arrow", "text": "Text"}
+              "cobb": "Cobb", "arrow": "Arrow", "text": "Text", "pen": "Pen"}
 
 
 def type_name(ann):

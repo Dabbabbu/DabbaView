@@ -295,6 +295,7 @@ python run.py                   # 또는: python run.py /path/to/dicom/folder
 | 면적 | 9 | mm² |
 | 경로 길이 | Shift+D | mm (더블클릭으로 끝) |
 | 화살표 / 텍스트 | 0 / A | 주석 |
+| ✎ Pen (프리드로잉) | D | 설명용 자유 선 (Shift: 직선, ▾ 색·굵기·형광펜, Shift+Backspace: 이 영상 펜 지우기) |
 | 3D Cursor | 6 | 환자 좌표 |
 | HU Lens | L | 커서 옆 픽셀 값 |
 
@@ -477,6 +478,7 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | 7 | 돋보기 | 8 | Freehand ROI |
 | E | 타원 ROI (Shift: 원) | 9 | 면적 |
 | 0 | 화살표 | A | 텍스트 메모 |
+| D | ✎ Pen 프리드로잉 (Shift: 직선) | Shift+Backspace | 이 영상의 펜 획 지우기 |
 | V / H | 상하 / 좌우 반전 | [ / ] | 왼쪽 / 오른쪽 90° 회전 |
 | I | 흑백 반전 | Shift+R | 회전·반전 초기화 |
 | C | Crosslink (스캔 범위) | L | HU Lens |

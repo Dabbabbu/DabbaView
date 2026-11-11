@@ -19,7 +19,44 @@ from . import dicom_info, roi_tools
 from .annotations import ROI_TYPES
 
 LINE_TYPES = ("distance", "arrow", "path", "angle", "cobb")
-EDITABLE_TYPES = LINE_TYPES + ROI_TYPES + ("area", "text")
+EDITABLE_TYPES = LINE_TYPES + ROI_TYPES + ("area", "text", "pen")
+
+
+class PenSettings:
+    """✎ Pen(프리드로잉) 설정 — 모든 뷰포트 공통, 메인 창이 QSettings에서 읽어 넣음
+
+    영상 위에 자유롭게 그려 설명하는 용도라 측정값이 없고, 색 · 굵기 · 형광펜만 고른다.
+    """
+    COLORS = (("빨강", "#ff3b30"), ("노랑", "#ffd60a"), ("초록", "#34c759"),
+              ("파랑", "#32ade6"), ("흰색", "#ffffff"), ("검정", "#000000"))
+    WIDTHS = (("가늘게", 2), ("보통", 3), ("굵게", 5), ("아주 굵게", 8))
+    color = "#ff3b30"
+    width = 3
+    highlighter = False   # 형광펜: 반투명 · 굵게
+
+    @classmethod
+    def stroke(cls):
+        """새 획에 넣을 필드"""
+        return {"color": cls.color, "width": cls.width, "highlighter": cls.highlighter}
+
+
+def simplify_polyline(pts, tolerance=0.5):
+    """Ramer–Douglas–Peucker: 손으로 그린 선의 점 수를 줄임 (tolerance 픽셀 이내 오차)"""
+    if len(pts) < 3:
+        return list(pts)
+    (x0, y0), (x1, y1) = pts[0], pts[-1]
+    dx, dy = x1 - x0, y1 - y0
+    length = math.hypot(dx, dy)
+    best, index = 0.0, 0
+    for i in range(1, len(pts) - 1):
+        px, py = pts[i]
+        d = (abs(dy * (px - x0) - dx * (py - y0)) / length if length > 1e-9
+             else math.hypot(px - x0, py - y0))
+        if d > best:
+            best, index = d, i
+    if best <= tolerance:
+        return [pts[0], pts[-1]]
+    return simplify_polyline(pts[:index + 1], tolerance)[:-1] + simplify_polyline(pts[index:], tolerance)
 
 
 class MeasureSettings:
@@ -136,6 +173,11 @@ class AnnotationEditMixin:
             c = rect.center()
             return (((pos.x() - c.x()) / (rect.width() / 2)) ** 2
                     + ((pos.y() - c.y()) / (rect.height() / 2)) ** 2) <= 1.0
+        if kind == "pen":
+            if len(pts) == 1:
+                return math.hypot(pos.x() - pts[0].x(), pos.y() - pts[0].y()) <= tol + 4
+            tol = max(tol, ann.get("width", 3) / 2 + 3)
+            return any(_seg_dist(pos, a, b) <= tol for a, b in zip(pts, pts[1:]))
         if kind in ("roi", "area"):
             poly = QPolygonF(pts)
             return (poly.containsPoint(pos, Qt.OddEvenFill)

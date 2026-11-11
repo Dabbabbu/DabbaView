@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import (Qt, QSize, QThread, pyqtSignal, QSettings, QObject, QEvent,
                           QVariantAnimation, QEasingCurve, QTimer, QUrl, QPoint)
-from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices, QColor
+from PyQt5.QtGui import QIcon, QKeySequence, QFont, QDesktopServices, QColor, QPixmap
 
 from . import dicom_loader as _dl
 from .dicom_loader import DicomLoader
@@ -864,6 +864,10 @@ class MainWindow(QMainWindow):
             None,
             ("Arrow", V.TOOL_ARROW, "0", "2D 화살표: 가리킬 곳에서 누르고 드래그 → 라벨"),
             ("Text", V.TOOL_TEXT, "A", "텍스트 메모: 클릭 → 내용·크기·색상"),
+            ("✎ Pen", V.TOOL_PEN, "D",
+             "프리드로잉: 영상 위에 누른 채 끌어서 자유롭게 그림 (설명용, 측정 없음)\n"
+             "Shift+드래그: 직선 · 오른쪽 ▾ 에서 색 · 굵기 · 형광펜\n"
+             "Ctrl+Z 되돌리기 · Select로 획을 잡아 옮기기/Delete · ▾ 메뉴에서 이 영상의 펜 모두 지우기"),
             None,
             ("📍 Landmark", V.TOOL_LANDMARK, "F",
              "랜드마크/Fiducial: 클릭한 위치(환자 좌표 mm)에 점 추가 (Esc: Select로)\n"
@@ -887,6 +891,7 @@ class MainWindow(QMainWindow):
             toolbar.addAction(action)
             self._tool_actions[tool_id] = action
         self._tool_actions[V.TOOL_SELECT].setChecked(True)
+        self._init_pen_menu(toolbar)
 
         # 🔍 기능 찾기 — 뷰어 탭 줄(2D View … 3D Volume) 오른쪽 끝에 검색창처럼 (자리가 늘 있음)
         key = QKeySequence(QKeySequence.Find).toString(QKeySequence.NativeText)
@@ -3777,6 +3782,115 @@ class MainWindow(QMainWindow):
         if self._tab_widget.currentWidget() is self._multi_viewport:
             return self._multi_viewport.active_viewport
         return self._viewport
+
+    # ─── ✎ Pen (프리드로잉) 색 · 굵기 · 형광펜 · 지우기 ───
+
+    def _init_pen_menu(self, toolbar):
+        from .annotation_edit import PenSettings
+        PenSettings.color = self._settings.value("pen_color", PenSettings.color, type=str) or PenSettings.color
+        PenSettings.width = self._settings.value("pen_width", PenSettings.width, type=int) or PenSettings.width
+        PenSettings.highlighter = self._settings.value("pen_highlighter", False, type=bool)
+
+        button = QToolButton()
+        button.setText("▾")
+        button.setToolTip("✎ Pen 색 · 굵기 · 형광펜, 펜 획 지우기")
+        button.setPopupMode(QToolButton.InstantPopup)
+        button.setAutoRaise(True)
+        menu = QMenu(button)
+        self._pen_menu = menu
+
+        color_group = QActionGroup(self)
+        self._pen_color_actions = {}
+        for name, value in PenSettings.COLORS:
+            action = QAction(f"■ {name}", self)
+            action.setCheckable(True)
+            action.setChecked(value.lower() == PenSettings.color.lower())
+            pix = QPixmap(14, 14)
+            pix.fill(QColor(value))
+            action.setIcon(QIcon(pix))
+            action.triggered.connect(lambda checked, v=value: self._set_pen_option(color=v))
+            color_group.addAction(action)
+            menu.addAction(action)
+            self._pen_color_actions[value] = action
+        custom = QAction("다른 색…", self)
+        custom.triggered.connect(self._pick_pen_color)
+        menu.addAction(custom)
+        menu.addSeparator()
+
+        width_group = QActionGroup(self)
+        self._pen_width_actions = {}
+        for name, value in PenSettings.WIDTHS:
+            action = QAction(f"{name} ({value}px)", self)
+            action.setCheckable(True)
+            action.setChecked(value == PenSettings.width)
+            action.triggered.connect(lambda checked, v=value: self._set_pen_option(width=v))
+            width_group.addAction(action)
+            menu.addAction(action)
+            self._pen_width_actions[value] = action
+        menu.addSeparator()
+
+        self._pen_highlighter_action = QAction("형광펜 (반투명 · 굵게)", self)
+        self._pen_highlighter_action.setCheckable(True)
+        self._pen_highlighter_action.setChecked(PenSettings.highlighter)
+        self._pen_highlighter_action.toggled.connect(lambda on: self._set_pen_option(highlighter=on))
+        menu.addAction(self._pen_highlighter_action)
+        menu.addSeparator()
+
+        clear_here = QAction("이 영상의 펜 획 모두 지우기", self)
+        clear_here.setShortcut(QKeySequence("Shift+Backspace"))
+        clear_here.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        self._tab_widget.addAction(clear_here)
+        clear_here.triggered.connect(self._clear_pen_here)
+        menu.addAction(clear_here)
+        clear_all = QAction("모든 영상의 펜 획 지우기…", self)
+        clear_all.triggered.connect(self._clear_pen_all)
+        menu.addAction(clear_all)
+
+        button.setMenu(menu)
+        toolbar.addWidget(button)
+
+    def _set_pen_option(self, **changes):
+        from .annotation_edit import PenSettings
+        for key, value in changes.items():
+            setattr(PenSettings, key, value)
+            self._settings.setValue(f"pen_{key}", value)
+        action = self._pen_color_actions.get(str(PenSettings.color).lower())
+        if action is not None:
+            action.setChecked(True)
+        elif "color" in changes:
+            for a in self._pen_color_actions.values():
+                a.setChecked(False)
+        # 펜 옵션을 바꾸면 펜 도구로
+        self._tool_actions[DicomViewport.TOOL_PEN].trigger()
+
+    def _pick_pen_color(self):
+        from PyQt5.QtWidgets import QColorDialog
+        from .annotation_edit import PenSettings
+        color = QColorDialog.getColor(QColor(PenSettings.color), self, "✎ Pen 색")
+        if color.isValid():
+            self._set_pen_option(color=color.name())
+
+    def _clear_pen_here(self):
+        vp = self._target_viewport()
+        n = vp.clear_pen_annotations() if vp is not None else 0
+        self.statusBar().showMessage(f"펜 획 {n}개 지움" if n else "이 영상에 펜 획이 없습니다", 3000)
+
+    def _clear_pen_all(self):
+        store = self._annotation_store
+        pens = [(key, ann) for key, ann in store.all_items() if ann.get("type") == "pen"]
+        if not pens:
+            self.statusBar().showMessage("펜 획이 없습니다", 3000)
+            return
+        if QMessageBox.question(self, "펜 획 지우기",
+                                f"모든 영상의 펜 획 {len(pens)}개를 지울까요? (Ctrl+Z로 되돌릴 수 있음)",
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        with store.group():
+            for key, ann in pens:
+                store.remove(key, ann["id"])
+        for vp in self._all_viewports():
+            vp.update()
+        self.statusBar().showMessage(f"펜 획 {len(pens)}개 지움", 3000)
 
     def _set_tool_all(self, tool):
         V = DicomViewport
