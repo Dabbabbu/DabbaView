@@ -3978,6 +3978,29 @@ class MainWindow(QMainWindow):
             return self._multi_viewport.active_viewport
         return self._viewport
 
+    def _ensure_marks_visible(self, tool):
+        """그리는 도구를 골랐는데 '그린 것'이 숨겨져 있으면 다시 켠다
+
+        아노테이션을 꺼 둔 걸 잊고 그리면 선이 남지 않는 것처럼 보여,
+        도구가 고장 난 줄 알게 된다. 펜을 들었으면 보이기를 바라는 것이므로 켜 준다.
+        """
+        V = DicomViewport
+        if tool not in V.DRAWING_TOOLS:
+            return
+        turned = []
+        if not V.annotations_visible:
+            self._set_annotations_visible(True)
+            turned.append("전체 표시")
+        if tool in (V.TOOL_SCRIBBLE, V.TOOL_ARROW, V.TOOL_TEXT) and not V.show_notes:
+            self._toggle_annotation_part("show_notes")
+            turned.append("화살표 · 메모 · 판서")
+        elif tool not in (V.TOOL_SCRIBBLE, V.TOOL_ARROW, V.TOOL_TEXT) and not V.show_measurements:
+            self._toggle_annotation_part("show_measurements")
+            turned.append("측정 · ROI")
+        if turned:
+            self._statusbar.showMessage(
+                "그린 것이 숨겨져 있어 다시 켰습니다 — " + " · ".join(turned), 6000)
+
     def _tool_button_clicked(self, tool):
         """도구 버튼을 눌렀을 때 — 이미 고른 도구를 다시 누르면 해제(Select로)
 
@@ -3996,6 +4019,7 @@ class MainWindow(QMainWindow):
                 and self._roi_manager.isVisible()):
             self._close_dock(self._roi_manager)   # 이미 고른 ROI 도구를 한 번 더 누름 → ROI Manager 닫기
         self._current_tool_id = tool
+        self._ensure_marks_visible(tool)   # 숨겨 둔 채로 그리면 '안 그려진다'고 오해한다
         self._seg.set_tool(None)  # 툴바 도구를 고르면 세그멘테이션 도구 해제
         for vp in self._all_viewports():
             vp.set_tool(tool)

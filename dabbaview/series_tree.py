@@ -287,19 +287,29 @@ class ClickToLoadMixin:
         mime.setText(uid)
         drag = QDrag(self)
         drag.setMimeData(mime)
-        pixmap = self._drag_pixmap(uid)
+        try:
+            pixmap = self._drag_pixmap(uid)
+        except Exception:      # noqa: BLE001 - 미리보기는 곁다리, 드래그를 막으면 안 된다
+            pixmap = None
         if pixmap is not None:
             drag.setPixmap(pixmap)
             drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
         drag.exec_(Qt.CopyAction)
 
     def _drag_pixmap(self, uid):
-        """끌고 다닐 그림: 썸네일에 테두리를 두른 것 (썸네일이 아직 없으면 None)"""
+        """끌고 다닐 그림: 썸네일에 테두리를 두른 것 (썸네일이 아직 없으면 None)
+
+        여기서 무슨 일이 나더라도 드래그 자체는 되어야 하므로 실패하면 None을 돌려준다.
+        """
         thumb = None
         getter = getattr(self, "thumbnail_for", None)
         if callable(getter):
             thumb = getter(uid)
         if thumb is None or thumb.isNull():
+            return None
+        if isinstance(thumb, QImage):      # 썸네일 저장소는 QImage를 담는다
+            thumb = QPixmap.fromImage(thumb)
+        if thumb.isNull():
             return None
         scaled = thumb.scaled(self.DRAG_THUMB_PX, self.DRAG_THUMB_PX,
                               Qt.KeepAspectRatio, Qt.SmoothTransformation)
