@@ -193,11 +193,29 @@ class PhaseBar(QWidget):
         self.refresh()
 
     # ─── 내부 ───
+    @staticmethod
+    def _clear_strip(layout, group):
+        """띠를 완전히 비운다 — 버튼뿐 아니라 끝의 빈칸(stretch)까지
+
+        전에는 번호 버튼만 지우고 ALL 버튼과 빈칸은 두어서, 시리즈를 바꿀 때마다
+        ALL이 하나씩 쌓였다 (열한 번 바꾸면 ALL이 열한 개).
+        """
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is None:
+                continue
+            if group is not None:
+                group.removeButton(widget)
+            widget.setParent(None)
+            widget.deleteLater()
+
     def _rebuild(self):
-        for b in self._buttons:
-            self._group.removeButton(b)
-            b.setParent(None)
+        self._clear_strip(self._row_layout, self._group)
+        self._clear_strip(self._slice_row_layout, self._slice_group)
         self._buttons = []
+        self._slice_buttons = []
+        self.all_button = None
         if self._map is None:
             self.hide()
             return
@@ -224,10 +242,6 @@ class PhaseBar(QWidget):
         self._row_layout.addStretch(1)
 
         # 윗줄: 슬라이스(위치) 번호
-        for b in self._slice_buttons:
-            self._slice_group.removeButton(b)
-            b.setParent(None)
-        self._slice_buttons = []
         for i in range(self._map.n_positions):
             b = QPushButton(str(i + 1))
             b.setCheckable(True)
@@ -295,7 +309,8 @@ class PhaseBar(QWidget):
             # 🔒 꺼짐: 한 슬라이스의 위상을 다 돌면 다음 슬라이스로 (전체 순서)
             if self.slice_lock.isChecked():
                 return self._map.step_phase(index, 1 if direction >= 0 else -1)
-            return self._map.step_sequence(index, direction)
+            # 끝까지 갔으면 처음으로 (계속 반복 재생)
+            return self._map.step_sequence(index, direction, wrap=True)
         if self._all_mode and kind == "wheel":
             return None                # ALL: 예전처럼 영상 순서대로
         if self.slice_lock.isChecked():
@@ -325,9 +340,10 @@ class PhaseBar(QWidget):
                 b.setProperty("current", current)
                 b.style().unpolish(b)
                 b.style().polish(b)
-        self.all_button.blockSignals(True)
-        self.all_button.setChecked(self._all_mode)
-        self.all_button.blockSignals(False)
+        if self.all_button is not None:
+            self.all_button.blockSignals(True)
+            self.all_button.setChecked(self._all_mode)
+            self.all_button.blockSignals(False)
         # 윗줄: 지금 슬라이스 위치를 켜 둔다 (Phase와 같은 모양)
         for i, b in enumerate(self._slice_buttons):
             want = i == position

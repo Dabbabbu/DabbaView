@@ -64,8 +64,12 @@ class PhaseMap:
         position = max(0, min(self.n_positions - 1, where[0] + direction))
         return self.slice_at(position, where[1])
 
-    def step_sequence(self, index, direction):
-        """전체 순서: 이 위치의 위상을 끝까지 → 다음 위치의 첫 위상 (끝에서는 멈춤)"""
+    def step_sequence(self, index, direction, wrap=False):
+        """전체 순서: 이 위치의 위상을 끝까지 → 다음 위치의 첫 위상
+
+        wrap=True면 끝에서 처음으로 돌아간다 (시네 반복 재생).
+        방향키 · 휠은 wrap=False라 끝에서 멈춘다 (실수로 처음으로 튀지 않게).
+        """
         order = getattr(self, "_sequence", None)
         if order is None:
             order = [i for _key, i in sorted((v, i) for i, v in self.of_slice.items())]
@@ -74,7 +78,12 @@ class PhaseMap:
         n = self._sequence_at.get(index)
         if n is None:
             return None
-        return order[max(0, min(len(order) - 1, n + direction))]
+        target = n + direction
+        if wrap:
+            target %= len(order)
+        else:
+            target = max(0, min(len(order) - 1, target))
+        return order[target]
 
     def step_phase(self, index, direction=1):
         """위치는 그대로, 위상만 (끝에서 처음으로 돌아감 - 시네)"""
