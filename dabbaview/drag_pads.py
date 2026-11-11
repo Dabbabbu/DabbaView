@@ -154,35 +154,40 @@ class DragPadStrip(QWidget):
         self.draw = TapPad("✏️ 그리기", "측정 도구 고르기 — 거리 · 각도 · 사각 · 타원 · 자유 등")
         self.draw.clicked.connect(self._open_draw_menu)
         self.draw.right_clicked.connect(self._open_draw_extras)
-        self.draw.setToolTip(self.draw.toolTip() + "\n우클릭: 측정 숫자 · 랜드마크 표시 · 모두 지우기")
+        self.draw.setToolTip(self.draw.toolTip()
+                             + "\n그리는 중에 누르면 해제 · 우클릭: 그 도구의 기능과 단축키")
         layout.addWidget(self.draw)
         if not self._draw_tools:
             self.draw.hide()
 
     # ── 그리기 칸 ──
     def _open_draw_menu(self):
-        """칸 바로 위에 도구 목록. 그리는 중이면 '그리기 끄기'도 같이"""
+        """그리는 중이면 눌러서 끄고, 아니면 칸 바로 위에 도구 목록
+
+        도구 막대 버튼과 같은 느낌 — 고른 것을 다시 누르면 해제된다.
+        도구를 바꾸려면 끄고 다시 누르거나, 도구 막대에서 고르면 된다.
+        """
         if not self._draw_tools or self._set_tool is None:
             return
         now = self._current_tool() if self._current_tool else None
+        if any(tool_id == now for _l, _i, tool_id in self._draw_tools):
+            self._choose_tool(None)        # 그리는 중 → 해제
+            return
         menu = QMenu(self)
         for label, icon_name, tool_id in self._draw_tools:
             action = menu.addAction(icons.icon(icon_name), label)
             action.setCheckable(True)
             action.setChecked(tool_id == now)
             action.triggered.connect(lambda _=False, t=tool_id: self._choose_tool(t))
-        if any(tool_id == now for _l, _i, tool_id in self._draw_tools):
-            menu.addSeparator()
-            off = menu.addAction(icons.icon("select"), "그리기 끄기 (Select로)")
-            off.triggered.connect(lambda: self._choose_tool(None))
         pos = self.draw.mapToGlobal(self.draw.rect().topLeft())
         menu.exec_(pos - QPoint(0, menu.sizeHint().height() + 2))
 
     def _open_draw_extras(self):
-        """✏️ 그리기 칸 우클릭 — 도구 막대 ✎ 버튼과 같은 '아노테이션 표시' 메뉴"""
+        """✏️ 그리기 칸 우클릭 — 지금 고른 도구의 기능과 단축키"""
         if self._extras_menu is None:
             return
-        menu = self._extras_menu(self)
+        now = self._current_tool() if self._current_tool else None
+        menu = self._extras_menu(self, now)
         if menu is None:
             return
         pos = self.draw.mapToGlobal(self.draw.rect().topLeft())

@@ -965,25 +965,14 @@ class MainWindow(QMainWindow):
                        self._act_landmarks, self._act_tile):
             view_bar.addAction(action)
         # ✎ 버튼 우클릭 → 종류별로 켜고 끄는 메뉴
-        view_bar.setContextMenuPolicy(Qt.PreventContextMenu)   # Qt 기본 '도구 모음 목록' 메뉴 막기
         self._init_roi_stat_fields()
         DicomViewport.ask_landmark_name = self._settings.value(
             "view/ask_landmark_name", True, type=bool)
-        lens_button = view_bar.widgetForAction(self._act_value_lens)
-        if lens_button is not None:   # HU Lens 우클릭 → ROI에 보일 값 고르기
-            lens_button.setContextMenuPolicy(Qt.CustomContextMenu)
-            lens_button.customContextMenuRequested.connect(
-                lambda pos, b=lens_button: self.roi_stats_menu(b).exec_(b.mapToGlobal(pos)))
-        lm_list_button = view_bar.widgetForAction(self._act_landmarks)
-        if lm_list_button is not None:   # 📍 Landmarks 버튼 우클릭 = 핀 아이콘 우클릭과 같은 메뉴
-            lm_list_button.setContextMenuPolicy(Qt.CustomContextMenu)
-            lm_list_button.customContextMenuRequested.connect(
-                lambda pos, b=lm_list_button: self.landmark_menu(b).exec_(b.mapToGlobal(pos)))
-        annot_button = view_bar.widgetForAction(self._act_annotations)
-        if annot_button is not None:
-            annot_button.setContextMenuPolicy(Qt.CustomContextMenu)
-            annot_button.customContextMenuRequested.connect(
-                lambda pos, b=annot_button: self.annotation_menu(b).exec_(b.mapToGlobal(pos)))
+        # 둘째 줄도 막대 전체가 우클릭을 받는다 — QToolButton에 직접 걸면 버튼이
+        # 오른쪽 버튼을 삼켜 메뉴가 뜨지 않았다 (4.6.11 HU Lens · 4.6.12 Landmarks가 그랬다)
+        self._view_bar = view_bar
+        view_bar.setContextMenuPolicy(Qt.CustomContextMenu)
+        view_bar.customContextMenuRequested.connect(self._view_bar_menu)
         self._tile_grid = QComboBox()
         self._tile_grid.addItems([f"{n}x{n}" for n in range(2, 7)])
         self._tile_grid.setCurrentText("4x4")
@@ -1168,7 +1157,7 @@ class MainWindow(QMainWindow):
             draw_tools=draw_tools,
             set_tool=lambda t: self._set_tool_all(t if t is not None else V.TOOL_SELECT),
             current_tool=lambda: getattr(self, "_current_tool_id", None),
-            extras_menu=self.annotation_menu)   # 우클릭 = 도구 막대 ✎ 버튼과 같은 메뉴
+            extras_menu=self.tool_menu)   # 우클릭 = 그 도구의 기능과 단축키
         self._drag_pads.refresh_tool()
         self._drag_pads.adjustSize()
         self._pad_watcher = _GeometryWatcher(self._place_drag_pads, self)
@@ -4032,7 +4021,7 @@ class MainWindow(QMainWindow):
     def roi_stats_menu(self, parent):
         """HU Lens 버튼 우클릭 — ROI 상자에 어떤 값을 보일지 고르기"""
         menu = QMenu(parent)
-        header = menu.addAction("ROI에 보일 값")
+        header = menu.addAction("ROI 상자 · HU Lens에 보일 값")
         header.setEnabled(False)
         for key in DicomViewport.ROI_STAT_ORDER:
             action = menu.addAction(DicomViewport.ROI_STAT_LABELS[key])
@@ -4070,13 +4059,78 @@ class MainWindow(QMainWindow):
         if bar is None:
             return
         action = bar.actionAt(pos)
-        V = DicomViewport
         tool = next((t for t, a in self._tool_actions.items() if a is action), None)
-        if tool == V.TOOL_LANDMARK:
+        self.tool_menu(bar, tool).exec_(bar.mapToGlobal(pos))
+
+    def _view_bar_menu(self, pos):
+        """둘째 줄 우클릭 — 누른 자리의 버튼이 가진 기능들"""
+        bar = getattr(self, "_view_bar", None)
+        if bar is None:
+            return
+        action = bar.actionAt(pos)
+        if action is self._act_value_lens:
+            menu = self.roi_stats_menu(bar)       # HU Lens: 어떤 값을 보일지
+        elif action is self._act_landmarks:
             menu = self.landmark_menu(bar)
         else:
-            menu = self.annotation_menu(bar)   # 그 밖의 자리는 보기 끄고 켜기 메뉴
+            menu = self.annotation_menu(bar)
         menu.exec_(bar.mapToGlobal(pos))
+
+    def tool_menu(self, parent, tool=None):
+        """도구 하나의 기능과 단축키를 모은 메뉴 (도구 막대 · 하단 그리기 칸 공용)
+
+        맨 위에 '도구 이름 (단축키)'을 적어 두어, 무엇의 메뉴인지 바로 알 수 있게 한다.
+        """
+        V = DicomViewport
+        if tool == V.TOOL_SCRIBBLE:
+            menu = self.scribble_menu(parent)
+        elif tool == V.TOOL_LANDMARK:
+            menu = self.landmark_menu(parent)
+        else:
+            menu = self.annotation_menu(parent)
+        action = self._tool_actions.get(tool)
+        if action is not None:
+            title = action.text().lstrip("⬚📍✍ ").strip()
+            key = action.shortcut().toString()
+            header = QAction(f"{title}{f'  ({key})' if key else ''}", menu)
+            header.setEnabled(False)
+            first = menu.actions()[0] if menu.actions() else None
+            menu.insertAction(first, header)
+            if first is not None:
+                menu.insertSeparator(first)
+        return menu
+
+    def scribble_menu(self, parent):
+        """✍ 판서 — 색 · 굵기 · 지우기 (각각 단축키를 함께)"""
+        from .viewport import DRAW_COLORS
+        menu = QMenu(parent)
+        keys = {"red": "Ctrl+R", "blue": "Ctrl+B", "green": "Ctrl+G", "white": "Ctrl+W"}
+        for key, label, _color in DRAW_COLORS:
+            action = menu.addAction(f"{label}\t{keys[key]}")
+            action.setCheckable(True)
+            action.setChecked(key == DicomViewport.draw_color)
+            action.triggered.connect(lambda _c=False, k=key: self.set_draw_color(k))
+        menu.addSeparator()
+        width = DicomViewport.draw_width
+        thicker = menu.addAction(f"선 굵게 (지금 {width})\tCtrl+]")
+        thicker.setEnabled(width < DicomViewport.DRAW_WIDTH_MAX)
+        thicker.triggered.connect(lambda: self.nudge_draw_width(1))
+        thinner = menu.addAction(f"선 얇게 (지금 {width})\tCtrl+[")
+        thinner.setEnabled(width > DicomViewport.DRAW_WIDTH_MIN)
+        thinner.triggered.connect(lambda: self.nudge_draw_width(-1))
+        hint = menu.addAction("판서 중 Ctrl(⌘)+휠로도 굵기 조절")
+        hint.setEnabled(False)
+        menu.addSeparator()
+        show = menu.addAction("↗ 화살표 · 텍스트 · ✍ 판서 보이기")
+        show.setCheckable(True)
+        show.setChecked(DicomViewport.show_notes)
+        show.triggered.connect(lambda: self._toggle_annotation_part("show_notes"))
+        vp = self._target_viewport()
+        n = len(list(vp.annotations_here())) if vp is not None else 0
+        clear = menu.addAction(f"🗑 이 슬라이스의 측정 · 판서 지우기 ({n}개)")
+        clear.setEnabled(n > 0)
+        clear.triggered.connect(lambda: self._clear_slice_annotations(vp))
+        return menu
 
     def landmark_menu(self, parent):
         """📍 Landmark 버튼 우클릭 — 표시 · 목록 · 이 시리즈의 점 지우기"""
