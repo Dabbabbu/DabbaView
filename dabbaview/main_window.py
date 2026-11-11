@@ -3961,6 +3961,12 @@ class MainWindow(QMainWindow):
         action = self._tool_actions.get(tool)     # 하단 칸에서 골랐을 때도 도구 막대에 표시
         if action is not None and not action.isChecked():
             action.setChecked(True)
+        # 도구를 고른 뒤에는 영상으로 포커스를 돌려준다.
+        # 안 그러면 포커스가 도구 막대 버튼에 남아 Ctrl+Z · 방향키 · Space가 먹지 않는다
+        # (이 단축키들은 입력칸의 Ctrl+Z를 건드리지 않으려고 영상 영역으로 범위를 좁혀 뒀다)
+        target = self._target_viewport()
+        if target is not None:
+            target.setFocus()
         pads = getattr(self, "_drag_pads", None)  # 하단 '✏️ 그리기' 칸도 따라가게
         if pads is not None:
             pads.refresh_tool()
