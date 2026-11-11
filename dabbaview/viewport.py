@@ -1956,7 +1956,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             if self._overlay_items.get("orientation", True):
                 self._draw_orientation(painter)
             if self._overlay_items.get("phase", True):
-                self._draw_phase(painter)
+                pass   # 위상 인코딩 방향은 왼쪽 아래 데모그래픽으로 옮김 (4.6.9)
             self._draw_overlay(painter)
             self._draw_colorbars(painter)
             has_scale_bar = self._draw_scale_bar(painter)
@@ -2344,11 +2344,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         spots = {"right": (right, rect.right() - 6, rect.center().y(), "r"),
                  "left": (-right, rect.left() + 6, rect.center().y(), "l"),
                  "bottom": (down, rect.center().x(), rect.bottom() - 6, "b"),
-                 "top": (-down, rect.center().x(),
-                         max(rect.top() + 6, 10 + fm.height()
-                             if self._overlay_items.get("phase", True) and self._phase_direction() else 0)
-                         + fm.ascent(),
-                         "t")}   # 위상 표시(맨 위 가운데) 아래로
+                 "top": (-down, rect.center().x(), rect.top() + 6 + fm.ascent(), "t")}
         for _name, (vec, x, y, side) in spots.items():
             text = self._direction_letters(vec)
             w = fm.horizontalAdvance(text)
@@ -2597,8 +2593,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             self._draw_text_shadow(painter, right - fm.horizontalAdvance(line), y, line)
             y += line_h
 
+        bl = list(corners["bl"])
+        # 위상 인코딩 방향 — 모션 · 랩어라운드 아티팩트가 번지는 쪽. 영상을 가리지 않게 왼쪽 아래에
+        phase = self._phase_direction() if self._overlay_items.get("phase", True) else None
+        if phase is not None:
+            value, horizontal, letters = phase
+            bl.append(f"Phase enc: {letters} {'↔' if horizontal else '↕'} ({value})")
         y = self.height() - margin - fm.descent()
-        for line in reversed(corners["bl"]):
+        for line in reversed(bl):
             self._draw_text_shadow(painter, margin, y, line)
             y -= line_h
 
