@@ -555,12 +555,22 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             return
         if mode != "subtle":
             return
-        # 가운데 4px는 비우고 짧은 눈금 네 개만 반투명으로 → 찍은 곳의 영상이 그대로 보임
-        color.setAlpha(150)
-        painter.setPen(QPen(color, 1.2))
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            painter.drawLine(QPointF(p.x() + dx * 4, p.y() + dy * 4),
-                             QPointF(p.x() + dx * 8, p.y() + dy * 8))
+        # 가운데는 비우고 눈금 네 개만 → 찍은 곳의 영상이 그대로 보인다.
+        # 밝은 곳(심장 혈액 풀 등)에서도 묻히지 않게 검은 테두리를 먼저 깔고 그 위에 연두색을 긋는다.
+        ticks = [(QPointF(p.x() + dx * 5, p.y() + dy * 5),
+                  QPointF(p.x() + dx * 12, p.y() + dy * 12))
+                 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+        painter.setPen(QPen(QColor(0, 0, 0, 210), 3.6, Qt.SolidLine, Qt.RoundCap))
+        for a, b in ticks:
+            painter.drawLine(a, b)
+        painter.setPen(QPen(color, 2.0, Qt.SolidLine, Qt.RoundCap))
+        for a, b in ticks:
+            painter.drawLine(a, b)
+        # 가운데 작은 점 (어디를 찍었는지 정확히) — 검은 테두리 + 연두색
+        painter.setPen(QPen(QColor(0, 0, 0, 210), 3.0))
+        painter.drawPoint(p)
+        painter.setPen(QPen(color, 1.6))
+        painter.drawPoint(p)
 
     def _draw_analysis(self, painter):
         """랜드마크 + 라인 프로파일 선"""
@@ -2663,14 +2673,31 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._fit_to_window()
         self.update()
 
-    def capture(self):
-        """현재 화면(오버레이·측정 포함) 캡처. 테두리 강조와 렌즈는 제외"""
+    def capture(self, bare=False):
+        """현재 화면(오버레이 · 측정 · 판서 포함) 캡처
+
+        테두리 강조 · 돋보기 · 오른쪽 슬라이스 막대는 영상이 아니라 조작 장치이므로 빼고 찍는다.
+        bare=True면 글자 오버레이(환자 · 검사 정보)까지 빼고 영상과 그린 것만 남긴다.
+        """
+        bar = getattr(self, "_slice_bar", None)
+        bar_shown = bar is not None and bar.isVisible()
         saved = (self._highlight, self._hover_pos, self._magnifying)
+        overlay_saved = getattr(self, "_show_overlay", None)
         self._highlight, self._hover_pos, self._magnifying = None, None, False
+        if bar_shown:
+            bar.hide()
+        if bare and overlay_saved is not None:
+            self._show_overlay = False
         try:
+            self.repaint()
             return self.grab()
         finally:
             self._highlight, self._hover_pos, self._magnifying = saved
+            if bare and overlay_saved is not None:
+                self._show_overlay = overlay_saved
+            if bar_shown:
+                bar.show()
+            self.update()
 
     @property
     def current_slice(self):
