@@ -370,9 +370,10 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.addStretch()
         self._layout_combo = QComboBox()
-        self._layout_combo.addItems(["2D", "1X1", "1X2", "2X2", "3X3", "Default", "ALL"])
+        self._layout_combo.addItems(["1X1", "1X2", "2X1", "2X2", "2X3", "3X3", "Default", "ALL"])
         self._layout_combo.setToolTip(
-            "2D: 단일 뷰 / 1X1~3X3: Multi View (현재 시리즈부터 순서대로)\n"
+            "한 화면에 몇 칸으로 볼지\n"
+            "1X1: 한 장 크게 / 1X2 · 2X2 …: 그만큼 나눠서 (현재 시리즈부터 순서대로)\n"
             "Default: Hanging Protocol 적용 / ALL: 현재 검사의 모든 시리즈")
         self._layout_combo.activated[str].connect(self._apply_layout_choice)
         header.addWidget(self._layout_combo)
@@ -456,13 +457,18 @@ class MainWindow(QMainWindow):
         page_layout.setSpacing(0)
         page_layout.addWidget(self._phase_bar)
         page_layout.addWidget(self._stack2d, 1)
-        self._tab_widget.addTab(page2d, "2D View")
         self._page2d = page2d
 
-        # 탭 2: 다중 뷰포트
         self._multi_viewport = MultiViewport()
         self._multi_viewport.set_app_settings(self._app_settings)   # 레이아웃 목록 · Auto
-        self._tab_widget.addTab(self._multi_viewport, "Multi View")
+
+        # 탭 1: 뷰어 — 2D와 Multi를 하나로 묶고 '칸 수'로 오간다
+        # 1X1이면 단일 뷰(page2d), 그 밖에는 격자(MultiViewport). 탭을 오가지 않아도 된다
+        self._viewer_stack = QStackedWidget()
+        self._viewer_stack.addWidget(page2d)
+        self._viewer_stack.addWidget(self._multi_viewport)
+        self._viewer_stack.currentChanged.connect(lambda _i: self._on_tab_changed(0))
+        self._tab_widget.addTab(self._viewer_stack, "Viewer")
 
         # 탭 3: MPR
         self._mpr_widget = MPRWidget()
@@ -3173,7 +3179,7 @@ class MainWindow(QMainWindow):
             return False
         if self._tab_widget.currentWidget() not in (self._multi_viewport,
                                                      getattr(self, "_page2d", None)):
-            self._tab_widget.setCurrentWidget(getattr(self, "_page2d", self._stack2d))
+            self._show_view(getattr(self, "_page2d", self._stack2d))
             vp = self._target_viewport()
         if vp.series is not series:
             self._select_series(series)
@@ -3232,7 +3238,7 @@ class MainWindow(QMainWindow):
         action = getattr(self, "_act_drag_pads", None)
         on = action.isChecked() if action is not None else True
         current = self._tab_widget.currentWidget()
-        pads.setVisible(on and current in (getattr(self, "_page2d", None), self._multi_viewport))
+        pads.setVisible(on and self._current_view() in (getattr(self, "_page2d", None), self._multi_viewport))
         self._place_drag_pads()
 
     def _on_tab_changed(self, index):
@@ -3241,9 +3247,9 @@ class MainWindow(QMainWindow):
         self._refresh_image_info()
         self._ai_panel.on_series_changed()
         # 레이아웃 드롭다운 표시를 현재 화면에 맞춤
-        current = self._tab_widget.currentWidget()
-        if current is getattr(self, "_page2d", self._stack2d):
-            self._layout_combo.setCurrentText("2D")
+        current = self._current_view()
+        if self._current_view() is getattr(self, "_page2d", self._stack2d):
+            self._layout_combo.setCurrentText("1X1")
         elif current is self._multi_viewport:
             text = self._multi_viewport.current_layout.upper()
             if self._layout_combo.findText(text) >= 0:
@@ -3281,9 +3287,9 @@ class MainWindow(QMainWindow):
     def _apply_layout_choice(self, choice):
         if self._current_series is None:
             return
-        if choice == "2D":
+        if choice in ("2D", "1X1"):     # 한 장 크게 = 단일 뷰
             self._set_tile_mode(False)
-            self._tab_widget.setCurrentWidget(getattr(self, "_page2d", self._stack2d))
+            self._show_view(getattr(self, "_page2d", self._stack2d))
             return
         if choice == "Default":
             self._apply_hanging(auto=False)
@@ -3298,7 +3304,7 @@ class MainWindow(QMainWindow):
             start = next((i for i, s in enumerate(study) if s is self._current_series), 0)
             ordered = study[start:] + study[:start]
             self._multi_viewport.show_series(ordered[:rows * cols], layout=layout)
-        self._tab_widget.setCurrentWidget(self._multi_viewport)
+        self._show_view(self._multi_viewport)
 
     def _apply_hanging(self, auto=False):
         """현재 검사에 맞는 Hanging Protocol 적용 → 적용한 프로토콜 이름 (없으면 None)
@@ -3313,12 +3319,12 @@ class MainWindow(QMainWindow):
         if protocol and any(slots):
             layout = protocol.get("layout", "2x2")
             self._multi_viewport.show_series(slots, layout=_layouts.clean(layout) or None)
-            self._tab_widget.setCurrentWidget(self._multi_viewport)
+            self._show_view(self._multi_viewport)
             self._statusbar.showMessage(f"Hanging Protocol: {protocol['name']}", 6000)
             return protocol["name"]
         if not auto:
             self._multi_viewport.show_series(study[:4], layout="2x2")
-            self._tab_widget.setCurrentWidget(self._multi_viewport)
+            self._show_view(self._multi_viewport)
             self._statusbar.showMessage("맞는 Hanging Protocol이 없어 2x2 기본 배치", 6000)
         return None
 
@@ -3392,7 +3398,7 @@ class MainWindow(QMainWindow):
                                        window=self._viewport.window_level,
                                        start_index=self._viewport.current_slice)
             self._stack2d.setCurrentWidget(self._tile_view)
-            self._tab_widget.setCurrentWidget(getattr(self, "_page2d", self._stack2d))
+            self._show_view(getattr(self, "_page2d", self._stack2d))
         else:
             self._stack2d.setCurrentWidget(self._viewport)
 
@@ -3431,7 +3437,7 @@ class MainWindow(QMainWindow):
                                   window=self._viewport.window_level)
         self._act_tile.setChecked(True)
         self._stack2d.setCurrentWidget(self._tile_view)
-        self._tab_widget.setCurrentWidget(self._page2d)
+        self._show_view(self._page2d)
 
     def _window_for(self, series):
         """출력용 W/L: 현재 보고 있는 시리즈면 화면 값, 아니면 DICOM 기본값"""
@@ -3970,9 +3976,26 @@ class MainWindow(QMainWindow):
             vp.update()
         self._roi_manager.refresh()
 
+    def _current_view(self):
+        """지금 보고 있는 화면 위젯 (Viewer 탭이면 그 안의 단일 뷰 또는 격자)"""
+        current = self._tab_widget.currentWidget()
+        stack = getattr(self, "_viewer_stack", None)
+        if stack is not None and current is stack:
+            return stack.currentWidget()
+        return current
+
+    def _show_view(self, widget):
+        """단일 뷰 · 격자 중 하나를 보여 준다 (Viewer 탭으로 옮기고 스택을 바꾼다)"""
+        stack = getattr(self, "_viewer_stack", None)
+        if stack is not None and stack.indexOf(widget) >= 0:
+            self._tab_widget.setCurrentWidget(stack)
+            stack.setCurrentWidget(widget)
+            return
+        self._tab_widget.setCurrentWidget(widget)
+
     def _target_viewport(self):
         """이미지 조작 대상: Multi View 탭이면 활성 칸, 그 외에는 2D 뷰포트 (Stack)"""
-        if self._tab_widget.currentWidget() is self._multi_viewport:
+        if self._current_view() is self._multi_viewport:
             return self._multi_viewport.active_viewport
         return self._viewport
 
@@ -4422,7 +4445,7 @@ class MainWindow(QMainWindow):
 
     def _capture_image(self, kind="full"):
         """현재 화면을 그림으로 저장 — kind: full | image | marks"""
-        current = self._tab_widget.currentWidget()
+        current = self._current_view()
         if current is self._page2d and self._stack2d.currentWidget() is self._tile_view:
             pixmap = self._tile_view.grab()
             name = "tile"
