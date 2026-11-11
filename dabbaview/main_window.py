@@ -410,6 +410,7 @@ class MainWindow(QMainWindow):
         self._series_panel.thumbnail_ready.connect(self._series_tree.set_thumbnail)
         self._series_panel.summary_changed.connect(self._show_series_summary)
         self._series_panel.rename_requested.connect(self._rename_requested)
+        self._series_panel.mpr_merge_requested.connect(self._mpr_merge)
         self._series_tree.rename_requested.connect(self._rename_requested)
         self._series_stack.addWidget(self._series_panel)
         self._series_stack.addWidget(self._series_tree)
@@ -3886,6 +3887,26 @@ class MainWindow(QMainWindow):
         self._popups = []
         for button in getattr(self, "_side_tabs", []):
             button.hide()
+
+    def _mpr_merge(self, uids):
+        """시리즈 여러 개를 합쳐 MPR 탭에 띄운다 (같은 방향일 때만)"""
+        chosen = [self._loader.series_dict.get(u) for u in uids]
+        chosen = [s for s in chosen if s is not None]
+        if len(chosen) < 2:
+            return
+        self._tab_widget.setCurrentWidget(self._mpr_widget)
+        self._mpr_series = None          # 탭 전환이 단일 시리즈로 덮어쓰지 않게
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            ok = self._mpr_widget.set_series_list(chosen)
+        finally:
+            QApplication.restoreOverrideCursor()
+        names = " + ".join(s.description or "이름 없음" for s in chosen[:3])
+        if ok:
+            self._statusbar.showMessage(f"MPR: {len(chosen)}개 시리즈를 합쳤습니다 ({names})", 8000)
+        else:
+            self._statusbar.showMessage("MPR: 고른 시리즈로는 볼륨을 만들 수 없습니다 "
+                                        "— 오른쪽 설명을 보세요", 8000)
 
     def _sync_volume_tabs(self):
         """현재 탭이 MPR/3D일 때만 볼륨 구성 (전체 슬라이스 픽셀 로딩 필요)"""

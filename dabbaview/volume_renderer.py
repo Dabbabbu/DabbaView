@@ -236,33 +236,31 @@ class VolumeRenderWidget(QWidget):
         self._mesh_actors = []
         self._vtk_widget.Initialize()
 
-    def set_series(self, series):
-        """DicomSeries로부터 볼륨 데이터 구성"""
+    def set_series(self, series, phase=0):
+        """DicomSeries로부터 볼륨 데이터 구성
+
+        cine(심장 MRI 등)은 한 위치에 여러 시간 위상이 있으므로 위상 하나만 골라 쓴다.
+        그대로 쌓으면 시간축이 공간축이 되어 볼륨이 길게 늘어난다.
+        """
         if not self._vtk_ok or not series or series.num_slices < 2:
-            return
+            return False
 
-        series.sort_slices()
-        slices = []
-        arrays = series.get_all_pixel_arrays()
-        for arr in (arrays[i] for i in series.spatial_order()):   # 볼륨은 공간 순서로
-            if arr is not None and len(arr.shape) == 2:
-                slices.append(arr)
+        from .mpr_volume import build_volume, plan_for_series
+        plan = plan_for_series(series, phase)
+        if not plan.ok:
+            return False
+        stacked, _spacing_mm, geometry, _kept = build_volume(plan)
+        if stacked is None:
+            return False
 
-        if len(slices) < 2:
-            return
-
-        ref_shape = slices[0].shape
-        uniform = [s for s in slices if s.shape == ref_shape]
-        if len(uniform) < 2:
-            return
-
-        volume = np.clip(np.stack(uniform, axis=0), -32768, 32767).astype(np.int16)
+        volume = np.clip(stacked, -32768, 32767).astype(np.int16)
         # 환자 좌표(LPS mm)에 놓아 실제 비율로 보이고 STL 메시와도 겹치도록
         from .ai.volume import series_spacing_affine
         _spacing, affine = series_spacing_affine(series)
-        if len(uniform) != len(slices):
+        if geometry is None or len(plan) != volume.shape[0]:
             affine = np.eye(4)
         self._set_volume_data(volume, affine)
+        return True
 
     def _set_volume_data(self, volume_np, affine=None):
         """numpy 볼륨 (k, row, col)을 VTK에 전달. affine: (col, row, k) 인덱스 → LPS mm"""

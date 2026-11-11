@@ -231,6 +231,7 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
     thumbnail_ready = pyqtSignal(str, QImage)
     summary_changed = pyqtSignal(dict)  # {"patients", "studies", "series", "images"}
     rename_requested = pyqtSignal(str, str)   # ("study"|"series"|"patient", UID)
+    mpr_merge_requested = pyqtSignal(list)    # [시리즈 UID] — 골라서 합쳐 MPR
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -240,7 +241,8 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         self.setUniformItemSizes(False)
         self.setMouseTracking(True)
         self.setSpacing(0)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        # Ctrl·Shift로 여러 시리즈를 골라 'MPR로 합쳐 보기'를 쓸 수 있게
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragOnly)
         self.setStyleSheet("QListWidget { background: #141414; border: none; }"
@@ -502,12 +504,31 @@ class SeriesPanel(ClickToLoadMixin, QListWidget):
         if kind == "series":
             uid = item.data(ROLE_UID)
             menu.addAction(f"Rename Series… ({RENAME_LABEL_SHIFT})", lambda: self.rename_requested.emit("series", uid))
+        picked = self.selected_series_uids()
+        if uid_in := (picked if kind == "series" else []):
+            if len(uid_in) > 1:
+                menu.addAction(f"MPR로 합쳐 보기 ({len(uid_in)}개 시리즈)",
+                               lambda: self.mpr_merge_requested.emit(list(uid_in)))
+            else:
+                action = menu.addAction("MPR로 합쳐 보기")
+                action.setEnabled(False)
+                action.setToolTip("Ctrl(⌘) 또는 Shift로 같은 방향의 시리즈를 여러 개 고르세요")
         if study_uid and kind in ("series", "header"):
             menu.addAction(f"Rename Study… ({RENAME_LABEL})", lambda: self.rename_requested.emit("study", study_uid))
         if study_uid:
             menu.addSeparator()
             menu.addAction("Edit Patient Name/ID…", lambda: self.rename_requested.emit("patient", study_uid))
         menu.exec_(self.viewport().mapToGlobal(pos))
+
+    def selected_series_uids(self):
+        """지금 고른 시리즈들의 UID (머리글은 빼고, 보이는 순서대로)"""
+        out = []
+        for item in self.selectedItems():
+            if item.data(ROLE_KIND) == "series":
+                uid = item.data(ROLE_UID)
+                if uid and uid not in out:
+                    out.append(uid)
+        return out
 
     def event(self, event):
         # F2는 창 전체에서 '시리즈 패널 접기'지만, 이 목록에 포커스가 있으면 이름 바꾸기

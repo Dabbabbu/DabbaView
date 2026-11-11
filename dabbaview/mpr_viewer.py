@@ -319,6 +319,8 @@ class MPRWidget(QWidget):
         self._angles = {}                   # plane → 해당 뷰에서 회전한 누적 각도(°)
         self._specs = {}                    # plane → 마지막 재구성 정보
         self._cval = 0.0
+        self._plan = None
+        self._merged = False
         self._rot_snapshot = None
         self._reset_frames()
         self._init_ui()
@@ -339,16 +341,18 @@ class MPRWidget(QWidget):
         self.info_panel = QWidget()
         self.info_panel.setStyleSheet("background-color: #1a1a1a;")
         info_layout = QVBoxLayout(self.info_panel)
-        self._info_label = QLabel("MPR Viewer\n\n"
-                                   "마우스 휠: 슬라이스 이동\n"
-                                   "좌클릭 드래그: 크로스헤어 이동\n"
-                                   "크로스헤어 끝 ○ 드래그: 각도 회전 (Oblique)\n"
-                                   "Shift + ○ 드래그: 미세 회전 (1° 단위)\n\n"
-                                   "각 뷰의 크로스헤어 선은 다른 평면과의\n"
-                                   "교선이며, 평면 색으로 표시됩니다.\n\n"
-                                   "Sync Cursor를 켜면 같은 좌표계\n"
-                                   "(Frame of Reference)의 다른 뷰와\n"
-                                   "크로스헤어가 연동됩니다.")
+        self._info_help = ("MPR Viewer\n\n"
+                           "마우스 휠: 슬라이스 이동\n"
+                           "좌클릭 드래그: 크로스헤어 이동\n"
+                           "크로스헤어 끝 ○ 드래그: 각도 회전 (Oblique)\n"
+                           "Shift + ○ 드래그: 미세 회전 (1° 단위)\n\n"
+                           "각 뷰의 크로스헤어 선은 다른 평면과의\n"
+                           "교선이며, 평면 색으로 표시됩니다.\n\n"
+                           "Sync Cursor를 켜면 같은 좌표계\n"
+                           "(Frame of Reference)의 다른 뷰와\n"
+                           "크로스헤어가 연동됩니다.")
+        self._info_label = QLabel(self._info_help)
+        self._info_label.setWordWrap(True)
         self._info_label.setStyleSheet("color: #aaa; font-size: 12px;")
         self._info_label.setAlignment(Qt.AlignTop)
         info_layout.addWidget(self._info_label)
@@ -621,51 +625,87 @@ class MPRWidget(QWidget):
     def clear_cursor3d(self):
         pass
 
-    def set_series(self, series):
-        """DicomSeries로부터 3D 볼륨 구성"""
-        if not series or series.num_slices < 2:
-            return
+    def set_series(self, series, phase=0):
+        """DicomSeries로부터 3D 볼륨 구성
 
-        series.sort_slices()
-        slices, kept = [], []
-        arrays = series.get_all_pixel_arrays()
-        for i in series.spatial_order():       # 보기 순서와 달라도 볼륨은 공간 순서로
-            arr = arrays[i]
-            if arr is not None and len(arr.shape) == 2:
-                slices.append(arr)
-                kept.append(i)
+        cine(심장 MRI 등)은 한 위치에 여러 시간 위상이 있으므로 위상 하나만 골라 쓴다.
+        볼륨을 만들 수 없으면 왜 안 되는지 화면에 적어 준다.
+        """
+        from .mpr_volume import plan_for_series
+        return self.set_volume_plan(plan_for_series(series, phase), series)
 
-        if not slices:
-            return
+    def set_series_list(self, series_list, phase=0):
+        """여러 시리즈를 합쳐 하나의 볼륨으로 (같은 방향일 때만)"""
+        from .mpr_volume import plan_for_many
+        chosen = [s for s in series_list if s is not None]
+        return self.set_volume_plan(plan_for_many(chosen, phase),
+                                    chosen[0] if chosen else None, merged=len(chosen) > 1)
 
-        # 크기 통일 (첫 슬라이스 기준)
-        ref_shape = slices[0].shape
-        keep = [j for j, s in enumerate(slices) if s.shape == ref_shape]
-        if len(keep) < 2:
-            return
+    def set_volume_plan(self, plan, series=None, merged=False):
+        """VolumePlan대로 볼륨을 세운다. 만들었으면 True"""
+        from .mpr_volume import build_volume
+        if not plan.ok:
+            self._volume = None
+            self._series = series
+            self._geometry = None
+            self._show_unavailable(plan)
+            return False
 
-        self._volume = np.stack([slices[j] for j in keep], axis=0)
+        volume, spacing, geometry, _kept = build_volume(plan)
+        if volume is None:
+            self._volume = None
+            self._series = series
+            self._geometry = None
+            self._show_unavailable(plan, fallback="이 시리즈의 영상을 볼륨으로 쌓지 못했습니다 "
+                                                  "(영상 크기가 서로 다를 수 있습니다).")
+            return False
+
+        self._volume = volume
         self._series = series
         self._cval = float(self._volume.min())
-        # 볼륨에 실제로 들어간 슬라이스만으로 공간 정보 구성
-        self._geometry = build_series_geometry(
-            [series.slices[kept[j]] for j in keep])
+        self._geometry = geometry
+        self._spacing = spacing
+        self._plan = plan
+        self._merged = merged
+        self._restore_info()
 
-        # 복셀 간격 (Δk, Δrow, Δcol) mm
-        if self._geometry is not None:
-            d_row, d_col = self._geometry.spacings[0]
-            d_slice = self._geometry.slice_spacing() or d_row
-            self._spacing = np.array([d_slice, d_row, d_col], dtype=float)
-        else:
-            self._spacing = np.ones(3)
-
-        wc, ww = series.get_default_window()
-        for view in self._views.values():
-            view.set_window(wc, ww)
+        wc, ww = series.get_default_window() if series is not None else (None, None)
+        if wc is not None:
+            for view in self._views.values():
+                view.set_window(wc, ww)
         self._reset_frames()
         d, h, w = self._volume.shape
         self._center = np.array([d // 2, h // 2, w // 2], dtype=float) * self._spacing
         self._render_all()
+        return True
+
+    # ─── 볼륨을 못 만들 때 ───
+
+    def _show_unavailable(self, plan, fallback=""):
+        """빈 화면 대신 왜 MPR이 안 되는지 적어 준다"""
+        for view in self._views.values():
+            view.set_image(None, 1.0)      # 앞서 보던 영상 지우기
+        reason = plan.reason or fallback or "이 시리즈로는 MPR을 만들 수 없습니다."
+        text = f"MPR을 만들 수 없습니다\n\n{reason}"
+        if plan.hint:
+            text += f"\n\n{plan.hint}"
+        if getattr(self, "_info_label", None) is not None:
+            self._info_label.setText(text)
+            self._info_label.setStyleSheet("color: #ffcc66; font-size: 12px;")
+
+    def _restore_info(self):
+        """볼륨이 서면 안내문을 원래 도움말로 되돌린다"""
+        if getattr(self, "_info_label", None) is None:
+            return
+        self._info_label.setStyleSheet("color: #aaa; font-size: 12px;")
+        note = ""
+        plan = getattr(self, "_plan", None)
+        if plan is not None and plan.n_phases > 1:
+            note = (f"\n\n※ 이 시리즈는 시간 위상 {plan.n_phases}개짜리 cine입니다.\n"
+                    f"   {plan.phase + 1}번 위상만으로 볼륨을 세웠습니다.")
+        if getattr(self, "_merged", False):
+            note += "\n\n※ 고른 시리즈들을 합쳐 볼륨을 세웠습니다."
+        self._info_label.setText(self._info_help + note)
 
     def sync_geometry(self):
         return self._geometry
