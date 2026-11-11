@@ -3035,31 +3035,64 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._fit_to_window()
         self.update()
 
-    def capture(self, bare=False):
-        """현재 화면(오버레이 · 측정 · 판서 포함) 캡처
+    # 캡처 종류: (키, 메뉴에 보일 글자, 설명)
+    CAPTURE_KINDS = (
+        ("full", "영상 + 측정 · 판서 + 정보", "지금 화면 그대로 (기본)"),
+        ("image", "영상만", "측정 · 판서 · 글자를 모두 빼고 영상만"),
+        ("marks", "판서 · 측정만 (배경 투명)", "그린 것만 투명 배경 PNG로 — 발표 자료에 겹쳐 쓰기 좋음"),
+    )
 
-        테두리 강조 · 돋보기 · 오른쪽 슬라이스 막대는 영상이 아니라 조작 장치이므로 빼고 찍는다.
-        bare=True면 글자 오버레이(환자 · 검사 정보)까지 빼고 영상과 그린 것만 남긴다.
+    def capture(self, kind="full", overlay=True):
+        """현재 칸을 그림으로 — kind에 따라 무엇을 담을지 고른다
+
+        full  : 영상 + 측정 · 판서 (+ overlay면 환자 · 검사 글자)
+        image : 영상만 (그린 것도 글자도 없음)
+        marks : 그린 것만, 배경은 투명 (PNG로 저장해야 투명이 남는다)
+
+        테두리 강조 · 돋보기 · 오른쪽 막대는 조작 장치이므로 어느 경우에도 빼고 찍는다.
         """
+        if kind == "marks":
+            return self._capture_marks()
         bar = getattr(self, "_slice_bar", None)
-        bar_shown = bar is not None and bar.isVisible()
+        phase_bar = getattr(self, "_phase_bar_widget", None)
+        shown = [b for b in (bar, phase_bar) if b is not None and b.isVisible()]
         saved = (self._highlight, self._hover_pos, self._magnifying)
-        overlay_saved = getattr(self, "_show_overlay", None)
+        overlay_saved = self._show_overlay
+        annots_saved = self._show_annotations
         self._highlight, self._hover_pos, self._magnifying = None, None, False
-        if bar_shown:
-            bar.hide()
-        if bare and overlay_saved is not None:
-            self._show_overlay = False
+        for b in shown:
+            b.hide()
+        self._show_overlay = overlay and kind != "image"
+        if kind == "image":
+            self._show_annotations = False
         try:
             self.repaint()
             return self.grab()
         finally:
             self._highlight, self._hover_pos, self._magnifying = saved
-            if bare and overlay_saved is not None:
-                self._show_overlay = overlay_saved
-            if bar_shown:
-                bar.show()
+            self._show_overlay = overlay_saved
+            self._show_annotations = annots_saved
+            for b in shown:
+                b.show()
             self.update()
+
+    def _capture_marks(self):
+        """그린 것만 투명 배경에 (영상 · 글자 없이)"""
+        pixmap = QPixmap(self.size())
+        pixmap.setDevicePixelRatio(self.devicePixelRatioF())
+        pixmap.fill(Qt.transparent)
+        saved = (self._highlight, self._hover_pos, self._magnifying)
+        self._highlight, self._hover_pos, self._magnifying = None, None, False
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        try:
+            if self._show_annotations and DicomViewport.annotations_visible:
+                self._draw_annotations(painter)
+                self._draw_analysis(painter)
+        finally:
+            painter.end()
+            self._highlight, self._hover_pos, self._magnifying = saved
+        return pixmap
 
     @property
     def current_slice(self):

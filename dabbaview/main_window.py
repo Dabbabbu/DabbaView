@@ -995,6 +995,9 @@ class MainWindow(QMainWindow):
                        self._act_image_panel, self._act_anonymize, self._act_ai, self._act_send,
                        self._act_print, self._act_settings):
             output_bar.addAction(action)
+        self._output_bar = output_bar
+        output_bar.setContextMenuPolicy(Qt.CustomContextMenu)
+        output_bar.customContextMenuRequested.connect(self._output_bar_menu)
         output_bar.addSeparator()
 
         # 시네 재생
@@ -1056,8 +1059,9 @@ class MainWindow(QMainWindow):
                             "상태바에는 항상 좌표와 값이 표시됩니다",
             self._set_value_lens_all, checkable=True)
         self._act_capture = make("📷 Capture", "Ctrl+Shift+S",
-                                 "현재 화면을 오버레이·측정선 포함해 이미지로 저장",
-                                 self._capture_image)
+                                 "현재 칸을 그림으로 저장 (영상 + 측정 · 판서 + 정보)\n"
+                                 "우클릭: 영상만 / 판서 · 측정만(배경 투명) 고르기",
+                                 lambda: self._capture_image("full"))
         self._act_ref_lines = make("Ref Lines", "",
                                    "Reference Line — 현재 슬라이스 한 줄\n"
                                    "다른 칸이 보고 있는 슬라이스가 이 영상의 어디인지 한 줄(노란 실선)로만 표시합니다.\n"
@@ -4342,8 +4346,31 @@ class MainWindow(QMainWindow):
         total = vp.series.num_slices if vp.series else 0
         self._info_panel.show_image(ds, vp.current_slice, total)
 
-    def _capture_image(self):
-        """현재 화면을 오버레이·측정선 포함해 저장 (Capture Image Only)"""
+    def _output_bar_menu(self, pos):
+        """셋째 줄 우클릭 — 누른 자리가 📷 Capture면 캡처 종류 고르기"""
+        bar = getattr(self, "_output_bar", None)
+        if bar is None:
+            return
+        if bar.actionAt(pos) is self._act_capture:
+            self.capture_menu(bar).exec_(bar.mapToGlobal(pos))
+
+    def capture_menu(self, parent):
+        """📷 Capture 우클릭 — 무엇을 담을지 고르기"""
+        menu = QMenu(parent)
+        header = menu.addAction("이 칸을 그림으로 저장")
+        header.setEnabled(False)
+        for kind, label, tip in DicomViewport.CAPTURE_KINDS:
+            action = menu.addAction(label)
+            action.setToolTip(tip)
+            action.setShortcut(QKeySequence("Ctrl+Shift+S") if kind == "full" else QKeySequence())
+            action.triggered.connect(lambda _c=False, k=kind: self._capture_image(k))
+        menu.addSeparator()
+        hint = menu.addAction("'판서 · 측정만'은 PNG로 저장해야 배경이 투명합니다")
+        hint.setEnabled(False)
+        return menu
+
+    def _capture_image(self, kind="full"):
+        """현재 화면을 그림으로 저장 — kind: full | image | marks"""
         current = self._tab_widget.currentWidget()
         if current is self._page2d and self._stack2d.currentWidget() is self._tile_view:
             pixmap = self._tile_view.grab()
@@ -4353,15 +4380,17 @@ class MainWindow(QMainWindow):
             if vp.series is None:
                 QMessageBox.information(self, "Info", "캡처할 영상이 없습니다.")
                 return
-            pixmap = vp.capture()
+            pixmap = vp.capture(kind)
             name = (vp.series.description or "capture").strip()
+            if kind != "full":
+                name += {"image": " (영상만)", "marks": " (판서만)"}.get(kind, "")
         else:
             pixmap = current.grab()
             name = self._tab_widget.tabText(self._tab_widget.currentIndex())
         name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in name)
+        filters = "PNG (*.png)" if kind == "marks" else "PNG (*.png);;JPEG (*.jpg)"
         filepath, _ = QFileDialog.getSaveFileName(
-            self, "Capture Image", os.path.join(self._last_dir(), f"{name}.png"),
-            "PNG (*.png);;JPEG (*.jpg)")
+            self, "Capture Image", os.path.join(self._last_dir(), f"{name}.png"), filters)
         if not filepath:
             return
         if not filepath.lower().endswith((".png", ".jpg", ".jpeg")):
