@@ -14,8 +14,9 @@ import cv2
 import numpy as np
 from PyQt5.QtWidgets import (QTreeWidget, QTreeWidgetItem, QHeaderView,
                              QAbstractItemView, QApplication)
-from PyQt5.QtCore import Qt, QSize, QRectF, QMimeData, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QDrag, QFont, QIcon, QImage, QPainter, QPixmap
+from PyQt5.QtCore import Qt, QSize, QRectF, QMimeData, QPoint, QThread, pyqtSignal
+from PyQt5.QtGui import (QColor, QCursor, QDrag, QFont, QIcon, QImage, QPainter,
+                         QPen, QPixmap)
 
 from . import dicom_info
 
@@ -274,14 +275,44 @@ class ClickToLoadMixin:
         self._last_activation = (uid, now)
         self.series_activated.emit(uid)
 
+    DRAG_THUMB_PX = 96      # 끌고 다니는 미리보기 크기
+
     def start_series_drag(self, uid):
-        """시리즈 드래그 시작 (MIME: SERIES_MIME_TYPE)"""
+        """시리즈 드래그 시작 (MIME: SERIES_MIME_TYPE)
+
+        끄는 동안 그 시리즈의 썸네일이 커서를 따라다닌다 — 어느 영상을 옮기는지 보이게.
+        """
         mime = QMimeData()
         mime.setData(SERIES_MIME_TYPE, uid.encode("utf-8"))
         mime.setText(uid)
         drag = QDrag(self)
         drag.setMimeData(mime)
+        pixmap = self._drag_pixmap(uid)
+        if pixmap is not None:
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
         drag.exec_(Qt.CopyAction)
+
+    def _drag_pixmap(self, uid):
+        """끌고 다닐 그림: 썸네일에 테두리를 두른 것 (썸네일이 아직 없으면 None)"""
+        thumb = None
+        getter = getattr(self, "thumbnail_for", None)
+        if callable(getter):
+            thumb = getter(uid)
+        if thumb is None or thumb.isNull():
+            return None
+        scaled = thumb.scaled(self.DRAG_THUMB_PX, self.DRAG_THUMB_PX,
+                              Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        canvas = QPixmap(scaled.width() + 4, scaled.height() + 4)
+        canvas.fill(Qt.transparent)
+        painter = QPainter(canvas)
+        painter.setOpacity(0.85)
+        painter.drawPixmap(2, 2, scaled)
+        painter.setOpacity(1.0)
+        painter.setPen(QPen(QColor(255, 210, 74), 2))
+        painter.drawRect(1, 1, canvas.width() - 2, canvas.height() - 2)
+        painter.end()
+        return canvas
 
 
 ROLE_PATIENT_KEY = Qt.UserRole + 20   # 환자 항목: 환자 키 / 첫 시리즈 UID

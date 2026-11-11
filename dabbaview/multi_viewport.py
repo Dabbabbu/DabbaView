@@ -236,6 +236,17 @@ class MultiViewport(QWidget):
                 self._selected.clear()
                 self.set_active(idx)
 
+        elif etype == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+            # 칸을 두 번 누르면 그 칸만 크게, 다시 두 번 누르면 원래 레이아웃으로.
+            # 측정 도구로 그리는 중에는 건드리지 않는다 (두 번째 클릭이 도구의 몫)
+            vp = self._viewports[idx]
+            drawing = (getattr(vp, "_draft", None) is not None
+                       or vp._current_tool in vp.DRAWING_TOOLS)
+            if not drawing and (self.num_visible > 1 or self._maximized):
+                self.set_active(idx)
+                self.toggle_maximize()
+                return True
+
         elif etype in (QEvent.DragEnter, QEvent.DragMove):
             if self._accepts(event.mimeData()):
                 event.acceptProposedAction()
