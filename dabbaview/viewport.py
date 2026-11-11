@@ -48,6 +48,7 @@ LOGO_PATH = os.path.join(os.path.dirname(__file__), "resources", "logo.png")
 ROTATE_RIGHT = np.array([[0, -1], [1, 0]])   # 시계 방향 90°
 ROTATE_LEFT = np.array([[0, 1], [-1, 0]])    # 반시계 방향 90°
 FLIP_H = np.array([[-1, 0], [0, 1]])
+COLOR_SCRIBBLE = QColor(255, 120, 60)   # ✍ 판서 기본색 (측정선과 구별되는 주황)
 FLIP_V = np.array([[1, 0], [0, -1]])
 
 MAGNIFY_LEVELS = (2.0, 3.0, 4.0)
@@ -109,11 +110,12 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     TOOL_PROFILE = 15    # 라인 프로파일
     TOOL_RECT = 16       # 사각형 ROI
     TOOL_PATH = 17       # 다중 점 경로 길이
+    TOOL_SCRIBBLE = 18   # ✍ 판서: 숫자 없는 자유 필기 (측정이 아님)
 
     # 좌클릭 드래그가 '그리기'인 도구 (더블클릭을 Fit으로 해석하지 않음)
     DRAWING_TOOLS = (TOOL_MEASURE, TOOL_ANGLE, TOOL_ROI, TOOL_AREA, TOOL_ARROW,
                      TOOL_ELLIPSE, TOOL_TEXT, TOOL_COBB, TOOL_LANDMARK, TOOL_PROFILE,
-                     TOOL_RECT, TOOL_PATH)
+                     TOOL_RECT, TOOL_PATH, TOOL_SCRIBBLE)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -541,7 +543,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     show_profile = True
 
     MEASURE_KINDS = ("distance", "path", "angle", "cobb", "roi", "area", "ellipse", "rect")
-    NOTE_KINDS = ("arrow", "text")
+    NOTE_KINDS = ("arrow", "text", "scribble")
 
     @classmethod
     def kind_visible(cls, kind):
@@ -912,6 +914,10 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             kind = "roi" if tool == self.TOOL_ROI else "area"
             self._draft = {"type": kind, "pts": [img_pos]}
 
+        elif tool == self.TOOL_SCRIBBLE and img_pos:
+            # ✍ 판서: 누른 채 끄는 대로 선이 남는다 (닫지 않고, 숫자도 없다)
+            self._draft = {"type": "scribble", "pts": [img_pos]}
+
         elif tool == self.TOOL_ELLIPSE and img_pos:
             self._draft = {"type": "ellipse", "pts": [img_pos, img_pos], "circle": shift}
 
@@ -996,7 +1002,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         draft = self._draft
         if self._placing_cursor:
             self._place_cursor(pos)
-        elif draft and draft["type"] in ("roi", "area") and img_pos:
+        elif draft and draft["type"] in ("roi", "area", "scribble") and img_pos:
             last = self._image_to_screen_f(draft["pts"][-1])
             if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 2:
                 draft["pts"].append(img_pos)
@@ -1081,6 +1087,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             kind = self._draft["type"]
             if kind in ("roi", "area"):
                 self._finish_freehand()
+            elif kind == "scribble":
+                self._finish_scribble()
             elif kind == "ellipse":
                 self._finish_ellipse()
             elif kind == "rect":
@@ -1696,6 +1704,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._add_annotation({"type": "angle", "pts": [p1, p2, p3], "deg": angle})
         self.status_message.emit(f"Angle: {angle:.1f}°")
 
+    def _finish_scribble(self):
+        """✍ 판서 한 획을 저장 — 넓이도 통계도 없고, 그린 선만 남는다"""
+        draft, self._draft = self._draft, None
+        pts = draft["pts"]
+        if len(pts) < 2:
+            return                      # 점 하나는 획이 아니다
+        self._add_annotation({"type": "scribble", "pts": pts})
+
     def _finish_freehand(self):
         draft, self._draft = self._draft, None
         pts = draft["pts"]
@@ -2014,6 +2030,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             if ann.get("delta") is not None:
                 lines.append(f"Δ {ann['delta']:+.1f} mm")
             return lines
+        if kind == "scribble":
+            return [ann["name"]] if ann.get("name") else []    # 판서는 숫자가 없다
         if kind == "arrow":
             return [ann["text"]] if ann["text"] else []
         return []
@@ -2097,6 +2115,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 mid = (pts[0] + pts[1]) / 2
                 self._draw_label(painter, QPoint(int(mid.x()) + 6, int(mid.y()) - 22),
                                  lines, color, occupied)
+            elif kind == "scribble":
+                # ✍ 판서: 손으로 쓴 느낌이 나게 끝과 이음새를 둥글게, 숫자 상자는 없다
+                color = custom or COLOR_SCRIBBLE
+                painter.setPen(QPen(color, width + 0.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                painter.drawPolyline(QPolygonF(pts))
+                if lines:
+                    self._draw_label(painter, QPoint(int(pts[-1].x()) + 8, int(pts[-1].y()) - 18),
+                                     lines, color, occupied)
             elif kind == "path":
                 color = custom or QColor(255, 210, 74)
                 painter.setPen(QPen(color, width))
@@ -2211,6 +2237,9 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         elif kind == "rect":
             painter.setPen(QPen(QColor(255, 90, 210), 2, Qt.DashLine))
             painter.drawRect(QRectF(pts[0], pts[1]).normalized())
+        elif kind == "scribble":
+            painter.setPen(QPen(COLOR_SCRIBBLE, 2.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPolyline(QPolygonF([self._image_to_screen_f(p) for p in self._draft["pts"]]))
         elif kind == "path":
             painter.setPen(QPen(QColor(255, 210, 74), 2, Qt.DashLine))
             painter.drawPolyline(QPolygonF(pts))

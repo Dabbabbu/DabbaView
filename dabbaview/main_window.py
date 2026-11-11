@@ -864,6 +864,9 @@ class MainWindow(QMainWindow):
             ("Rect", V.TOOL_RECT, "Shift+E", "사각형 ROI (Shift: 정사각형): 면적·둘레·통계"),
             ("Area", V.TOOL_AREA, "9", "Freehand 면적 측정: 면적(mm²)·둘레"),
             None,
+            ("✍ 판서", V.TOOL_SCRIBBLE, "Shift+W",
+             "판서: 누른 채 끄는 대로 선이 남습니다 (측정이 아니라 필기 — 숫자가 안 붙습니다)\n"
+             "지울 때는 영상 우클릭 ▸ 이 슬라이스의 측정 지우기, 또는 ROI Manager에서"),
             ("Arrow", V.TOOL_ARROW, "0", "2D 화살표: 가리킬 곳에서 누르고 드래그 → 라벨"),
             ("Text", V.TOOL_TEXT, "A", "텍스트 메모: 클릭 → 내용·크기·색상"),
             None,
@@ -1145,7 +1148,8 @@ class MainWindow(QMainWindow):
         draw_tools = [("거리", "dist", V.TOOL_MEASURE), ("각도", "angle", V.TOOL_ANGLE),
                       ("사각", "rect", V.TOOL_RECT), ("타원", "ellipse", V.TOOL_ELLIPSE),
                       ("자유 ROI", "roi", V.TOOL_ROI), ("면적", "area", V.TOOL_AREA),
-                      ("화살표", "arrow", V.TOOL_ARROW), ("텍스트", "text", V.TOOL_TEXT)]
+                      ("화살표", "arrow", V.TOOL_ARROW), ("텍스트", "text", V.TOOL_TEXT),
+                      ("판서", "scribble", V.TOOL_SCRIBBLE)]
         self._drag_pads = DragPadStrip(
             self._target_viewport, self._statusbar,
             draw_tools=draw_tools,
@@ -2994,7 +2998,7 @@ class MainWindow(QMainWindow):
     ANNOT_PARTS = (
         ("view/annot_measurements", "show_measurements", "📐 측정 · ROI (선과 도형)", "", "측정 · ROI"),
         ("view/measure_labels", "show_measure_labels", "🔢 측정 숫자 (Area · Mean …)", "N", "측정 숫자"),
-        ("view/annot_notes", "show_notes", "↗ 화살표 · 텍스트 메모", "", "화살표 · 메모"),
+        ("view/annot_notes", "show_notes", "↗ 화살표 · 텍스트 · ✍ 판서", "", "화살표 · 메모 · 판서"),
         ("view/annot_profile", "show_profile", "📈 라인 프로파일", "", "라인 프로파일"),
     )
 

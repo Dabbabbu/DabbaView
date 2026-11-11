@@ -62,6 +62,9 @@ PATHS = {
     "landmark": ("M12 2.8c-3.4 0-6 2.6-6 5.9 0 4.3 6 12.5 6 12.5s6-8.2 6-12.5c0-3.3-2.6-5.9-6-5.9z",
                  "M12 6.4a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"),
     "profile": "M3 18h18M5 15l4-6 4 4 5-8",
+    # ✍ 판서 — 붓(연필은 ROI가 쓰므로 모양을 달리한다)
+    "scribble": ("M3 20c1.5-3.5 3-1 4.5-3.5M17.5 3.6a2.3 2.3 0 0 1 3 3.2L10.8 17 7 18l1-3.8z",
+                 "M7 18l1-3.8.9-.9 3 3-.9.9z"),
 }
 
 # 도구 막대 글자 → 아이콘 이름 (글자는 그대로 두고 그림만 앞에 붙인다)
@@ -70,7 +73,7 @@ TOOL_ICONS = {
     "Dist": "dist", "Path": "path", "Angle": "angle", "Cobb": "cobb",
     "3D Cursor": "cursor3d", "Magnify": "magnify",
     "ROI": "roi", "Ellipse": "ellipse", "Rect": "rect", "Area": "area",
-    "Arrow": "arrow", "Text": "text", "📍 Landmark": "landmark", "Profile": "profile",
+    "Arrow": "arrow", "Text": "text", "✍ 판서": "scribble", "📍 Landmark": "landmark", "Profile": "profile",
 }
 
 
