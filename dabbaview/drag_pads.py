@@ -109,14 +109,14 @@ class DragPadStrip(QWidget):
     """
 
     def __init__(self, target, parent=None, draw_tools=(), set_tool=None, current_tool=None,
-                 extras=()):
+                 extras_menu=None):
         super().__init__(parent)
         self.target = target
         self._draw_tools = list(draw_tools)
         self._set_tool = set_tool
         self._current_tool = current_tool
-        # 우클릭 메뉴에 넣을 것들: (글자, 단축키, 실행할 함수, 켜짐 여부 함수 또는 None)
-        self._extras = list(extras)
+        # 우클릭하면 띄울 메뉴를 만들어 주는 함수 (부모를 받아 QMenu를 돌려준다)
+        self._extras_menu = extras_menu
         self.setObjectName("DragPadStrip")
         self.setStyleSheet(PAD_STYLE)
         layout = QHBoxLayout(self)
@@ -171,20 +171,12 @@ class DragPadStrip(QWidget):
         menu.exec_(pos - QPoint(0, menu.sizeHint().height() + 2))
 
     def _open_draw_extras(self):
-        """✏️ 그리기 칸 우클릭 — 측정 관련 기능과 단축키를 한곳에"""
-        if not self._extras:
+        """✏️ 그리기 칸 우클릭 — 도구 막대 ✎ 버튼과 같은 '아노테이션 표시' 메뉴"""
+        if self._extras_menu is None:
             return
-        menu = QMenu(self)
-        for entry in self._extras:
-            if entry is None:
-                menu.addSeparator()
-                continue
-            label, shortcut, run, checked = entry
-            action = menu.addAction(f"{label}\t{shortcut}" if shortcut else label)
-            if checked is not None:
-                action.setCheckable(True)
-                action.setChecked(bool(checked()))
-            action.triggered.connect(lambda _c=False, fn=run: fn())
+        menu = self._extras_menu(self)
+        if menu is None:
+            return
         pos = self.draw.mapToGlobal(self.draw.rect().topLeft())
         menu.exec_(pos - QPoint(0, menu.sizeHint().height() + 2))
 

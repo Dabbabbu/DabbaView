@@ -526,9 +526,34 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     LANDMARK_DISPLAYS = ("subtle", "full", "hover", "hidden")
     landmark_display = "subtle"
 
-    # 측정 숫자(Area · Mean · SD …) 표시 — 끄면 선만 남아 영상이 가려지지 않는다
-    # (View ▸ 🔢 측정 숫자 표시 · 도구 막대 · 하단 ✏️ 그리기 칸 우클릭에서 켜고 끈다)
+    # ── 영상 위에 그린 것 표시 (환자 정보 오버레이와는 따로 켜고 끈다) ──
+    #   annotations_visible : 전체 끄기/켜기 (Shift+A) — 이것이 꺼지면 아래는 무시
+    #   show_measurements   : 거리 · 각도 · Cobb · ROI · 면적의 선과 도형
+    #   show_measure_labels : 그 숫자 상자 (Area · Mean · SD …) — 선은 두고 숫자만 (N)
+    #   show_notes          : 화살표 · 텍스트 메모
+    #   show_profile        : 라인 프로파일 선
+    #   랜드마크는 landmark_display로 (자세히 · 은은하게 · 가까이 댈 때만 · 숨김)
+    annotations_visible = True
+    show_measurements = True
     show_measure_labels = True
+    show_notes = True
+    show_profile = True
+
+    MEASURE_KINDS = ("distance", "path", "angle", "cobb", "roi", "area", "ellipse", "rect")
+    NOTE_KINDS = ("arrow", "text")
+
+    @classmethod
+    def kind_visible(cls, kind):
+        """이 종류를 지금 그려야 하는가"""
+        if not cls.annotations_visible:
+            return False
+        if kind in cls.MEASURE_KINDS:
+            return cls.show_measurements
+        if kind in cls.NOTE_KINDS:
+            return cls.show_notes
+        if kind == "profile":
+            return cls.show_profile
+        return True
     LANDMARK_HOVER_PX = 28
 
     def flash_landmark(self, index, seconds=1.8):
@@ -588,7 +613,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                                                     hover.y() - p.y()) <= self.LANDMARK_HOVER_PX
             self._draw_landmark(painter, p, name, mode, near, flash)
         line = self._profile_line
-        if line is not None and line[0] == self._image_key():
+        if line is not None and line[0] == self._image_key() and self.show_profile:
             a, b = self._image_to_screen_f(line[1]), self._image_to_screen_f(line[2])
             painter.setPen(QPen(QColor(255, 200, 0), 1.5))
             painter.drawLine(a, b)
@@ -657,9 +682,12 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self.update()
 
     def set_overlay_visible(self, visible):
-        """환자 정보 오버레이 + 측정/주석 표시 (T / O)"""
+        """환자 정보(데모그래픽) 오버레이 켜고 끄기 (T / O)
+
+        그린 것(측정 · 주석 · 랜드마크)은 따로 Shift+A로 끈다 — 글자만 치우고
+        측정은 남겨 두는 일이 많아서 둘을 갈라 놓았다.
+        """
         self._show_overlay = visible
-        self._show_annotations = visible
         self.update()
 
     @property
@@ -1881,7 +1909,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._draw_segmentation(painter, transform)
 
         self._draw_reference_lines(painter)
-        if self._show_annotations:
+        if self._show_annotations and DicomViewport.annotations_visible:
             self._draw_annotations(painter)
             self._draw_draft(painter)
             self.draw_live_readout(painter)
@@ -2018,6 +2046,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             if not ann.get("visible", True):
                 continue
             kind = ann["type"]
+            if not self.kind_visible(kind):
+                continue
             pts = [self._image_to_screen_f(p) for p in ann["pts"]]
             # 숫자를 끄면 선 · 도형만 그린다 (화살표 · 텍스트 주석은 글자가 본체라 그대로)
             if self.show_measure_labels or kind in ("arrow", "text", "cursor3d"):

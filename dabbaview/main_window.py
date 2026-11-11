@@ -641,8 +641,7 @@ class MainWindow(QMainWindow):
         self._init_ui_scale_menu(view_menu)
         self._init_arrow_menu(view_menu)
         self._init_link_menu(view_menu)
-        self._init_measure_label_action(view_menu)
-        self._init_landmark_display_menu(view_menu)
+        self._init_annotation_menu(view_menu)
         bar_action = view_menu.addAction("▤ 영상 오른쪽 슬라이스 막대")
         bar_action.setCheckable(True)
         bar_action.setChecked(self._settings.value("view/slice_bar", True, type=bool))
@@ -947,10 +946,16 @@ class MainWindow(QMainWindow):
                        self._act_sync_window, self._act_value_lens):
             view_bar.addAction(action)
         view_bar.addSeparator()
-        # 🔢 측정 숫자 토글은 View 메뉴(_init_menubar)에서 만든 것을 그대로 쓴다 (단축키 N 하나만)
-        for action in (self._act_key, self._act_key_view, self._act_measure_labels,
+        # ✎ 아노테이션 토글은 View 메뉴(_init_menubar)에서 만든 것을 그대로 쓴다 (단축키 하나만)
+        for action in (self._act_key, self._act_key_view, self._act_annotations,
                        self._act_landmarks, self._act_tile):
             view_bar.addAction(action)
+        # ✎ 버튼 우클릭 → 종류별로 켜고 끄는 메뉴
+        annot_button = view_bar.widgetForAction(self._act_annotations)
+        if annot_button is not None:
+            annot_button.setContextMenuPolicy(Qt.CustomContextMenu)
+            annot_button.customContextMenuRequested.connect(
+                lambda pos, b=annot_button: self.annotation_menu(b).exec_(b.mapToGlobal(pos)))
         self._tile_grid = QComboBox()
         self._tile_grid.addItems([f"{n}x{n}" for n in range(2, 7)])
         self._tile_grid.setCurrentText("4x4")
@@ -1133,22 +1138,12 @@ class MainWindow(QMainWindow):
                       ("사각", "rect", V.TOOL_RECT), ("타원", "ellipse", V.TOOL_ELLIPSE),
                       ("자유 ROI", "roi", V.TOOL_ROI), ("면적", "area", V.TOOL_AREA),
                       ("화살표", "arrow", V.TOOL_ARROW), ("텍스트", "text", V.TOOL_TEXT)]
-        # ✏️ 그리기 칸 우클릭 메뉴 — 측정 관련 기능과 단축키를 한곳에
-        extras = [
-            ("🔢 측정 숫자 표시", "N", self.toggle_measure_labels,
-             lambda: DicomViewport.show_measure_labels),
-            ("📍 랜드마크 표시", "", self._toggle_landmarks,
-             lambda: DicomViewport.landmark_display != "hidden"),
-            None,
-            ("📐 ROI Manager", "Ctrl+Shift+M", self._toggle_roi_manager, None),
-            ("📍 랜드마크 목록…", "Shift+F", self.show_landmark_list, None),
-        ]
         self._drag_pads = DragPadStrip(
             self._target_viewport, self._statusbar,
             draw_tools=draw_tools,
             set_tool=lambda t: self._set_tool_all(t if t is not None else V.TOOL_SELECT),
             current_tool=lambda: getattr(self, "_current_tool_id", None),
-            extras=extras)
+            extras_menu=self.annotation_menu)   # 우클릭 = 도구 막대 ✎ 버튼과 같은 메뉴
         self._drag_pads.refresh_tool()
         self._drag_pads.adjustSize()
         self._pad_watcher = _GeometryWatcher(self._place_drag_pads, self)
@@ -2987,32 +2982,99 @@ class MainWindow(QMainWindow):
             vp.update()
         self._statusbar.showMessage("슬라이스 막대: " + ("켬" if on else "끔"), 4000)
 
-    def _init_measure_label_action(self, menu):
-        """View ▸ 🔢 측정 숫자 표시 — ROI 통계가 영상을 가릴 때 끈다 (선·도형은 남는다)"""
-        on = self._settings.value("view/measure_labels", True, type=bool)
-        DicomViewport.show_measure_labels = bool(on)
-        action = QAction("🔢 측정 숫자 표시", self)
-        action.setCheckable(True)
-        action.setChecked(bool(on))
-        action.setShortcut(QKeySequence("N"))
-        action.setToolTip("ROI · 거리 · 각도의 숫자(Area · Mean · SD …)를 보이거나 숨깁니다 (N)\n"
-                          "끄면 선과 도형만 남아 영상이 가려지지 않습니다")
-        action.triggered.connect(self._set_measure_labels)
-        menu.addAction(action)
-        self._act_measure_labels = action
+    # 영상 위에 그린 것 표시 — (설정 키, 뷰포트 속성, 메뉴 글자, 단축키, 상태바 이름)
+    ANNOT_PARTS = (
+        ("view/annot_measurements", "show_measurements", "📐 측정 · ROI (선과 도형)", "", "측정 · ROI"),
+        ("view/measure_labels", "show_measure_labels", "🔢 측정 숫자 (Area · Mean …)", "N", "측정 숫자"),
+        ("view/annot_notes", "show_notes", "↗ 화살표 · 텍스트 메모", "", "화살표 · 메모"),
+        ("view/annot_profile", "show_profile", "📈 라인 프로파일", "", "라인 프로파일"),
+    )
 
-    def _set_measure_labels(self, on):
-        DicomViewport.show_measure_labels = bool(on)
-        self._settings.setValue("view/measure_labels", bool(on))
-        action = getattr(self, "_act_measure_labels", None)
+    def _init_annotation_menu(self, menu):
+        """View ▸ ✎ 아노테이션 표시 — 환자 정보(데모그래픽)와 따로 켜고 끈다"""
+        on = self._settings.value("view/annotations", True, type=bool)
+        DicomViewport.annotations_visible = bool(on)
+        master = QAction("✎ Annot", self)
+        master.setCheckable(True)
+        master.setChecked(bool(on))
+        master.setShortcut(QKeySequence("Shift+A"))
+        master.setToolTip("영상 위에 그린 것을 한 번에 보이거나 숨깁니다 (Shift+A)\n"
+                          "환자 정보 글자(O · T)와는 따로 동작합니다\n"
+                          "우클릭: 종류별로 골라서 켜고 끄기")
+        master.triggered.connect(self._set_annotations_visible)
+        menu.addAction(master)
+        self._act_annotations = master
+
+        sub = menu.addMenu("✎ 아노테이션 종류별")
+        self._annot_actions = {}
+        for key, attr, label, shortcut, _name in self.ANNOT_PARTS:
+            value = self._settings.value(key, True, type=bool)
+            setattr(DicomViewport, attr, bool(value))
+            action = sub.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(bool(value))
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+            action.triggered.connect(
+                lambda checked, k=key, a=attr: self._set_annotation_part(k, a, checked))
+            self._annot_actions[attr] = action
+        sub.addSeparator()
+        self._init_landmark_display_menu(sub)
+
+    def _set_annotations_visible(self, on):
+        DicomViewport.annotations_visible = bool(on)
+        self._settings.setValue("view/annotations", bool(on))
+        action = getattr(self, "_act_annotations", None)
         if action is not None and action.isChecked() != bool(on):
             action.setChecked(bool(on))
         for vp in self._all_viewports():
             vp.update()
-        self._statusbar.showMessage("측정 숫자: " + ("보임" if on else "숨김 — 선만 남음"), 4000)
+        self._statusbar.showMessage("아노테이션: " + ("보임" if on else "모두 숨김"), 4000)
+
+    def toggle_annotations(self):
+        self._set_annotations_visible(not DicomViewport.annotations_visible)
+
+    def _set_annotation_part(self, key, attr, on):
+        setattr(DicomViewport, attr, bool(on))
+        self._settings.setValue(key, bool(on))
+        action = getattr(self, "_annot_actions", {}).get(attr)
+        if action is not None and action.isChecked() != bool(on):
+            action.setChecked(bool(on))
+        name = next((n for k, a, _l, _s, n in self.ANNOT_PARTS if a == attr), attr)
+        for vp in self._all_viewports():
+            vp.update()
+        self._statusbar.showMessage(f"{name}: " + ("보임" if on else "숨김"), 4000)
+
+    def _toggle_annotation_part(self, attr):
+        key = next(k for k, a, _l, _s, _n in self.ANNOT_PARTS if a == attr)
+        self._set_annotation_part(key, attr, not getattr(DicomViewport, attr))
 
     def toggle_measure_labels(self):
-        self._set_measure_labels(not DicomViewport.show_measure_labels)
+        self._toggle_annotation_part("show_measure_labels")
+
+    def annotation_menu(self, parent):
+        """✎ 아노테이션 표시 세부 메뉴 (도구 막대 버튼 우클릭 · 하단 그리기 칸 우클릭 공용)"""
+        menu = QMenu(parent)
+        master = menu.addAction("✎ 전체 표시\tShift+A")
+        master.setCheckable(True)
+        master.setChecked(DicomViewport.annotations_visible)
+        master.triggered.connect(self.toggle_annotations)
+        menu.addSeparator()
+        for _key, attr, label, shortcut, _name in self.ANNOT_PARTS:
+            action = menu.addAction(f"{label}\t{shortcut}" if shortcut else label)
+            action.setCheckable(True)
+            action.setChecked(getattr(DicomViewport, attr))
+            action.setEnabled(DicomViewport.annotations_visible)
+            action.triggered.connect(lambda _c=False, a=attr: self._toggle_annotation_part(a))
+        landmark = menu.addAction("📍 랜드마크")
+        landmark.setCheckable(True)
+        landmark.setChecked(DicomViewport.landmark_display != "hidden")
+        landmark.setEnabled(DicomViewport.annotations_visible)
+        landmark.triggered.connect(self._toggle_landmarks)
+        menu.addSeparator()
+        menu.addAction("📐 ROI Manager\tCtrl+Shift+M", self._toggle_roi_manager)
+        menu.addAction("📍 랜드마크 목록…\tShift+F", self.show_landmark_list)
+        return menu
 
     def _toggle_landmarks(self):
         """랜드마크를 영상에서 보이거나 숨기기 (자세한 단계는 View ▸ 📍 랜드마크 표시)"""
