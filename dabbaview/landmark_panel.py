@@ -59,14 +59,19 @@ class LandmarkListDialog(QDialog):
         tool.setToolTip("랜드마크 도구로 바꿈 — 영상을 클릭하면 점 추가, Esc로 Select로 돌아감")
         tool.clicked.connect(lambda: main.select_tool_by_id("landmark"))
         delete = QPushButton("삭제")
+        delete.setToolTip("고른 줄의 랜드마크를 지웁니다 (여러 줄 선택 가능)")
         delete.clicked.connect(self._delete)
+        delete_all = QPushButton("전체 삭제")
+        delete_all.setToolTip("지금 목록에 보이는 랜드마크를 모두 지웁니다\n"
+                              "('지금 연 검사만'이 켜져 있으면 그 검사 것만)")
+        delete_all.clicked.connect(self._delete_all)
         csv_button = QPushButton("CSV…")
         csv_button.clicked.connect(self._export_csv)
         json_button = QPushButton("JSON (Slicer)…")
         json_button.clicked.connect(self._export_json)
         close = QPushButton("닫기")
         close.clicked.connect(self.close)
-        for b in (tool, delete, csv_button, json_button):
+        for b in (tool, delete, delete_all, csv_button, json_button):
             buttons.addWidget(b)
         buttons.addStretch(1)
         buttons.addWidget(close)
@@ -138,6 +143,20 @@ class LandmarkListDialog(QDialog):
             return
         if len(indexes) > 1 and QMessageBox.question(
                 self, "랜드마크", f"랜드마크 {len(indexes)}개를 지울까요?") != QMessageBox.Yes:
+            return
+        for index in indexes:
+            self.store.remove(index)
+
+    def _delete_all(self):
+        """지금 표에 보이는 랜드마크를 모두 지운다 ('지금 연 검사만' 체크를 그대로 따른다)"""
+        indexes = sorted((i for i in self._rows if i is not None), reverse=True)
+        if not indexes:
+            QMessageBox.information(self, "랜드마크", "지울 랜드마크가 없습니다.")
+            return
+        if QMessageBox.question(
+                self, "랜드마크 전체 삭제",
+                f"지금 목록의 랜드마크 {len(indexes)}개를 모두 지울까요?\n되돌릴 수 없습니다.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         for index in indexes:
             self.store.remove(index)

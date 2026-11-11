@@ -844,7 +844,11 @@ class MainWindow(QMainWindow):
              "우클릭 드래그=W/L, 가운데=Pan, 휠=슬라이스는 항상 동작"),
             None,
             ("W/L", V.TOOL_WINDOW, "1", "윈도잉 (좌클릭 드래그)"),
-            ("Pan", V.TOOL_PAN, "2", "팬 (좌클릭 드래그)"),
+            ("Pan", V.TOOL_PAN, "2",
+             "팬 — 영상을 끌어서 옮기기 (좌클릭 드래그)\n"
+             "도구를 바꾸지 않고 옮기려면: macOS ⌥ Option+드래그 · Windows Alt+드래그,\n"
+             "또는 가운데 버튼(휠 클릭) 드래그, 또는 맨 아래 ✛ Pan 칸을 끌기\n"
+             "(⌘ Command · ⌃ Control+드래그는 ROI 자동 W/L입니다 — 설정 ▸ 마우스에서 바꿀 수 있습니다)"),
             ("Zoom", V.TOOL_ZOOM, "3", "줌 (좌클릭 드래그)"),
             None,
             ("Dist", V.TOOL_MEASURE, "4",
@@ -965,6 +969,8 @@ class MainWindow(QMainWindow):
         # ✎ 버튼 우클릭 → 종류별로 켜고 끄는 메뉴
         view_bar.setContextMenuPolicy(Qt.PreventContextMenu)   # Qt 기본 '도구 모음 목록' 메뉴 막기
         self._init_roi_stat_fields()
+        DicomViewport.ask_landmark_name = self._settings.value(
+            "view/ask_landmark_name", True, type=bool)
         lens_button = view_bar.widgetForAction(self._act_value_lens)
         if lens_button is not None:   # HU Lens 우클릭 → ROI에 보일 값 고르기
             lens_button.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -4066,6 +4072,10 @@ class MainWindow(QMainWindow):
         show.setChecked(DicomViewport.landmark_display != "hidden")
         show.triggered.connect(self._toggle_landmarks)
         menu.addAction("📍 랜드마크 목록…\tShift+F", self.show_landmark_list)
+        ask = menu.addAction("✏️ 찍을 때 이름 물어보기")
+        ask.setCheckable(True)
+        ask.setChecked(DicomViewport.ask_landmark_name)
+        ask.triggered.connect(self._set_ask_landmark_name)
         menu.addSeparator()
         series = getattr(self._target_viewport(), "series", None)
         uid = getattr(series, "series_uid", "") if series is not None else ""
@@ -4078,6 +4088,13 @@ class MainWindow(QMainWindow):
         clear_all.setEnabled(total > 0)
         clear_all.triggered.connect(self._clear_all_landmarks)
         return menu
+
+    def _set_ask_landmark_name(self, on):
+        """점을 찍을 때마다 이름을 물어볼지 (끄면 F-1 · F-2처럼 자동 이름)"""
+        DicomViewport.ask_landmark_name = bool(on)
+        self._settings.setValue("view/ask_landmark_name", bool(on))
+        self._statusbar.showMessage(
+            "랜드마크 이름 물어보기: " + ("켬" if on else "끔 — 자동 이름(F-1 · F-2 …)"), 4000)
 
     def _clear_all_landmarks(self):
         """찍어 둔 랜드마크를 전부 지운다 (다른 검사 것까지 — 그래서 한 번 더 묻는다)"""

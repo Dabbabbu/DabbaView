@@ -19,6 +19,7 @@ DICOM 이미지 뷰포트 위젯
 - 화면 좌표: 이미지 좌표에 표시 변환(줌·팬·회전·반전·픽셀 비율)을 적용한 위치
   측정/주석은 이미지 좌표로 저장하므로 회전·반전 후에도 영상에 붙어 있음
 """
+import sys
 import math
 import time
 import os
@@ -471,6 +472,15 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                                     study_uid=str(getattr(ds, "StudyInstanceUID", "") or ""),
                                     slice_index=int(self._current_slice),
                                     series_desc=self._series.description or "")
+        if DicomViewport.ask_landmark_name:
+            name, ok = QInputDialog.getText(
+                self, "랜드마크 이름",
+                f"찍은 자리: ({', '.join(f'{v:.1f}' for v in point['position'])}) mm\n"
+                "이름 (비워 두면 그대로):", text=point["name"])
+            if ok and name.strip():
+                index = len(self._landmarks) - 1
+                self._landmarks.update(index, name=name.strip())
+                point = dict(point, name=name.strip())
         text = ", ".join(f"{v:.1f}" for v in point["position"])
         self.status_message.emit(f"랜드마크 {point['name']}: ({text}) mm")
 
@@ -598,6 +608,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             return cls.show_profile
         return True
     LANDMARK_HOVER_PX = 28
+    # 점을 찍을 때마다 이름을 물어볼지 (View ▸ 📍 랜드마크 · 핀 우클릭에서 끄고 켠다)
+    ask_landmark_name = True
 
     def flash_landmark(self, index, seconds=1.8):
         """목록에서 고른 랜드마크를 잠깐 크게 표시 (어디 있는지 보이게)"""
@@ -762,6 +774,29 @@ class DicomViewport(AnnotationEditMixin, QWidget):
 
     # ─── 이벤트 처리 ───
 
+    # 드래그 동작 → 사람이 읽을 이름 (상태바 안내용)
+    DRAG_ACTION_NAMES = {"pan": "Pan (영상 옮기기)", "window": "W/L", "zoom": "Zoom",
+                         "roi_window": "ROI 자동 W/L", "scroll": "슬라이스 넘기기",
+                         "tool": "선택한 도구"}
+
+    def _announce_modifier_drag(self, event):
+        """수정키를 누른 채 끌면 '무슨 키로 무엇을 하는지' 알려 준다
+
+        macOS는 ⌥ Option · ⌘ Command · ⌃ Control이 헷갈리기 쉽다
+        (⌘과 ⌃은 둘 다 'Ctrl 드래그'로 묶여 ROI 자동 W/L이 된다).
+        """
+        mods = event.modifiers()
+        if event.button() != Qt.LeftButton:
+            return
+        if mods & Qt.AltModifier:
+            key = "⌥ Option" if sys.platform == "darwin" else "Alt"
+        elif mods & CTRL_MODIFIERS:
+            key = ("⌘ Command / ⌃ Control" if sys.platform == "darwin" else "Ctrl")
+        else:
+            return
+        name = self.DRAG_ACTION_NAMES.get(self._drag_action, self._drag_action or "없음")
+        self.status_message.emit(f"{key} + 드래그 → {name}")
+
     def _drag_action_for(self, event):
         """눌린 버튼·수정키 → 드래그 동작 (마우스 매핑 설정)"""
         button, mods = event.button(), event.modifiers()
@@ -880,6 +915,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._wl_drag_unit = None
         self._last_move_ms = time.monotonic() * 1000.0
         self._drag_action = self._drag_action_for(event)
+        self._announce_modifier_drag(event)
         self._zoom_anchor = event.pos()
         if self._drag_action == "tool":
             self._tool_press(event)

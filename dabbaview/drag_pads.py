@@ -135,6 +135,14 @@ class DragPadStrip(QWidget):
             layout.addWidget(pad)
         self.wl.released.connect(self._end_window)
 
+        # Pan — 수정키 없이 끌어서 영상 옮기기 (⌥/가운데 버튼이 불편한 분들을 위해)
+        self.pan = DragPad("✛ Pan  ✥", "누른 채 끌면 영상이 따라 움직입니다\n"
+                           "두 번 클릭: 가운데로 (화면 맞춤)", Qt.SizeAllCursor)
+        self.pan.dragged.connect(self._pan)
+        self.pan.double_clicked.connect(self._fit)
+        self.pan.released.connect(lambda: self.pan.setText(self.pan.base_text))
+        layout.addWidget(self.pan)
+
         # 원본 W/L — 한 번 누르면 DICOM 태그 값으로
         self.reset_wl = TapPad("◑↺ 원본 W/L",
                                "DICOM 원본의 Window Center/Width로 되돌리기\n"
@@ -223,6 +231,13 @@ class DragPadStrip(QWidget):
         vp = self._viewport()
         if vp is not None:
             vp._wl_drag_unit = None    # 다음 드래그는 그때의 Width로 감도를 다시 정함
+
+    def _pan(self, dx, dy):
+        vp = self._viewport()
+        if vp is None:
+            return
+        vp._feel_drag("pan", dx, dy, vp._drag_speed(dx, dy))
+        self.pan.setText("✛ 이동 중")
 
     def _fit(self):
         vp = self._viewport()
