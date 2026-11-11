@@ -535,11 +535,30 @@ def slice_order_keys(slices):
 
 
 def series_order_key(series):
-    """시리즈 순서: 검사 날짜 · 시각 → 시리즈를 찍은 때 → 시리즈 번호 → 설명 → UID (늘 같은 순서)"""
+    """시리즈 순서: 검사 → 시리즈 번호 → 찍은 때 → 설명 → UID (늘 같은 순서)
+
+    검사 안에서는 SeriesNumber 순 — GE·INFINITT 콘솔에 나오는 순서와 같다.
+    번호는 반드시 숫자로 견준다 (3 < 10 < 600 < 2000 < 52337).
+    '찍은 때'를 먼저 보면, SeriesTime을 적지 않는 시리즈(ADC · 재구성 등)가
+    장마다 다른 ContentTime으로 떨어져 엉뚱한 자리에 끼어든다.
+    """
     number = series.series_number
     return (series.study_date, _time_text(series.study_time), series.study_uid or "",
-            series.series_datetime, number is None, number if number is not None else 0,
-            series.description, series.series_uid)
+            number is None, number if number is not None else 0,
+            series_stamp(series), series.description, series.series_uid)
+
+
+def series_stamp(series):
+    """시리즈를 줄 세울 때 쓸 '찍은 때' — 시리즈 단위(SeriesDate/Time) 값만 본다
+
+    장 단위인 AcquisitionTime · ContentTime은 쓰지 않는다 (시리즈 순서와 무관).
+    """
+    if not series.slices:
+        return ""
+    first = series.slices[0]
+    date = str(getattr(first, "SeriesDate", "") or "").strip()
+    time_ = _time_text(str(getattr(first, "SeriesTime", "") or "").strip())
+    return f"{date}{time_}" if (date or time_) else ""
 
 
 def _slice_key(ds):
