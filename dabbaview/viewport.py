@@ -809,6 +809,9 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         """눌린 버튼·수정키 → 드래그 동작 (마우스 매핑 설정)"""
         button, mods = event.button(), event.modifiers()
         if button == Qt.LeftButton:
+            # ✍ 판서 중에는 수정키가 '도형 그리기'를 뜻하므로 ROI W/L · Pan으로 새지 않게
+            if self._current_tool == self.TOOL_SCRIBBLE:
+                return self._mouse.get("left_drag")
             if mods & Qt.AltModifier:
                 return self._mouse.get("alt_left_drag")
             if mods & CTRL_MODIFIERS:
@@ -1000,7 +1003,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
 
         elif tool == self.TOOL_SCRIBBLE and img_pos:
             # ✍ 판서: 누른 채 끄는 대로 선이 남는다 (닫지 않고, 숫자도 없다)
-            self._draft = {"type": "scribble", "pts": [img_pos]}
+            # 수정키를 누른 채 끌면 도형 (ZoomIt처럼) — start는 그때 기준점
+            self._draft = {"type": "scribble", "pts": [img_pos], "start": img_pos}
 
         elif tool == self.TOOL_ELLIPSE and img_pos:
             self._draft = {"type": "ellipse", "pts": [img_pos, img_pos], "circle": shift}
@@ -1086,7 +1090,15 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         draft = self._draft
         if self._placing_cursor:
             self._place_cursor(pos)
-        elif draft and draft["type"] in ("roi", "area", "scribble") and img_pos:
+        elif draft and draft["type"] == "scribble" and img_pos:
+            shape = self.scribble_shape()
+            if shape:
+                draft["pts"] = self.shape_points(shape, draft.get("start", img_pos), img_pos)
+            else:
+                last = self._image_to_screen_f(draft["pts"][-1])
+                if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 2:
+                    draft["pts"].append(img_pos)
+        elif draft and draft["type"] in ("roi", "area") and img_pos:
             last = self._image_to_screen_f(draft["pts"][-1])
             if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 2:
                 draft["pts"].append(img_pos)
@@ -1814,6 +1826,61 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         angle = math.degrees(math.acos(cos_angle))
         self._add_annotation({"type": "angle", "pts": [p1, p2, p3], "deg": angle})
         self.status_message.emit(f"Angle: {angle:.1f}°")
+
+    # ✍ 판서에서 수정키를 누른 채 끌면 도형 (ZoomIt과 같은 방식)
+    SCRIBBLE_SHAPE_KEYS = (
+        ("arrow", "Ctrl(⌘)+Shift", "화살표"),
+        ("rect", "Ctrl(⌘)", "사각형"),
+        ("ellipse", "Alt(⌥)", "원 · 타원"),
+        ("line", "Shift", "직선"),
+    )
+
+    @staticmethod
+    def scribble_shape():
+        """지금 눌린 수정키 → 그릴 도형 ("" 면 자유 필기)"""
+        from PyQt5.QtWidgets import QApplication
+        mods = QApplication.keyboardModifiers()
+        ctrl = bool(mods & CTRL_MODIFIERS)
+        shift = bool(mods & Qt.ShiftModifier)
+        if ctrl and shift:
+            return "arrow"
+        if ctrl:
+            return "rect"
+        if mods & Qt.AltModifier:
+            return "ellipse"
+        if shift:
+            return "line"
+        return ""
+
+    @staticmethod
+    def shape_points(shape, start, end):
+        """시작점 · 지금 점 → 그 도형을 이루는 점들 (판서는 폴리라인 하나로 그린다)"""
+        (x0, y0), (x1, y1) = start, end
+        if shape == "line":
+            return [start, end]
+        if shape == "rect":
+            return [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+        if shape == "ellipse":
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            rx, ry = abs(x1 - x0) / 2, abs(y1 - y0) / 2
+            steps = 48
+            pts = [(cx + rx * math.cos(2 * math.pi * i / steps),
+                    cy + ry * math.sin(2 * math.pi * i / steps)) for i in range(steps)]
+            pts.append(pts[0])
+            return pts
+        if shape == "arrow":
+            length = math.hypot(x1 - x0, y1 - y0)
+            if length < 1e-6:
+                return [start, end]
+            ux, uy = (x1 - x0) / length, (y1 - y0) / length
+            head = max(6.0, min(length * 0.3, 24.0))     # 길이에 맞춘 화살촉
+            spread = 0.45
+            cos_a, sin_a = math.cos(spread), math.sin(spread)
+            left = (x1 - head * (ux * cos_a - uy * sin_a), y1 - head * (uy * cos_a + ux * sin_a))
+            right = (x1 - head * (ux * cos_a + uy * sin_a), y1 - head * (uy * cos_a - ux * sin_a))
+            # 한 번에 긋는 선: 꼬리 → 머리 → 왼 날개 → 머리 → 오른 날개
+            return [start, end, left, end, right]
+        return [start, end]
 
     def _finish_scribble(self):
         """✍ 판서 한 획을 저장 — 넓이도 통계도 없고, 그린 선만 남는다"""

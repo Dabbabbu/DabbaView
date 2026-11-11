@@ -4121,6 +4121,12 @@ class MainWindow(QMainWindow):
         hint = menu.addAction("판서 중 Ctrl(⌘)+휠로도 굵기 조절")
         hint.setEnabled(False)
         menu.addSeparator()
+        shapes = menu.addAction("수정키를 누른 채 끌면 도형 (ZoomIt처럼)")
+        shapes.setEnabled(False)
+        for _key, combo, label in DicomViewport.SCRIBBLE_SHAPE_KEYS:
+            item = menu.addAction(f"  {label}\t{combo}+드래그")
+            item.setEnabled(False)
+        menu.addSeparator()
         show = menu.addAction("↗ 화살표 · 텍스트 · ✍ 판서 보이기")
         show.setCheckable(True)
         show.setChecked(DicomViewport.show_notes)
