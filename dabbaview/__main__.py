@@ -31,6 +31,8 @@ def main():
     app.setApplicationVersion(__version__)
     app.setOrganizationName("DabbaView")
     shortcut_fallback.install(app)  # 한글 입력 상태에서도 T/R/P 등 단축키 동작
+    from . import button_style
+    button_style.install(app)       # 대화상자 버튼에 눌리는 느낌
 
     # 지난 실행의 클라우드 세션 폴더 정리 + 캐시 용량 한도 적용
     try:
