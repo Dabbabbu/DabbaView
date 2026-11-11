@@ -973,6 +973,7 @@ class MainWindow(QMainWindow):
         self._view_bar = view_bar
         view_bar.setContextMenuPolicy(Qt.CustomContextMenu)
         view_bar.customContextMenuRequested.connect(self._view_bar_menu)
+        self._apply_bar_icons(view_bar)
         self._tile_grid = QComboBox()
         self._tile_grid.addItems([f"{n}x{n}" for n in range(2, 7)])
         self._tile_grid.setCurrentText("4x4")
@@ -1006,11 +1007,10 @@ class MainWindow(QMainWindow):
         cine_action.triggered.connect(self._viewport.toggle_cine)
         output_bar.addAction(cine_action)
         self._act_cine = cine_action
-        button = output_bar.widgetForAction(cine_action)
-        if button is not None:   # 다른 툴바 버튼과 같은 크기 (글자만, 기호는 글자 안에)
-            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        # 다른 버튼과 같이 아이콘 + 글자 (모양을 따로 고정하지 않는다)
         self._set_cine_button(False)
         self._viewport.cine_state_changed.connect(self._set_cine_button)
+        self._apply_bar_icons(output_bar)
 
         # FPS 조절
         output_bar.addWidget(QLabel(" FPS: "))
@@ -1024,20 +1024,30 @@ class MainWindow(QMainWindow):
         # 같은 일을 하면서 영상을 가리지 않는다. 몇 장 중 몇 번째인지는 상태바에 둔다.
 
     def _set_cine_button(self, playing):
-        """재생 중: ■ Stop (정지 아이콘), 멈춤: ▶ Play (재생 아이콘)"""
+        """재생 중: ■ Stop, 멈춤: ▶ Play — 다른 버튼처럼 아이콘 + 글자"""
         action = self._act_cine
-        action.setText("■ Stop" if playing else "▶ Play")
-        action.setIconText("■ Stop" if playing else "▶ Play")
-        # 아이콘을 붙이면 툴바 버튼이 다른 버튼보다 커짐 → 기호는 글자로만 (메뉴에서도 같은 모양)
+        action.setText("Stop" if playing else "Play")
+        action.setIconText("Stop" if playing else "Play")
+        action.setIcon(icons.icon("stop" if playing else "play"))
         action.setToolTip("시네 정지 (P)" if playing else "시네 재생 (P)")
 
     def _create_image_actions(self):
         """이미지 조작 액션 (메뉴·툴바 공유). 대상 = 현재 탭의 뷰포트"""
         def make(text, shortcut, tooltip, slot, checkable=False):
             action = QAction(text, self)
+            icon_name = icons.TOOL_ICONS.get(text)
+            clean = text
+            if icon_name:
+                action.setIcon(icons.icon(icon_name))
+                # 아이콘이 붙으면 글자 앞의 기호는 겹쳐 보이므로 뗀다
+                clean = text.lstrip(MainWindow.ICON_PREFIX).strip() or text
+                action.setText(clean)
             if shortcut:
                 action.setShortcut(QKeySequence(shortcut))
-            action.setToolTip(f"{tooltip} ({shortcut})" if shortcut else tooltip)
+            if icon_name:   # 그림만 보이므로 이름 · 단축키를 설명 맨 앞에
+                action.setToolTip(f"{clean}{f'  ({shortcut})' if shortcut else ''}\n{tooltip}")
+            else:
+                action.setToolTip(f"{tooltip} ({shortcut})" if shortcut else tooltip)
             action.setCheckable(checkable)
             action.triggered.connect(slot)
             return action
@@ -1128,6 +1138,33 @@ class MainWindow(QMainWindow):
         # toggled는 도크가 실제로 보이기 전에 발생 → visibilityChanged에서 갱신
         self._info_panel.visibilityChanged.connect(
             lambda visible: visible and self._refresh_image_info())
+
+    ICON_PREFIX = "⇅⇆↺↻◐⟲⌖★📝📷ⓘ🕶🧠⚙✎📍▦▶ "
+
+    def _apply_bar_icons(self, bar):
+        """도구 막대의 모든 버튼에 아이콘을 달고, 겹치는 앞머리 기호는 뗀다
+
+        make()를 거치지 않고 따로 만든 액션(Crosslink · Annot · Library 등)까지
+        한 번에 챙기려고 막대를 다 채운 뒤에 훑는다.
+        """
+        lookup = dict(icons.TOOL_ICONS)
+        for text, name in icons.TOOL_ICONS.items():
+            lookup.setdefault(text.lstrip(self.ICON_PREFIX).strip(), name)
+        for action in bar.actions():
+            if action.isSeparator() or not action.text() or not action.icon().isNull():
+                continue
+            name = lookup.get(action.text())
+            if not name:
+                continue
+            action.setIcon(icons.icon(name))
+            clean = action.text().lstrip(self.ICON_PREFIX).strip() or action.text()
+            action.setText(clean)
+            # 그림만 보이므로 올렸을 때 이름 · 단축키가 먼저 나오게
+            key = action.shortcut().toString()
+            tip = action.toolTip() or ""
+            head = f"{clean}{f'  ({key})' if key else ''}"
+            if not tip.startswith(clean):
+                action.setToolTip(f"{head}\n{tip}" if tip else head)
 
     def _init_statusbar(self):
         """상태바"""
