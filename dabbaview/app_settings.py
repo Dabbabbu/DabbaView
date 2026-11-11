@@ -69,6 +69,7 @@ DEFAULT_MOUSE_BINDINGS = {
     "alt_left_drag": "pan",
     "wheel": "scroll",
     "ctrl_wheel": "zoom",
+    "alt_wheel": "zoom",          # Alt(⌥)+휠도 확대 · 축소 (트랙패드에서 Ctrl보다 편한 경우)
     "shift_wheel": "fast_scroll",
     "left_double": "fit",
     "right_double": "reset_window",

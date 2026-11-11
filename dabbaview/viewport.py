@@ -1306,7 +1306,9 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             self.update()
             return
 
-        if mods & CTRL_MODIFIERS:
+        if mods & Qt.AltModifier:
+            action = self._mouse.get("alt_wheel") or "zoom"   # Alt(⌥)+휠 = 확대 · 축소
+        elif mods & CTRL_MODIFIERS:
             action = self._mouse.get("ctrl_wheel")
         elif mods & Qt.ShiftModifier:
             action = self._mouse.get("shift_wheel")
