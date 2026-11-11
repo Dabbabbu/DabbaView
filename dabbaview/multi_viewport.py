@@ -137,6 +137,7 @@ class MultiViewport(QWidget):
 
         for i in range(MAX_VIEWPORTS):
             vp = DicomViewport()
+            vp.in_grid = True        # 빈 칸에는 큰 시작 화면 대신 조용한 한 줄만
             vp.setProperty("vp_index", i)
             vp.setMinimumSize(120, 120)  # 4x4 레이아웃도 화면에 들어가도록
             vp.setAcceptDrops(True)

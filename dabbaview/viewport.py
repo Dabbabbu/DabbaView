@@ -178,6 +178,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._zoom_anchor = None     # 드래그 줌 기준점 (누른 위치)
         self._wl_roi = None          # ROI 자동 W/L 사각형 (이미지 좌표 두 모서리)
         self._show_annotations = True
+        self.in_grid = False        # 여러 칸으로 나눠 보는 격자 안인가 (빈 칸 안내를 줄인다)
         self._scroll_accum = 0.0
 
         # 주석 (측정 포함): 영상(SOPInstanceUID)별 공유 저장소
@@ -2735,14 +2736,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         hint = "File → Open (Ctrl+O)  ·  폴더 열기 Ctrl+Shift+O  ·  드래그 앤 드롭"
         w, h = self.width(), self.height()
 
-        # 작은 뷰포트(Multi View 칸 등)에서는 안내 문구만
-        if h < 320 or w < 360 or logo.isNull():
-            painter.setPen(QColor(110, 110, 110))
+        # 격자 칸이거나 작은 뷰포트에서는 조용한 안내만 (같은 큰 문구가 칸마다 반복되지 않게)
+        if self.in_grid or h < 320 or w < 360 or logo.isNull():
+            painter.setPen(QColor(92, 98, 106))
             font = QFont()
-            font.setPointSize(12)
+            font.setPointSize(11 if self.in_grid else 12)
             painter.setFont(font)
             painter.drawText(self.rect(), Qt.AlignCenter,
-                             f"{message}\n(Ctrl+O)")
+                             "시리즈를 끌어다 놓으세요" if self.in_grid else f"{message}\n(Ctrl+O)")
             return
 
         logo_size = int(min(128, h * 0.25))
