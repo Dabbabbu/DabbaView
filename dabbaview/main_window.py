@@ -962,6 +962,13 @@ class MainWindow(QMainWindow):
                        self._act_landmarks, self._act_tile):
             view_bar.addAction(action)
         # ✎ 버튼 우클릭 → 종류별로 켜고 끄는 메뉴
+        view_bar.setContextMenuPolicy(Qt.PreventContextMenu)   # Qt 기본 '도구 모음 목록' 메뉴 막기
+        self._init_roi_stat_fields()
+        lens_button = view_bar.widgetForAction(self._act_value_lens)
+        if lens_button is not None:   # HU Lens 우클릭 → ROI에 보일 값 고르기
+            lens_button.setContextMenuPolicy(Qt.CustomContextMenu)
+            lens_button.customContextMenuRequested.connect(
+                lambda pos, b=lens_button: self.roi_stats_menu(b).exec_(b.mapToGlobal(pos)))
         annot_button = view_bar.widgetForAction(self._act_annotations)
         if annot_button is not None:
             annot_button.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -3999,6 +4006,50 @@ class MainWindow(QMainWindow):
         for vp in self._all_viewports():
             vp.update()
         self._statusbar.showMessage(f"측정 {removed}개를 지웠습니다.", 5000)
+
+    def _init_roi_stat_fields(self):
+        """ROI 상자에 보일 값 목록을 설정에서 불러온다 (기본: Area · Avg · Max · Min · SD)"""
+        saved = self._settings.value("view/roi_stats", None)
+        if saved:
+            fields = tuple(f for f in DicomViewport.ROI_STAT_ORDER
+                           if f in set(str(saved).split(",")))
+            if fields:
+                DicomViewport.roi_stat_fields = fields
+
+    def roi_stats_menu(self, parent):
+        """HU Lens 버튼 우클릭 — ROI 상자에 어떤 값을 보일지 고르기"""
+        menu = QMenu(parent)
+        header = menu.addAction("ROI에 보일 값")
+        header.setEnabled(False)
+        for key in DicomViewport.ROI_STAT_ORDER:
+            action = menu.addAction(DicomViewport.ROI_STAT_LABELS[key])
+            action.setCheckable(True)
+            action.setChecked(key in DicomViewport.roi_stat_fields)
+            action.triggered.connect(lambda _c=False, k=key: self._toggle_roi_stat(k))
+        menu.addSeparator()
+        menu.addAction("기본값으로 (Area · Avg · Max · Min · SD)",
+                       lambda: self._set_roi_stats(("area", "avg", "max", "min", "sd")))
+        menu.addAction("모두 보기", lambda: self._set_roi_stats(DicomViewport.ROI_STAT_ORDER))
+        menu.addSeparator()
+        lens = menu.addAction("🔎 HU Lens 켜기")
+        lens.setCheckable(True)
+        lens.setChecked(self._act_value_lens.isChecked())
+        lens.triggered.connect(lambda on: (self._act_value_lens.setChecked(on),
+                                           self._set_value_lens_all(on)))
+        return menu
+
+    def _toggle_roi_stat(self, key):
+        fields = set(DicomViewport.roi_stat_fields)
+        fields.symmetric_difference_update({key})
+        self._set_roi_stats(tuple(f for f in DicomViewport.ROI_STAT_ORDER if f in fields))
+
+    def _set_roi_stats(self, fields):
+        DicomViewport.roi_stat_fields = tuple(fields)
+        self._settings.setValue("view/roi_stats", ",".join(fields))
+        for vp in self._all_viewports():
+            vp.update()
+        names = [DicomViewport.ROI_STAT_LABELS[f].split(" (")[0] for f in fields]
+        self._statusbar.showMessage("ROI에 보일 값: " + (" · ".join(names) or "없음"), 5000)
 
     def landmark_menu(self, parent):
         """📍 Landmark 버튼 우클릭 — 표시 · 목록 · 이 시리즈의 점 지우기"""

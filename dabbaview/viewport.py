@@ -542,6 +542,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     show_notes = True
     show_profile = True
 
+    # ROI 상자에 어떤 값을 보일지 (HU Lens 버튼 우클릭에서 고른다)
+    # 기본은 상용 PACS에서 흔히 쓰는 Area · Avg · Max · Min · SD
+    ROI_STAT_ORDER = ("area", "perim", "avg", "max", "min", "sd", "median", "n")
+    ROI_STAT_LABELS = {"area": "면적 (Area)", "perim": "둘레 (Perim)", "avg": "평균 (Avg)",
+                       "max": "최대 (Max)", "min": "최소 (Min)", "sd": "표준편차 (SD)",
+                       "median": "중앙값 (Med)", "n": "픽셀 수 (n)"}
+    roi_stat_fields = ("area", "avg", "max", "min", "sd")
+
     MEASURE_KINDS = ("distance", "path", "angle", "cobb", "roi", "area", "ellipse", "rect")
     NOTE_KINDS = ("arrow", "text", "scribble")
 
@@ -2011,15 +2019,28 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             return name + [f"Cobb {ann['deg']:.1f}°"]
         if kind in ROI_TYPES:
             s, label = ann["stats"], ann.get("label", "")
-            area = fmt_area(s["area_mm2"], s.get("pixels")) if calibrated else f"{s.get('pixels', 0)} px²"
-            lines = name + [f"Area {area}"
-                            + (f"  Perim {fmt_length(s['perimeter_mm'])}" if "perimeter_mm" in s else "")]
+            want = self.roi_stat_fields
+            digits = 2 if label == "SUVbw" else 1
+            head = []
+            if "area" in want:
+                head.append("Area " + (fmt_area(s["area_mm2"], s.get("pixels")) if calibrated
+                                       else f"{s.get('pixels', 0)} px²"))
+            if "perim" in want and "perimeter_mm" in s:
+                head.append("Perim " + fmt_length(s["perimeter_mm"]))
+            lines = name + (["  ".join(head)] if head else [])
             if "mean" in s:
-                digits = 2 if label == "SUVbw" else 1
-                lines += [f"Mean {s['mean']:.{digits}f}  SD {s['std']:.{digits}f}",
-                          f"Min {s['min']:.{digits}f}  Max {s['max']:.{digits}f}"
-                          + (f"  Med {s['median']:.{digits}f}" if "median" in s else ""),
-                          f"{label}  n={s['pixels']}"]
+                values = {"avg": ("Avg", s["mean"]), "max": ("Max", s["max"]),
+                          "min": ("Min", s["min"]), "sd": ("SD", s["std"])}
+                if "median" in s:
+                    values["median"] = ("Med", s["median"])
+                row = [f"{values[k][0]} {values[k][1]:.{digits}f}"
+                       for k in ("avg", "max", "min", "sd", "median")
+                       if k in want and k in values]
+                # 한 줄에 넷씩 — 기본 네 값(Avg · Max · Min · SD)이 한 줄에 들어간다
+                for i in range(0, len(row), 4):
+                    lines.append("  ".join(row[i:i + 4]))
+                if "n" in want:
+                    lines.append(f"{label}  n={s['pixels']}")
             return lines
         if kind == "cursor3d":
             lines = []
