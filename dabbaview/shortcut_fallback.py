@@ -2,13 +2,22 @@
 # This file is part of DabbaView, licensed under GPL-3.0.
 # See LICENSE for details.
 """
-한글 입력 상태에서도 한 글자 단축키(T, R, P, V ...)가 동작하도록 하는 보정
+단축키가 먹지 않는 두 가지 경우를 메꾼다
+
+1. 한글 입력 상태에서 한 글자 단축키(T, R, P, V ...)
 
 한글(두벌식 등) 입력 소스가 켜져 있으면 T 키가 'ㅅ'으로 들어와
 QKeySequence("T")와 일치하지 않음 → 단축키 무시.
-처리되지 않은 키 입력의 물리 키 코드(nativeVirtualKey)를 영문 키로 바꿔
-같은 창의 QAction 단축키를 찾아 실행한다.
-텍스트 입력 위젯에서는 한글 입력을 그대로 둔다.
+   처리되지 않은 키 입력의 물리 키 코드(nativeVirtualKey)를 영문 키로 바꿔
+   같은 창의 QAction 단축키를 찾아 실행한다.
+
+2. macOS에서 메뉴에 'Ctrl+R'로 적힌 단축키를 물리 ⌃(Control) 키로 누른 경우
+   Qt는 macOS에서 Ctrl = ⌘(Command)로 보므로 ⌃R은 아무 데도 닿지 않는다.
+   DabbaView는 마우스 조작에서도 ⌘와 ⌃를 같게 보므로(CTRL_MODIFIERS), 단축키도 같게 맞춘다.
+   → ⌃+키를 ⌘+키로 바꿔 한 번 더 찾아 본다.
+
+텍스트 입력 위젯에서는 둘 다 건드리지 않는다
+(한글 입력과 ⌃A · ⌃E · ⌃K 같은 macOS 글자 편집 키를 그대로 두기 위해).
 """
 import sys
 
@@ -30,6 +39,10 @@ _MODIFIER_MASK = (Qt.ShiftModifier | Qt.ControlModifier | Qt.AltModifier
                   | Qt.MetaModifier)
 
 _TEXT_INPUT_WIDGETS = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
+
+# 수정키 자체는 단축키로 보지 않는다
+_MODIFIER_KEYS = (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta,
+                  Qt.Key_CapsLock, Qt.Key_AltGr)
 
 
 def latin_key(event):
@@ -69,16 +82,26 @@ class LatinShortcutFilter(QObject):
     def eventFilter(self, obj, event):
         if event.type() != QEvent.KeyPress or event.isAutoRepeat():
             return False
-        key = latin_key(event)
-        if key is None:
-            return False
         focus = QApplication.focusWidget()
         if _is_text_input(focus):
             return False
+        modifiers = int(event.modifiers() & _MODIFIER_MASK)
+        # macOS에서 물리 ⌃만 누른 경우 → 메뉴에 적힌 'Ctrl'(=⌘)로 바꿔 찾는다
+        mac_ctrl = bool(sys.platform == "darwin"
+                        and modifiers & int(Qt.MetaModifier)
+                        and not modifiers & int(Qt.ControlModifier))
+        key = latin_key(event)
+        if key is None:
+            if not mac_ctrl:
+                return False
+            key = event.key()
+            if key <= 0 or key in _MODIFIER_KEYS:
+                return False
+        if mac_ctrl:
+            modifiers = (modifiers & ~int(Qt.MetaModifier)) | int(Qt.ControlModifier)
         window = (focus or obj).window() if hasattr(focus or obj, "window") else None
         if window is None:
             return False
-        modifiers = int(event.modifiers() & _MODIFIER_MASK)
         sequence = QKeySequence(key | modifiers)
         for action in window.findChildren(QAction):
             if sequence in action.shortcuts() and _shortcut_active(action):

@@ -15,8 +15,9 @@ from PIL import Image
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                              QLabel, QComboBox, QDoubleSpinBox, QCheckBox,
                              QPushButton, QFileDialog, QProgressDialog,
-                             QMessageBox)
+                             QMessageBox, QApplication)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QImage
 
 from .dicom_loader import default_worker_count
 
@@ -250,6 +251,89 @@ def export_series_video(series, filepath, fmt, duration, size=None,
             writer.release()
 
 
+def _pixmap_to_rgb(pixmap):
+    """QPixmap → HxWx3 uint8 (RGB)"""
+    image = pixmap.toImage().convertToFormat(QImage.Format_RGB888)
+    w, h = image.width(), image.height()
+    ptr = image.constBits()
+    ptr.setsize(image.byteCount())
+    row = np.frombuffer(ptr, np.uint8).reshape(h, image.bytesPerLine())
+    return row[:, :w * 3].reshape(h, w, 3).copy()
+
+
+def export_rendered_video(viewport, series, filepath, fmt, duration, size=None,
+                          picked=(), progress_callback=None, cancel_check=None):
+    """화면에 보이는 그대로(측정 · 판서 · 랜드마크 · 글자 포함) 한 장씩 찍어 동영상으로
+
+    원본 픽셀을 바로 쓰는 export_series_video와 달리, 지금 보고 있는 칸을 슬라이스마다
+    다시 그려 담는다 — 확대 · 이동 · W/L · 그린 것이 그대로 들어간다.
+    Qt로 그려야 하므로 백그라운드 스레드가 아니라 이 자리에서 한 장씩 처리한다.
+    """
+    from .overlay_options import applied
+
+    total = series.num_slices
+    if total == 0:
+        raise ValueError("내보낼 슬라이스가 없습니다.")
+    fps = total / duration
+    gif_step = 1
+    if fmt == 'GIF':
+        frame_ms = duration * 1000 / total
+        if frame_ms < GIF_MIN_FRAME_MS:
+            gif_step = int(np.ceil(GIF_MIN_FRAME_MS / frame_ms))
+
+    kind = "full" if picked else "image"
+    writer, gif_frames, out_size = None, [], None
+    saved_slice = viewport.current_slice
+    try:
+        with applied(viewport, picked):
+            for i in range(total):
+                if cancel_check is not None and cancel_check():
+                    raise ExportCancelled()
+                viewport.go_to_slice(i, user=False)
+                img = _pixmap_to_rgb(viewport.capture(kind, overlay="demographics" in picked))
+                if size:
+                    img = _fit_square(img, size)
+                img = _make_even(img)
+                if out_size is None:
+                    out_size = (img.shape[1], img.shape[0])
+                elif (img.shape[1], img.shape[0]) != out_size:
+                    img = cv2.resize(img, out_size, interpolation=cv2.INTER_AREA)
+                if fmt == 'GIF':
+                    if i % gif_step == 0:
+                        gif_frames.append(Image.fromarray(img))
+                else:
+                    if writer is None:
+                        writer = _open_writer(filepath, fmt, fps, out_size)
+                    writer.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                if progress_callback:
+                    progress_callback(i + 1, total)
+
+        if fmt == 'GIF':
+            if not gif_frames:
+                raise ValueError("읽을 수 있는 프레임이 없습니다.")
+            n = len(gif_frames)
+            total_ms = max(duration * 1000, n * GIF_MIN_FRAME_MS)
+            ticks = [round(k * total_ms / n / 10) * 10 for k in range(n + 1)]
+            durations = [max(GIF_MIN_FRAME_MS, b - a) for a, b in zip(ticks, ticks[1:])]
+            gif_frames[0].save(filepath, save_all=True, append_images=gif_frames[1:],
+                               duration=durations, loop=0, optimize=False)
+            return n * 1000 / sum(durations)
+        if writer is None:
+            raise ValueError("읽을 수 있는 프레임이 없습니다.")
+        return fps
+    except BaseException:
+        if writer is not None:
+            writer.release()
+            writer = None
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        raise
+    finally:
+        if writer is not None:
+            writer.release()
+        viewport.go_to_slice(saved_slice, user=False)
+
+
 def _open_writer(filepath, fmt, fps, frame_size):
     for fourcc in FORMATS[fmt][1]:
         writer = cv2.VideoWriter(filepath, cv2.VideoWriter_fourcc(*fourcc),
@@ -301,15 +385,18 @@ class VideoExportDialog(QDialog):
     """동영상 내보내기 옵션 다이얼로그"""
 
     def __init__(self, series, window_center, window_width, inverted,
-                 parent=None):
+                 parent=None, viewport=None, settings=None):
         super().__init__(parent)
         self.setWindowTitle("Export as Video")
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(430)
+        self._viewport = viewport          # 화면 그대로 담을 때 쓸 칸 (없으면 원본 픽셀만)
+        self._settings = settings
         self._series = series
         self._wc = window_center
         self._ww = window_width
         self._inverted = inverted
         self._frames = count_frames(series)
+        self.result_message = ""
         self._worker = None
         self._progress = None
         self._init_ui()
@@ -356,6 +443,17 @@ class VideoExportDialog(QDialog):
         self._wl_check.setToolTip("해제하면 시리즈 전체 밝기 범위로 자동 매핑")
         form.addRow("Windowing:", self._wl_check)
 
+        # 함께 담을 것 — 캡처와 같은 목록 (체크한 것만 동영상에 들어간다)
+        self._picker = None
+        if self._viewport is not None and self._settings is not None:
+            from .overlay_options import OverlayPicker
+            self._picker = OverlayPicker(self._settings, "video/overlay_parts", self)
+            self._picker.setToolTip(
+                "체크한 것만 동영상에 함께 담깁니다\n"
+                "하나라도 체크하면 '화면에 보이는 그대로'(확대 · 이동 · 그린 것 포함) 담습니다\n"
+                "모두 해제하면 원본 픽셀만 그대로 담습니다 (더 빠릅니다)")
+            form.addRow("함께 담을 것:", self._picker)
+
         layout.addLayout(form)
 
         btn_layout = QHBoxLayout()
@@ -393,6 +491,9 @@ class VideoExportDialog(QDialog):
             filepath += ext
 
         apply_wl = self._wl_check.isChecked()
+        picked = set(self._picker.picked) if self._picker is not None else set()
+        if picked:
+            return self._export_rendered(filepath, fmt, picked)
         options = {
             'fmt': fmt,
             'duration': self._duration_spin.value(),
@@ -413,6 +514,36 @@ class VideoExportDialog(QDialog):
         self._worker.finished.connect(self._worker.deleteLater)
         self._progress.canceled.connect(self._worker.cancel)
         self._worker.start()
+
+    def _export_rendered(self, filepath, fmt, picked):
+        """화면에 보이는 그대로 한 장씩 찍어 담기 (Qt로 그려야 해서 이 자리에서 처리)"""
+        progress = QProgressDialog("화면 그대로 담는 중...", "취소", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        def on_progress(current, total):
+            progress.setLabelText(f"화면 그대로 담는 중... ({current}/{total})")
+            progress.setValue(current * 100 // total)
+            QApplication.processEvents()
+
+        try:
+            fps = export_rendered_video(
+                self._viewport, self._series, filepath, fmt,
+                self._duration_spin.value(),
+                size=RESOLUTIONS[self._resolution_combo.currentIndex()][1],
+                picked=picked, progress_callback=on_progress,
+                cancel_check=progress.wasCanceled)
+        except ExportCancelled:
+            progress.close()
+            return
+        except Exception as e:
+            progress.close()
+            QMessageBox.warning(self, "Export Failed", str(e))
+            return
+        progress.close()
+        self.result_message = f"Exported: {filepath} ({fps:.1f} fps · 화면 그대로)"
+        self.accept()
 
     def _on_progress(self, current, total):
         if self._progress is not None:

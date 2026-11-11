@@ -564,6 +564,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     show_measurements = True
     show_measure_labels = True
     show_notes = True
+    show_scribble = True     # ✍ 판서(필기)는 화살표 · 텍스트와 따로 끄고 켠다
     show_profile = True
 
     # ROI 상자에 어떤 값을 보일지 (HU Lens 버튼 우클릭에서 고른다)
@@ -611,6 +612,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             return False
         if kind in cls.MEASURE_KINDS:
             return cls.show_measurements
+        if kind == "scribble":
+            return cls.show_scribble
         if kind in cls.NOTE_KINDS:
             return cls.show_notes
         if kind == "profile":
@@ -1967,9 +1970,10 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         """지금 보는 슬라이스의 주석만 삭제 → 지운 개수 (다른 슬라이스는 그대로)"""
         key = self._image_key()
         ids = [a.get("id") for a in self._store.items(key)]
-        for ann_id in ids:
-            if ann_id is not None:
-                self._store.remove(key, ann_id)
+        with self._store.group():      # Ctrl+Z 한 번이면 통째로 돌아온다
+            for ann_id in ids:
+                if ann_id is not None:
+                    self._store.remove(key, ann_id)
         self._draft = None
         self.update()
         return len(ids)
@@ -3053,7 +3057,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         테두리 강조 · 돋보기 · 오른쪽 막대는 조작 장치이므로 어느 경우에도 빼고 찍는다.
         """
         if kind == "marks":
-            return self._capture_marks()
+            return self._capture_marks(overlay)
         bar = getattr(self, "_slice_bar", None)
         phase_bar = getattr(self, "_phase_bar_widget", None)
         shown = [b for b in (bar, phase_bar) if b is not None and b.isVisible()]
@@ -3077,8 +3081,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 b.show()
             self.update()
 
-    def _capture_marks(self):
-        """그린 것만 투명 배경에 (영상 · 글자 없이)"""
+    def _capture_marks(self, overlay=False):
+        """그린 것만 투명 배경에 (overlay면 환자 정보 글자도 함께)"""
         pixmap = QPixmap(self.size())
         pixmap.setDevicePixelRatio(self.devicePixelRatioF())
         pixmap.fill(Qt.transparent)
@@ -3090,6 +3094,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             if self._show_annotations and DicomViewport.annotations_visible:
                 self._draw_annotations(painter)
                 self._draw_analysis(painter)
+            if overlay and self._show_overlay:
+                self._draw_overlay(painter)
         finally:
             painter.end()
             self._highlight, self._hover_pos, self._magnifying = saved

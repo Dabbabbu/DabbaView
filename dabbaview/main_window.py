@@ -232,6 +232,10 @@ class _GeometryWatcher(QObject):
         self._callback()
 
 
+# ✍ 판서 색 단축키 — macOS에서는 ⌘와 물리 ⌃ 둘 다 받는다 (shortcut_fallback)
+DRAW_COLOR_KEYS = {"red": "Ctrl+R", "blue": "Ctrl+B", "green": "Ctrl+G", "white": "Ctrl+W"}
+
+
 class MainWindow(QMainWindow):
     """DabbaView 메인 윈도우"""
 
@@ -1068,9 +1072,10 @@ class MainWindow(QMainWindow):
                             "상태바에는 항상 좌표와 값이 표시됩니다",
             self._set_value_lens_all, checkable=True)
         self._act_capture = make("📷 Capture", "Ctrl+Shift+S",
-                                 "현재 칸을 그림으로 저장 (영상 + 측정 · 판서 + 정보)\n"
-                                 "우클릭: 영상만 / 판서 · 측정만(배경 투명) 고르기",
-                                 lambda: self._capture_image("full"))
+                                 "현재 칸을 그림으로 저장 — 무엇을 담을지 고르는 창이 뜹니다\n"
+                                 "(측정 · 판서 · 랜드마크 · 환자 정보 글자를 하나씩 체크)\n"
+                                 "우클릭: 고르지 않고 바로 저장",
+                                 lambda: self._capture_image())
         self._act_ref_lines = make("Ref Lines", "",
                                    "Reference Line — 현재 슬라이스 한 줄\n"
                                    "다른 칸이 보고 있는 슬라이스가 이 영상의 어디인지 한 줄(노란 실선)로만 표시합니다.\n"
@@ -3040,7 +3045,8 @@ class MainWindow(QMainWindow):
     ANNOT_PARTS = (
         ("view/annot_measurements", "show_measurements", "📐 측정 · ROI (선과 도형)", "", "측정 · ROI"),
         ("view/measure_labels", "show_measure_labels", "🔢 측정 숫자 (Area · Mean …)", "N", "측정 숫자"),
-        ("view/annot_notes", "show_notes", "↗ 화살표 · 텍스트 · ✍ 판서", "", "화살표 · 메모 · 판서"),
+        ("view/annot_notes", "show_notes", "↗ 화살표 · 텍스트", "", "화살표 · 텍스트"),
+        ("view/annot_scribble", "show_scribble", "✍ 판서 (필기)", "", "판서"),
         ("view/annot_profile", "show_profile", "📈 라인 프로파일", "", "라인 프로파일"),
     )
 
@@ -3129,8 +3135,51 @@ class MainWindow(QMainWindow):
         landmark.setEnabled(DicomViewport.annotations_visible)
         landmark.triggered.connect(self._toggle_landmarks)
         menu.addSeparator()
+        self._add_scribble_edit_items(menu.addMenu("✍ 판서 (필기)"))
+        menu.addSeparator()
         menu.addAction("📐 ROI Manager\tCtrl+Shift+M", self._toggle_roi_manager)
         menu.addAction("📍 랜드마크 목록…\tShift+F", self.show_landmark_list)
+        return menu
+
+    def _add_scribble_edit_items(self, menu):
+        """✍ 판서 묶음 — 보이기 · 되돌리기 · 전체 지우기 · 다시 하기 · 색 · 굵기
+
+        아노테이션 메뉴와 판서 버튼 우클릭 메뉴가 같은 항목을 쓰도록 한곳에 모았다.
+        """
+        show = menu.addAction("✍ 판서 보이기")
+        show.setCheckable(True)
+        show.setChecked(DicomViewport.show_scribble)
+        show.setEnabled(DicomViewport.annotations_visible)
+        show.triggered.connect(lambda: self._toggle_annotation_part("show_scribble"))
+        menu.addSeparator()
+        menu.addAction("↩︎ 이전으로 되돌리기\tCtrl(⌘)+Z", self._undo)
+        vp = self._target_viewport()
+        n = len(list(vp.annotations_here())) if vp is not None else 0
+        clear = menu.addAction(f"🗑 이 슬라이스 전체 지우기 ({n}개)\tCtrl(⌘)+E")
+        clear.setEnabled(n > 0)
+        clear.triggered.connect(lambda: self._clear_slice_annotations(vp))
+        menu.addAction("↪︎ 앞으로 되돌리기 (다시 하기)\tCtrl(⌘)+Y", self._redo)
+        menu.addSeparator()
+        self._add_draw_style_items(menu)
+        return menu
+
+    def _add_draw_style_items(self, menu):
+        """✍ 판서 색 · 굵기 (메뉴 여러 곳에서 같은 모습으로)"""
+        from .viewport import DRAW_COLORS
+        for key, label, _color in DRAW_COLORS:
+            action = menu.addAction(f"{label}\t{DRAW_COLOR_KEYS[key]}")
+            action.setCheckable(True)
+            action.setChecked(key == DicomViewport.draw_color)
+            action.triggered.connect(lambda _c=False, k=key: self.set_draw_color(k))
+        width = DicomViewport.draw_width
+        thicker = menu.addAction(f"선 굵게 (지금 {width})\tCtrl(⌘)+]")
+        thicker.setEnabled(width < DicomViewport.DRAW_WIDTH_MAX)
+        thicker.triggered.connect(lambda: self.nudge_draw_width(1))
+        thinner = menu.addAction(f"선 얇게 (지금 {width})\tCtrl(⌘)+[")
+        thinner.setEnabled(width > DicomViewport.DRAW_WIDTH_MIN)
+        thinner.triggered.connect(lambda: self.nudge_draw_width(-1))
+        hint = menu.addAction("판서 중 Ctrl(⌘)+휠로도 굵기 조절")
+        hint.setEnabled(False)
         return menu
 
     def _toggle_landmarks(self):
@@ -4046,7 +4095,7 @@ class MainWindow(QMainWindow):
         demo.triggered.connect(lambda on: self._set_overlay_all(on))
         menu.addSeparator()
         n_here = len(list(viewport.annotations_here()))
-        clear_here = menu.addAction(f"🗑 이 슬라이스의 측정 지우기 ({n_here}개)")
+        clear_here = menu.addAction(f"🗑 이 슬라이스의 측정 · 판서 지우기 ({n_here}개)\tCtrl(⌘)+E")
         clear_here.setEnabled(n_here > 0)
         clear_here.triggered.connect(lambda: self._clear_slice_annotations(viewport))
         series = getattr(viewport, "series", None)
@@ -4063,19 +4112,21 @@ class MainWindow(QMainWindow):
         self._statusbar.showMessage("환자 정보 글자: " + ("보임" if on else "숨김"), 4000)
 
     def _clear_slice_annotations(self, viewport):
-        """지금 보는 슬라이스에 그린 측정만 지운다 (다른 슬라이스는 그대로)"""
+        """지금 보는 슬라이스에 그린 측정 · 판서를 지운다 (다른 슬라이스는 그대로)
+
+        한 단계로 묶어 지우므로 Ctrl+Z 한 번이면 그대로 돌아온다 → 따로 묻지 않는다.
+        """
+        if viewport is None:
+            return
         items = list(viewport.annotations_here())
         if not items:
-            return
-        if QMessageBox.question(
-                self, "측정 지우기",
-                f"이 슬라이스에 그린 측정 {len(items)}개를 지울까요?\n되돌릴 수 없습니다.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            self._statusbar.showMessage("이 슬라이스에는 지울 것이 없습니다.", 3000)
             return
         removed = viewport.clear_annotations_here()
         for vp in self._all_viewports():
             vp.update()
-        self._statusbar.showMessage(f"측정 {removed}개를 지웠습니다.", 5000)
+        self._statusbar.showMessage(
+            f"이 슬라이스의 측정 · 판서 {removed}개를 지웠습니다 (Ctrl+Z로 되돌리기)", 6000)
 
     def _init_roi_stat_fields(self):
         """ROI 상자에 보일 값 목록을 설정에서 불러온다 (기본: Area · Avg · Max · Min · SD)"""
@@ -4188,22 +4239,15 @@ class MainWindow(QMainWindow):
         """✍ 판서 — 색 · 굵기 · 지우기 (각각 단축키를 함께)"""
         from .viewport import DRAW_COLORS
         menu = QMenu(parent)
-        keys = {"red": "Ctrl+R", "blue": "Ctrl+B", "green": "Ctrl+G", "white": "Ctrl+W"}
-        for key, label, _color in DRAW_COLORS:
-            action = menu.addAction(f"{label}\t{keys[key]}")
-            action.setCheckable(True)
-            action.setChecked(key == DicomViewport.draw_color)
-            action.triggered.connect(lambda _c=False, k=key: self.set_draw_color(k))
+        self._add_draw_style_items(menu)
         menu.addSeparator()
-        width = DicomViewport.draw_width
-        thicker = menu.addAction(f"선 굵게 (지금 {width})\tCtrl+]")
-        thicker.setEnabled(width < DicomViewport.DRAW_WIDTH_MAX)
-        thicker.triggered.connect(lambda: self.nudge_draw_width(1))
-        thinner = menu.addAction(f"선 얇게 (지금 {width})\tCtrl+[")
-        thinner.setEnabled(width > DicomViewport.DRAW_WIDTH_MIN)
-        thinner.triggered.connect(lambda: self.nudge_draw_width(-1))
-        hint = menu.addAction("판서 중 Ctrl(⌘)+휠로도 굵기 조절")
-        hint.setEnabled(False)
+        menu.addAction("↩︎ 이전으로 되돌리기\tCtrl(⌘)+Z", self._undo)
+        vp_now = self._target_viewport()
+        n_here = len(list(vp_now.annotations_here())) if vp_now is not None else 0
+        wipe = menu.addAction(f"🗑 이 슬라이스 전체 지우기 ({n_here}개)\tCtrl(⌘)+E")
+        wipe.setEnabled(n_here > 0)
+        wipe.triggered.connect(lambda: self._clear_slice_annotations(vp_now))
+        menu.addAction("↪︎ 앞으로 되돌리기 (다시 하기)\tCtrl(⌘)+Y", self._redo)
         menu.addSeparator()
         shapes = menu.addAction("수정키를 누른 채 끌면 도형 (ZoomIt처럼)")
         shapes.setEnabled(False)
@@ -4211,15 +4255,10 @@ class MainWindow(QMainWindow):
             item = menu.addAction(f"  {label}\t{combo}+드래그")
             item.setEnabled(False)
         menu.addSeparator()
-        show = menu.addAction("↗ 화살표 · 텍스트 · ✍ 판서 보이기")
+        show = menu.addAction("✍ 판서 보이기")
         show.setCheckable(True)
-        show.setChecked(DicomViewport.show_notes)
-        show.triggered.connect(lambda: self._toggle_annotation_part("show_notes"))
-        vp = self._target_viewport()
-        n = len(list(vp.annotations_here())) if vp is not None else 0
-        clear = menu.addAction(f"🗑 이 슬라이스의 측정 · 판서 지우기 ({n}개)")
-        clear.setEnabled(n > 0)
-        clear.triggered.connect(lambda: self._clear_slice_annotations(vp))
+        show.setChecked(DicomViewport.show_scribble)
+        show.triggered.connect(lambda: self._toggle_annotation_part("show_scribble"))
         return menu
 
     def landmark_menu(self, parent):
@@ -4312,21 +4351,20 @@ class MainWindow(QMainWindow):
         self._statusbar.showMessage(f"랜드마크 {removed}개를 지웠습니다.", 5000)
 
     def _init_draw_actions(self, menu):
-        """✍ 판서 색 · 굵기 단축키 (Ctrl+R/B/G/W · Ctrl+휠)"""
+        """✍ 판서 색 · 굵기 · 지우기 단축키 (Ctrl+R/B/G/W · Ctrl+[ ] · Ctrl+E)"""
         from .viewport import DRAW_COLORS
         sub = menu.addMenu("✍ 판서 색 · 굵기")
         saved = self._settings.value("draw/color", "red", type=str)
         DicomViewport.set_draw_color(saved)
         DicomViewport.set_draw_width(self._settings.value("draw/width", 2, type=int))
         self._draw_color_actions = {}
-        keys = {"red": "Ctrl+R", "blue": "Ctrl+B", "green": "Ctrl+G", "white": "Ctrl+W"}
         group = QActionGroup(self)
         group.setExclusive(True)
         for key, label, _color in DRAW_COLORS:
             action = sub.addAction(label)
             action.setCheckable(True)
             action.setChecked(key == DicomViewport.draw_color)
-            action.setShortcut(QKeySequence(keys[key]))
+            action.setShortcut(QKeySequence(DRAW_COLOR_KEYS[key]))
             action.triggered.connect(lambda _c=False, k=key: self.set_draw_color(k))
             group.addAction(action)
             self._draw_color_actions[key] = action
@@ -4338,7 +4376,14 @@ class MainWindow(QMainWindow):
         thinner.setShortcut(QKeySequence("Ctrl+["))
         thinner.triggered.connect(lambda: self.nudge_draw_width(-1))
         sub.addSeparator()
-        hint = sub.addAction("판서 중 Ctrl(⌘)+휠로도 굵기 조절")
+        wipe = sub.addAction("🗑 이 슬라이스에 그린 것 전체 지우기")
+        wipe.setShortcut(QKeySequence("Ctrl+E"))
+        wipe.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        self._tab_widget.addAction(wipe)
+        wipe.setToolTip("지금 보는 슬라이스의 측정 · 판서를 한 번에 지웁니다 (Ctrl+Z로 되돌리기)")
+        wipe.triggered.connect(lambda: self._clear_slice_annotations(self._target_viewport()))
+        sub.addSeparator()
+        hint = sub.addAction("Ctrl은 ⌘와 ⌃ 둘 다 됩니다 · 판서 중 Ctrl+휠로도 굵기 조절")
         hint.setEnabled(False)
 
     def set_draw_color(self, key):
@@ -4429,22 +4474,42 @@ class MainWindow(QMainWindow):
             self.capture_menu(bar).exec_(bar.mapToGlobal(pos))
 
     def capture_menu(self, parent):
-        """📷 Capture 우클릭 — 무엇을 담을지 고르기"""
+        """📷 Capture 우클릭 — 고르는 창 없이 바로 저장하는 빠른 길"""
         menu = QMenu(parent)
-        header = menu.addAction("이 칸을 그림으로 저장")
+        choose = menu.addAction("⚙︎ 담을 항목 고르기…\tCtrl+Shift+S")
+        choose.setToolTip("측정 · 판서 · 랜드마크 · 환자 정보 글자를 하나씩 체크해서 담습니다")
+        choose.triggered.connect(lambda: self._capture_image())
+        menu.addSeparator()
+        header = menu.addAction("고르지 않고 바로 저장")
         header.setEnabled(False)
         for kind, label, tip in DicomViewport.CAPTURE_KINDS:
             action = menu.addAction(label)
             action.setToolTip(tip)
-            action.setShortcut(QKeySequence("Ctrl+Shift+S") if kind == "full" else QKeySequence())
             action.triggered.connect(lambda _c=False, k=kind: self._capture_image(k))
         menu.addSeparator()
         hint = menu.addAction("'판서 · 측정만'은 PNG로 저장해야 배경이 투명합니다")
         hint.setEnabled(False)
         return menu
 
-    def _capture_image(self, kind="full"):
-        """현재 화면을 그림으로 저장 — kind: full | image | marks"""
+    def _capture_image(self, kind=None, picked=None):
+        """현재 화면을 그림으로 저장
+
+        kind가 없으면 먼저 '무엇을 담을까요?' 창을 띄워 종류와 항목을 고르게 한다.
+        kind: full(영상 + 고른 것) | image(영상만) | marks(그린 것만, 배경 투명)
+        """
+        if kind is None:
+            from .overlay_options import CaptureOptionsDialog
+            dialog = CaptureOptionsDialog(self._settings, self)
+            if not dialog.exec_():
+                return
+            kind, picked = dialog.kind(), dialog.picked
+        if picked is not None:
+            from .overlay_options import applied
+            with applied(self._target_viewport(), picked):
+                return self._capture_to_file(kind, "demographics" in picked)
+        return self._capture_to_file(kind, True)
+
+    def _capture_to_file(self, kind, overlay=True):
         current = self._current_view()
         if current is self._page2d and self._stack2d.currentWidget() is self._tile_view:
             pixmap = self._tile_view.grab()
@@ -4454,7 +4519,7 @@ class MainWindow(QMainWindow):
             if vp.series is None:
                 QMessageBox.information(self, "Info", "캡처할 영상이 없습니다.")
                 return
-            pixmap = vp.capture(kind)
+            pixmap = vp.capture(kind, overlay=overlay)
             name = (vp.series.description or "capture").strip()
             if kind != "full":
                 name += {"image": " (영상만)", "marks": " (판서만)"}.get(kind, "")
@@ -4865,11 +4930,17 @@ class MainWindow(QMainWindow):
         if not self._current_series or self._current_series.num_slices == 0:
             QMessageBox.information(self, "Info", "시리즈를 먼저 선택하세요.")
             return
+        vp = self._target_viewport()
+        # 지금 보고 있는 칸이 이 시리즈면 '화면 그대로(주석 포함)'로도 담을 수 있다
+        same = vp is not None and getattr(vp.series, "series_uid", None) == \
+            getattr(self._current_series, "series_uid", object())
         dialog = VideoExportDialog(
             self._current_series,
             self._viewport._window_center,
             self._viewport._window_width,
-            self._viewport._inverted, self)
+            self._viewport._inverted, self,
+            viewport=vp if same else None,
+            settings=self._settings if same else None)
         if dialog.exec_():
             self._statusbar.showMessage(dialog.result_message, 8000)
 
