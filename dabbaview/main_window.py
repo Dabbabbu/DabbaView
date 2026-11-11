@@ -3011,7 +3011,9 @@ class MainWindow(QMainWindow):
     def _init_landmark_display_menu(self, menu):
         """View ▸ 📍 랜드마크 표시 — 찍은 점이 보려는 곳을 가리지 않게"""
         mode = self._settings.value("view/landmark_display", "subtle", type=str)
-        DicomViewport.landmark_display = mode if mode in DicomViewport.LANDMARK_DISPLAYS else "subtle"
+        if mode not in DicomViewport.LANDMARK_DISPLAYS or mode == "hidden":
+            mode = "subtle"       # 숨김으로 시작하지 않는다 (찍어 둔 점이 안 보여 오해하지 않게)
+        DicomViewport.landmark_display = mode
         sub = menu.addMenu("📍 랜드마크 표시")
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -3044,9 +3046,14 @@ class MainWindow(QMainWindow):
     )
 
     def _init_annotation_menu(self, menu):
-        """View ▸ ✎ 아노테이션 표시 — 환자 정보(데모그래픽)와 따로 켜고 끈다"""
-        on = self._settings.value("view/annotations", True, type=bool)
-        DicomViewport.annotations_visible = bool(on)
+        """View ▸ ✎ 아노테이션 표시 — 환자 정보(데모그래픽)와 따로 켜고 끈다
+
+        표시 여부는 '이번에 보는 동안'의 상태로 본다. 앱을 켤 때는 늘 모두 보이게 시작한다 —
+        지난번에 꺼 둔 것을 잊고 "그려지지 않는다"고 오해하지 않도록.
+        (색 · 굵기 · ROI에 보일 값 같은 '취향'은 전처럼 저장된다)
+        """
+        on = True
+        DicomViewport.annotations_visible = True
         master = QAction("✎ Annot", self)
         master.setCheckable(True)
         master.setChecked(bool(on))
@@ -3061,7 +3068,7 @@ class MainWindow(QMainWindow):
         sub = menu.addMenu("✎ 아노테이션 종류별")
         self._annot_actions = {}
         for key, attr, label, shortcut, _name in self.ANNOT_PARTS:
-            value = self._settings.value(key, True, type=bool)
+            value = True          # 켤 때마다 모두 보이게 (끄고 켜는 것은 이번 보기 동안만)
             setattr(DicomViewport, attr, bool(value))
             action = sub.addAction(label)
             action.setCheckable(True)
@@ -3076,7 +3083,6 @@ class MainWindow(QMainWindow):
 
     def _set_annotations_visible(self, on):
         DicomViewport.annotations_visible = bool(on)
-        self._settings.setValue("view/annotations", bool(on))
         action = getattr(self, "_act_annotations", None)
         if action is not None and action.isChecked() != bool(on):
             action.setChecked(bool(on))
@@ -3089,7 +3095,6 @@ class MainWindow(QMainWindow):
 
     def _set_annotation_part(self, key, attr, on):
         setattr(DicomViewport, attr, bool(on))
-        self._settings.setValue(key, bool(on))
         action = getattr(self, "_annot_actions", {}).get(attr)
         if action is not None and action.isChecked() != bool(on):
             action.setChecked(bool(on))
@@ -3978,29 +3983,6 @@ class MainWindow(QMainWindow):
             return self._multi_viewport.active_viewport
         return self._viewport
 
-    def _ensure_marks_visible(self, tool):
-        """그리는 도구를 골랐는데 '그린 것'이 숨겨져 있으면 다시 켠다
-
-        아노테이션을 꺼 둔 걸 잊고 그리면 선이 남지 않는 것처럼 보여,
-        도구가 고장 난 줄 알게 된다. 펜을 들었으면 보이기를 바라는 것이므로 켜 준다.
-        """
-        V = DicomViewport
-        if tool not in V.DRAWING_TOOLS:
-            return
-        turned = []
-        if not V.annotations_visible:
-            self._set_annotations_visible(True)
-            turned.append("전체 표시")
-        if tool in (V.TOOL_SCRIBBLE, V.TOOL_ARROW, V.TOOL_TEXT) and not V.show_notes:
-            self._toggle_annotation_part("show_notes")
-            turned.append("화살표 · 메모 · 판서")
-        elif tool not in (V.TOOL_SCRIBBLE, V.TOOL_ARROW, V.TOOL_TEXT) and not V.show_measurements:
-            self._toggle_annotation_part("show_measurements")
-            turned.append("측정 · ROI")
-        if turned:
-            self._statusbar.showMessage(
-                "그린 것이 숨겨져 있어 다시 켰습니다 — " + " · ".join(turned), 6000)
-
     def _tool_button_clicked(self, tool):
         """도구 버튼을 눌렀을 때 — 이미 고른 도구를 다시 누르면 해제(Select로)
 
@@ -4019,7 +4001,6 @@ class MainWindow(QMainWindow):
                 and self._roi_manager.isVisible()):
             self._close_dock(self._roi_manager)   # 이미 고른 ROI 도구를 한 번 더 누름 → ROI Manager 닫기
         self._current_tool_id = tool
-        self._ensure_marks_visible(tool)   # 숨겨 둔 채로 그리면 '안 그려진다'고 오해한다
         self._seg.set_tool(None)  # 툴바 도구를 고르면 세그멘테이션 도구 해제
         for vp in self._all_viewports():
             vp.set_tool(tool)
