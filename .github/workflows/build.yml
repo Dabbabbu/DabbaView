@@ -154,6 +154,11 @@ jobs:
     needs: [macos, windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # 태그를 연달아 올리면 Release 작업이 겹쳐서, 먼저 끝난 쪽의 '이전 Release 정리'가
+    # 뒤엣것이 만들고 있던 초안을 지워 버렸다 (HTTP 404). 한 번에 하나씩만 돌린다.
+    concurrency:
+      group: release
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
 
@@ -217,11 +222,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 태그는 남겨 두고 Release(내려받기 파일)만 지움 - 늘 최신 하나만 보이게
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
-            | grep -vx "$GITHUB_REF_NAME" \
-            | while read -r old; do
-                echo "이전 Release 삭제: $old"
-                gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes
-              done
+          # 태그는 남겨 두고 Release(내려받기 파일)만 지움 - 늘 최신 하나만 보이게.
+          # '나보다 낮은 버전'만 지운다 - 예전에는 '나 말고 전부'를 지워서,
+          # 뒤늦게 끝난 옛 버전이 더 새 Release를 지워 버릴 수 있었다.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' > tags.txt
+          cat > prune.py <<'PY'
+          import sys
+          def key(tag):
+              parts = tag.lstrip("v").split(".")
+              return tuple(int(p) if p.isdigit() else 0 for p in (parts + ["0", "0", "0"])[:3])
+          mine = key(sys.argv[1])
+          for line in sys.stdin:
+              tag = line.strip()
+              if tag and tag != sys.argv[1] and key(tag) < mine:
+                  print(tag)
+          PY
+          python3 prune.py "$GITHUB_REF_NAME" < tags.txt > to_delete.txt
+          while read -r old; do
+            [ -n "$old" ] || continue
+            echo "이전 Release 삭제: $old"
+            gh release delete "$old" --repo "$GITHUB_REPOSITORY" --yes || true
+          done < to_delete.txt
 
