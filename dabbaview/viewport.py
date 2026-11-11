@@ -144,7 +144,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         # 영상 오른쪽 슬라이스 막대 (INFINITT 방식) — 칸마다 하나, 끌어서 빠르게 넘김
         self._slice_bar = SliceScrollBar(self)
         self._slice_bar.set_enabled_by_user(DicomViewport.slice_bar_enabled)
-        self._slice_bar.slice_requested.connect(lambda i: self.go_to_slice(i))
+        self._slice_bar.slice_requested.connect(self._go_to_position)
         # 아래쪽 가로 막대 = 위상 (cine처럼 한 자리를 여러 번 찍은 영상에서만 보인다)
         self._phase_bar_widget = PhaseScrollBar(self)
         self._phase_bar_widget.set_enabled_by_user(DicomViewport.slice_bar_enabled)
@@ -2853,6 +2853,24 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             result = None
         self._phase_map_cache = (series, result)
         return result
+
+    def _go_to_position(self, value):
+        """오른쪽 세로 막대 — 위상은 그대로 두고 슬라이스 위치만 (↑↓ 키와 같은 움직임)
+
+        위상이 있는 cine에서는 막대가 '장 번호'가 아니라 '위치'를 가리킨다(4.6.16).
+        그걸 그대로 장 번호로 넘기면 엉뚱한 곳으로 가면서 위상까지 바뀌었다.
+        """
+        pmap = self._phase_map()
+        if pmap is None:
+            self.go_to_slice(value, user=True)     # 위상이 없으면 그대로 장 번호
+            return
+        where = pmap.where(self._current_slice)
+        phase = where[1] if where else 0
+        index = pmap.slice_at(value, phase)
+        if index is None:                          # 그 위치에 이 위상이 없으면 첫 위상으로
+            index = pmap.slice_at(value, 0)
+        if index is not None:
+            self.go_to_slice(index, user=True)
 
     def _go_to_phase(self, phase):
         """아래 가로 막대에서 고른 위상으로 (지금 슬라이스 위치는 그대로)"""

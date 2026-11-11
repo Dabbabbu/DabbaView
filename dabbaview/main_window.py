@@ -1028,19 +1028,8 @@ class MainWindow(QMainWindow):
         self._fps_spin.valueChanged.connect(self._viewport.set_cine_fps)
         output_bar.addWidget(self._fps_spin)
 
-        output_bar.addSeparator()
-
-        # 슬라이스 슬라이더
-        output_bar.addWidget(QLabel(" Slice: "))
-        self._slice_slider = QSlider(Qt.Horizontal)
-        self._slice_slider.setMinimum(0)
-        self._slice_slider.setMaximum(0)
-        self._slice_slider.setFixedWidth(220)
-        self._slice_slider.valueChanged.connect(self._viewport.go_to_slice)
-        output_bar.addWidget(self._slice_slider)
-
-        self._slice_label = QLabel(" 0/0 ")
-        output_bar.addWidget(self._slice_label)
+        # 슬라이스 슬라이더는 뺐다 (4.6.21) — 영상 오른쪽 세로 막대와 아래 가로 Phase 막대가
+        # 같은 일을 하면서 영상을 가리지 않는다. 몇 장 중 몇 번째인지는 상태바에 둔다.
 
     def _set_cine_button(self, playing):
         """재생 중: ■ Stop (정지 아이콘), 멈춤: ▶ Play (재생 아이콘)"""
@@ -1153,9 +1142,15 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self._statusbar)
         self._status_wl = QLabel("W: 0  L: 0")
         self._status_zoom = QLabel("Zoom: 100%")
+        self._status_slice = QLabel("")      # 🎞 12/300 — 몇 장 중 몇 번째 (누르면 첫 장으로)
+        self._status_slice.setToolTip("이 시리즈의 슬라이스 수와 지금 위치\n"
+                                      "넘기기: 휠 · 영상 오른쪽 막대 · ↑↓\n누르면 첫 장으로")
+        self._status_slice.setCursor(Qt.PointingHandCursor)
+        self._status_slice.mousePressEvent = lambda _e: self._target_viewport().go_to_slice(0)
         self._status_pos = QLabel("")
         self._statusbar.addWidget(self._status_wl)
         self._statusbar.addWidget(self._status_zoom)
+        self._statusbar.addWidget(self._status_slice)
         self._status_file = QLabel("")            # 지금 보는 슬라이스의 파일 이름 (올리면 전체 경로)
         self._statusbar.addWidget(self._status_file)
         self._statusbar.addPermanentWidget(self._status_pos)
@@ -2883,8 +2878,6 @@ class MainWindow(QMainWindow):
         self._viewport.set_series(series)
         self._phase_bar.set_series(series)
         self._multi_viewport.set_series_to_active(series)
-        self._slice_slider.setMaximum(max(0, series.num_slices - 1))
-        self._slice_slider.setValue(0)
         self._sync_volume_tabs()
         self._refresh_image_info()
         self._ai_panel.on_series_changed()
@@ -3163,8 +3156,6 @@ class MainWindow(QMainWindow):
             slice_index, _distance = geom.nearest_slice(point["position"])
         if slice_index is not None and 0 <= int(slice_index) < series.num_slices:
             vp.go_to_slice(int(slice_index))
-            if vp is self._viewport:
-                self._slice_slider.setValue(int(slice_index))
         vp.flash_landmark(index)
         vp.setFocus()
         text = ", ".join(f"{v:.1f}" for v in point["position"])
@@ -4429,10 +4420,17 @@ class MainWindow(QMainWindow):
     def _on_slice_changed(self, current, total):
         if self.sender() is self._viewport:
             self._show_source(self._current_series, current)
-        self._slice_slider.blockSignals(True)
-        self._slice_slider.setValue(current)
-        self._slice_slider.blockSignals(False)
-        self._slice_label.setText(f" {current + 1}/{total} ")
+        if not total:
+            self._status_slice.setText("")
+            return
+        text = f"🎞 {current + 1}/{total}"
+        pmap = self._viewport._phase_map() if self.sender() is self._viewport else None
+        if pmap is not None:        # cine: 몇 번째 위치의 몇 번째 위상인지도
+            where = pmap.where(current)
+            if where is not None:
+                text += (f"   위치 {where[0] + 1}/{pmap.n_positions}"
+                         f" · 위상 {where[1] + 1}/{pmap.n_phases}")
+        self._status_slice.setText(text)
 
     def _on_window_changed(self, center, width):
         self._status_wl.setText(f"W: {width:.0f}  L: {center:.0f}")
