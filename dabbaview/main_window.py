@@ -969,6 +969,11 @@ class MainWindow(QMainWindow):
             lens_button.setContextMenuPolicy(Qt.CustomContextMenu)
             lens_button.customContextMenuRequested.connect(
                 lambda pos, b=lens_button: self.roi_stats_menu(b).exec_(b.mapToGlobal(pos)))
+        lm_list_button = view_bar.widgetForAction(self._act_landmarks)
+        if lm_list_button is not None:   # 📍 Landmarks 버튼 우클릭 = 핀 아이콘 우클릭과 같은 메뉴
+            lm_list_button.setContextMenuPolicy(Qt.CustomContextMenu)
+            lm_list_button.customContextMenuRequested.connect(
+                lambda pos, b=lm_list_button: self.landmark_menu(b).exec_(b.mapToGlobal(pos)))
         annot_button = view_bar.widgetForAction(self._act_annotations)
         if annot_button is not None:
             annot_button.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1087,7 +1092,8 @@ class MainWindow(QMainWindow):
         self._act_key_view = make("Key Images", "Shift+K", "Key Image만 모아보기 (Tile)",
                                   self._show_key_images)
         self._act_landmarks = make("📍 Landmarks", "Shift+F",
-                                   "랜드마크 목록: 찍어 둔 점을 모아 보고, 누르면 그 영상으로 이동",
+                                   "랜드마크 목록: 찍어 둔 점을 모아 보고, 누르면 그 영상으로 이동\n"
+                                   "우클릭: 표시 끄고 켜기 · 이 시리즈/모든 검사의 랜드마크 지우기",
                                    self.show_landmark_list)
         self._act_tile = make("▦ Tile", "Shift+T", "Stack ↔ Tile 모드 (여러 슬라이스를 격자로)",
                               self._set_tile_mode, checkable=True)
@@ -4066,7 +4072,26 @@ class MainWindow(QMainWindow):
         clear = menu.addAction(f"🗑 이 시리즈의 랜드마크 모두 지우기 ({n}개)")
         clear.setEnabled(n > 0)
         clear.triggered.connect(self._clear_series_landmarks)
+        total = len(self._landmarks)
+        clear_all = menu.addAction(f"🗑 모든 검사의 랜드마크 지우기 ({total}개)")
+        clear_all.setEnabled(total > 0)
+        clear_all.triggered.connect(self._clear_all_landmarks)
         return menu
+
+    def _clear_all_landmarks(self):
+        """찍어 둔 랜드마크를 전부 지운다 (다른 검사 것까지 — 그래서 한 번 더 묻는다)"""
+        total = len(self._landmarks)
+        if not total:
+            return
+        if QMessageBox.question(
+                self, "랜드마크 모두 지우기",
+                f"불러온 모든 검사의 랜드마크 {total}개를 지울까요?\n되돌릴 수 없습니다.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self._landmarks.clear()
+        for vp in self._all_viewports():
+            vp.update()
+        self._statusbar.showMessage(f"랜드마크 {total}개를 모두 지웠습니다.", 5000)
 
     def _clear_series_landmarks(self):
         """지금 보는 시리즈에서 찍은 랜드마크만 지운다 (되돌릴 수 없으므로 한 번 묻는다)"""
