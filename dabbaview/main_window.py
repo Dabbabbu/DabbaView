@@ -642,6 +642,7 @@ class MainWindow(QMainWindow):
         self._init_arrow_menu(view_menu)
         self._init_link_menu(view_menu)
         self._init_annotation_menu(view_menu)
+        self._init_draw_actions(view_menu)
         bar_action = view_menu.addAction("▤ 영상 오른쪽 슬라이스 막대")
         bar_action.setCheckable(True)
         bar_action.setChecked(self._settings.value("view/slice_bar", True, type=bool))
@@ -4111,6 +4112,55 @@ class MainWindow(QMainWindow):
         for vp in self._all_viewports():
             vp.update()
         self._statusbar.showMessage(f"랜드마크 {removed}개를 지웠습니다.", 5000)
+
+    def _init_draw_actions(self, menu):
+        """✍ 판서 색 · 굵기 단축키 (Ctrl+R/B/G/W · Ctrl+휠)"""
+        from .viewport import DRAW_COLORS
+        sub = menu.addMenu("✍ 판서 색 · 굵기")
+        saved = self._settings.value("draw/color", "red", type=str)
+        DicomViewport.set_draw_color(saved)
+        DicomViewport.set_draw_width(self._settings.value("draw/width", 2, type=int))
+        self._draw_color_actions = {}
+        keys = {"red": "Ctrl+R", "blue": "Ctrl+B", "green": "Ctrl+G", "white": "Ctrl+W"}
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for key, label, _color in DRAW_COLORS:
+            action = sub.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(key == DicomViewport.draw_color)
+            action.setShortcut(QKeySequence(keys[key]))
+            action.triggered.connect(lambda _c=False, k=key: self.set_draw_color(k))
+            group.addAction(action)
+            self._draw_color_actions[key] = action
+        sub.addSeparator()
+        thicker = sub.addAction("선 굵게")
+        thicker.setShortcut(QKeySequence("Ctrl+]"))
+        thicker.triggered.connect(lambda: self.nudge_draw_width(1))
+        thinner = sub.addAction("선 얇게")
+        thinner.setShortcut(QKeySequence("Ctrl+["))
+        thinner.triggered.connect(lambda: self.nudge_draw_width(-1))
+        sub.addSeparator()
+        hint = sub.addAction("판서 중 Ctrl(⌘)+휠로도 굵기 조절")
+        hint.setEnabled(False)
+
+    def set_draw_color(self, key):
+        label = DicomViewport.set_draw_color(key)
+        if label is None:
+            return
+        self._settings.setValue("draw/color", key)
+        action = getattr(self, "_draw_color_actions", {}).get(key)
+        if action is not None:
+            action.setChecked(True)
+        for vp in self._all_viewports():
+            vp.set_tool_cursor()     # 커서 점 색도 같이 바뀐다
+        self._statusbar.showMessage(f"판서 색: {label}", 3000)
+
+    def nudge_draw_width(self, step):
+        width = DicomViewport.set_draw_width(DicomViewport.draw_width + step)
+        self._settings.setValue("draw/width", width)
+        for vp in self._all_viewports():
+            vp.set_tool_cursor()
+        self._statusbar.showMessage(f"판서 선 굵기 {width}", 3000)
 
     def back_to_select(self):
         """Esc — 무엇을 고르고 있었든 기본 상태(Select)로 되돌린다

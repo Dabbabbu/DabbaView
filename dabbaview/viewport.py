@@ -26,7 +26,7 @@ import os
 import numpy as np
 from PyQt5.QtWidgets import QWidget, QInputDialog
 from PyQt5.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QTimer, pyqtSignal
-from PyQt5.QtGui import (QImage, QPixmap, QPainter, QPen, QColor, QFont,
+from PyQt5.QtGui import (QImage, QPixmap, QPainter, QPen, QColor, QFont, QCursor,
                          QFontDatabase, QTransform, QPainterPath, QPolygonF,
                          QBrush)
 
@@ -48,7 +48,12 @@ LOGO_PATH = os.path.join(os.path.dirname(__file__), "resources", "logo.png")
 ROTATE_RIGHT = np.array([[0, -1], [1, 0]])   # 시계 방향 90°
 ROTATE_LEFT = np.array([[0, 1], [-1, 0]])    # 반시계 방향 90°
 FLIP_H = np.array([[-1, 0], [0, 1]])
-COLOR_SCRIBBLE = QColor(255, 120, 60)   # ✍ 판서 기본색 (측정선과 구별되는 주황)
+# ✍ 판서 색 — 웹 DabbaView와 같은 네 가지 (영상 위에서 잘 보이는 색)
+DRAW_COLORS = (("red", "빨강", QColor(255, 64, 64)),
+               ("blue", "파랑", QColor(80, 150, 255)),
+               ("green", "초록", QColor(0, 220, 90)),
+               ("white", "흰색", QColor(255, 255, 255)))
+COLOR_SCRIBBLE = DRAW_COLORS[0][2]   # 기본 빨강
 FLIP_V = np.array([[1, 0], [0, -1]])
 
 MAGNIFY_LEVELS = (2.0, 3.0, 4.0)
@@ -549,6 +554,33 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                        "max": "최대 (Max)", "min": "최소 (Min)", "sd": "표준편차 (SD)",
                        "median": "중앙값 (Med)", "n": "픽셀 수 (n)"}
     roi_stat_fields = ("area", "avg", "max", "min", "sd")
+
+    # ✍ 판서 색 · 선 굵기 (Ctrl+R/B/G/W · Ctrl+휠)
+    draw_color = "red"
+    draw_width = 2
+    DRAW_WIDTH_MIN, DRAW_WIDTH_MAX = 1, 8
+
+    @classmethod
+    def set_draw_color(cls, key):
+        """✍ 판서 색 바꾸기 → 사람이 읽을 이름 (없는 색이면 None)"""
+        for k, label, _color in DRAW_COLORS:
+            if k == key:
+                cls.draw_color = key
+                return label
+        return None
+
+    @classmethod
+    def set_draw_width(cls, value):
+        """✍ 판서 선 굵기 1~8 → 정해진 값"""
+        cls.draw_width = max(cls.DRAW_WIDTH_MIN, min(cls.DRAW_WIDTH_MAX, int(value)))
+        return cls.draw_width
+
+    @classmethod
+    def draw_qcolor(cls):
+        for key, _label, color in DRAW_COLORS:
+            if key == cls.draw_color:
+                return color
+        return DRAW_COLORS[0][2]
 
     MEASURE_KINDS = ("distance", "path", "angle", "cobb", "roi", "area", "ellipse", "rect")
     NOTE_KINDS = ("arrow", "text", "scribble")
@@ -1131,7 +1163,28 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         if self._seg_active():
             self.setCursor(Qt.CrossCursor)
             return
+        if self._current_tool == self.TOOL_SCRIBBLE:
+            self.setCursor(self._scribble_cursor())
+            return
         self.setCursor(cursors.get(self._current_tool, default))
+
+    def _scribble_cursor(self):
+        """✍ 판서 커서 — 지금 고른 색의 점. 선이 굵을수록 점도 커진다"""
+        color = self.draw_qcolor()
+        radius = 2 + self.draw_width * 0.9
+        size = int((radius + 2) * 2)
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        center = QPointF(size / 2, size / 2)
+        painter.setPen(QPen(QColor(0, 0, 0, 190), 1))
+        painter.setBrush(color)
+        painter.drawEllipse(center, radius, radius)
+        painter.setPen(QPen(QColor(0, 0, 0, 220), 1))
+        painter.drawPoint(center)
+        painter.end()
+        return QCursor(pixmap, size // 2, size // 2)
 
     def mouseDoubleClickEvent(self, event):
         """좌 더블클릭: Fit / 우 더블클릭: W/L 리셋 (설정 가능)
@@ -1182,6 +1235,12 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         if delta == 0:
             return
         mods = event.modifiers()
+
+        # ✍ 판서 중 Ctrl(⌘)+휠 = 선 굵기 (그 밖에는 전처럼 Zoom · 슬라이스)
+        if self._current_tool == self.TOOL_SCRIBBLE and (mods & CTRL_MODIFIERS):
+            self.set_draw_width(self.draw_width + (1 if delta > 0 else -1))
+            event.accept()
+            return
 
         if self._magnifying:
             # 돋보기 사용 중 휠: 배율 2x ↔ 3x ↔ 4x
@@ -1718,7 +1777,9 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         pts = draft["pts"]
         if len(pts) < 2:
             return                      # 점 하나는 획이 아니다
-        self._add_annotation({"type": "scribble", "pts": pts})
+        self._add_annotation({"type": "scribble", "pts": pts,
+                              "color": self.draw_qcolor().name(),
+                              "width": self.draw_width})
 
     def _finish_freehand(self):
         draft, self._draft = self._draft, None
@@ -2139,7 +2200,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             elif kind == "scribble":
                 # ✍ 판서: 손으로 쓴 느낌이 나게 끝과 이음새를 둥글게, 숫자 상자는 없다
                 color = custom or COLOR_SCRIBBLE
-                painter.setPen(QPen(color, width + 0.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                stroke = float(ann.get("width", 2)) + (1 if ann.get("id") in self._selected_ids else 0)
+                painter.setPen(QPen(color, stroke, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
                 painter.drawPolyline(QPolygonF(pts))
                 if lines:
                     self._draw_label(painter, QPoint(int(pts[-1].x()) + 8, int(pts[-1].y()) - 18),
@@ -2259,7 +2321,8 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             painter.setPen(QPen(QColor(255, 90, 210), 2, Qt.DashLine))
             painter.drawRect(QRectF(pts[0], pts[1]).normalized())
         elif kind == "scribble":
-            painter.setPen(QPen(COLOR_SCRIBBLE, 2.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setPen(QPen(self.draw_qcolor(), self.draw_width,
+                                Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             painter.drawPolyline(QPolygonF([self._image_to_screen_f(p) for p in self._draft["pts"]]))
         elif kind == "path":
             painter.setPen(QPen(QColor(255, 210, 74), 2, Qt.DashLine))
