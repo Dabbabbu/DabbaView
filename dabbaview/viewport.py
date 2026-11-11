@@ -488,6 +488,10 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         text = ", ".join(f"{v:.1f}" for v in point["position"])
         self.status_message.emit(f"랜드마크 {point['name']}: ({text}) mm")
 
+    def landmarks_here_indexes(self):
+        """지금 슬라이스에 보이는 랜드마크의 저장소 번호 (지우기 · 세기용)"""
+        return [i for i, _name, _pos in self._landmarks_here()]
+
     def _landmarks_here(self):
         """현재 슬라이스에 보이는 랜드마크 [(번호, 이름, 영상 좌표)]"""
         store, series = self._landmarks, self._series

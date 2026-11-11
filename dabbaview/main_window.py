@@ -295,6 +295,7 @@ class MainWindow(QMainWindow):
         self._init_menubar()
         self._init_toolbar()
         self._init_statusbar()
+        self._install_escape()
         self._configure_viewports()
         self._connect_signals()
         self._restore_series_panel()
@@ -898,19 +899,16 @@ class MainWindow(QMainWindow):
             action.setToolTip(f"{clean} ({shortcut})\n{tooltip}" if icon_name
                               else f"{tooltip} ({shortcut})")
             action.triggered.connect(
-                lambda checked, t=tool_id: self._set_tool_all(t))
+                lambda checked, t=tool_id: self._tool_button_clicked(t))
             tool_group.addAction(action)
             toolbar.addAction(action)
             self._tool_actions[tool_id] = action
         self._tool_actions[V.TOOL_SELECT].setChecked(True)
-        # 도구 막대 빈 곳 우클릭 = Qt 기본 '도구 모음 목록' 메뉴가 떠서 기능처럼 보였다 → 막는다
-        toolbar.setContextMenuPolicy(Qt.PreventContextMenu)
-        # 📍 Landmark 버튼만 우클릭하면 랜드마크 관련 기능
-        lm_button = toolbar.widgetForAction(self._tool_actions[V.TOOL_LANDMARK])
-        if lm_button is not None:
-            lm_button.setContextMenuPolicy(Qt.CustomContextMenu)
-            lm_button.customContextMenuRequested.connect(
-                lambda pos, b=lm_button: self.landmark_menu(b).exec_(b.mapToGlobal(pos)))
+        # 도구 막대 우클릭: Qt 기본 '도구 모음 목록' 대신 그 도구에 맞는 메뉴
+        # (버튼마다 따로 걸면 QToolButton이 오른쪽 버튼을 삼켜 안 뜨는 경우가 있어 막대에 건다)
+        self._tool_bar = toolbar
+        toolbar.setContextMenuPolicy(Qt.CustomContextMenu)
+        toolbar.customContextMenuRequested.connect(self._tool_bar_menu)
 
         # 🔍 기능 찾기 — 뷰어 탭 줄(2D View … 3D Volume) 오른쪽 끝에 검색창처럼 (자리가 늘 있음)
         key = QKeySequence(QKeySequence.Find).toString(QKeySequence.NativeText)
@@ -3959,6 +3957,17 @@ class MainWindow(QMainWindow):
             return self._multi_viewport.active_viewport
         return self._viewport
 
+    def _tool_button_clicked(self, tool):
+        """도구 버튼을 눌렀을 때 — 이미 고른 도구를 다시 누르면 해제(Select로)
+
+        전에는 같은 버튼을 다시 눌러도 그대로 켜져 있어, 랜드마크처럼 클릭마다
+        점이 찍히는 도구에서 빠져나올 길이 Esc뿐이었다 (그마저 영상에 포커스가 있어야 됐다).
+        """
+        if tool != DicomViewport.TOOL_SELECT and tool == getattr(self, "_current_tool_id", None):
+            self.back_to_select()
+            return
+        self._set_tool_all(tool)
+
     def _set_tool_all(self, tool):
         V = DicomViewport
         roi_tools = (V.TOOL_ROI, V.TOOL_ELLIPSE, V.TOOL_RECT, V.TOOL_AREA)
@@ -4064,6 +4073,20 @@ class MainWindow(QMainWindow):
         names = [DicomViewport.ROI_STAT_LABELS[f].split(" (")[0] for f in fields]
         self._statusbar.showMessage("ROI에 보일 값: " + (" · ".join(names) or "없음"), 5000)
 
+    def _tool_bar_menu(self, pos):
+        """도구 막대 우클릭 — 누른 자리의 도구에 맞는 메뉴"""
+        bar = getattr(self, "_tool_bar", None)
+        if bar is None:
+            return
+        action = bar.actionAt(pos)
+        V = DicomViewport
+        tool = next((t for t, a in self._tool_actions.items() if a is action), None)
+        if tool == V.TOOL_LANDMARK:
+            menu = self.landmark_menu(bar)
+        else:
+            menu = self.annotation_menu(bar)   # 그 밖의 자리는 보기 끄고 켜기 메뉴
+        menu.exec_(bar.mapToGlobal(pos))
+
     def landmark_menu(self, parent):
         """📍 Landmark 버튼 우클릭 — 표시 · 목록 · 이 시리즈의 점 지우기"""
         menu = QMenu(parent)
@@ -4077,7 +4100,12 @@ class MainWindow(QMainWindow):
         ask.setChecked(DicomViewport.ask_landmark_name)
         ask.triggered.connect(self._set_ask_landmark_name)
         menu.addSeparator()
-        series = getattr(self._target_viewport(), "series", None)
+        vp = self._target_viewport()
+        here = list(vp.landmarks_here_indexes()) if vp is not None else []
+        clear_here = menu.addAction(f"🗑 이 슬라이스의 랜드마크 지우기 ({len(here)}개)")
+        clear_here.setEnabled(bool(here))
+        clear_here.triggered.connect(self._clear_slice_landmarks)
+        series = getattr(vp, "series", None)
         uid = getattr(series, "series_uid", "") if series is not None else ""
         n = sum(1 for p in self._landmarks if str(p.get("series_uid") or "") == str(uid)) if uid else 0
         clear = menu.addAction(f"🗑 이 시리즈의 랜드마크 모두 지우기 ({n}개)")
@@ -4110,6 +4138,24 @@ class MainWindow(QMainWindow):
         for vp in self._all_viewports():
             vp.update()
         self._statusbar.showMessage(f"랜드마크 {total}개를 모두 지웠습니다.", 5000)
+
+    def _clear_slice_landmarks(self):
+        """지금 보는 슬라이스에 찍힌 랜드마크만 지운다 (같은 시리즈의 다른 장은 그대로)"""
+        vp = self._target_viewport()
+        indexes = sorted(vp.landmarks_here_indexes(), reverse=True) if vp is not None else []
+        if not indexes:
+            self._statusbar.showMessage("이 슬라이스에는 랜드마크가 없습니다.", 4000)
+            return
+        if QMessageBox.question(
+                self, "랜드마크 지우기",
+                f"이 슬라이스의 랜드마크 {len(indexes)}개를 지울까요?\n되돌릴 수 없습니다.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        for index in indexes:
+            self._landmarks.remove(index)
+        for v in self._all_viewports():
+            v.update()
+        self._statusbar.showMessage(f"랜드마크 {len(indexes)}개를 지웠습니다.", 5000)
 
     def _clear_series_landmarks(self):
         """지금 보는 시리즈에서 찍은 랜드마크만 지운다 (되돌릴 수 없으므로 한 번 묻는다)"""
@@ -4178,6 +4224,35 @@ class MainWindow(QMainWindow):
         for vp in self._all_viewports():
             vp.set_tool_cursor()
         self._statusbar.showMessage(f"판서 선 굵기 {width}", 3000)
+
+    def _install_escape(self):
+        """Esc는 창 전체에서 듣는다 — 도구 막대 버튼을 누른 뒤에도 빠져나올 수 있게
+
+        전에는 뷰포트의 keyPressEvent에서만 처리해서, 도구 버튼에 포커스가 있으면
+        Esc를 눌러도 아무 일이 없었다.
+        """
+        from PyQt5.QtWidgets import QShortcut
+        shortcut = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        shortcut.setContext(Qt.ApplicationShortcut)
+        shortcut.activated.connect(self._escape_pressed)
+        self._escape_shortcut = shortcut
+
+    def _escape_pressed(self):
+        """Esc — 그리던 게 있으면 그것만 취소, 없으면 기본 상태(Select)로"""
+        if self._dialog_open():
+            return
+        vp = self._target_viewport()
+        if vp is not None and getattr(vp, "_draft", None) is not None:
+            vp._draft = None          # 그리던 도형만 버리고 도구는 그대로
+            vp.update()
+            return
+        self.back_to_select()
+
+    def _dialog_open(self):
+        """앞에 떠 있는 대화상자가 있으면 Esc는 그쪽 몫"""
+        from PyQt5.QtWidgets import QApplication, QDialog
+        active = QApplication.activeModalWidget()
+        return isinstance(active, QDialog)
 
     def back_to_select(self):
         """Esc — 무엇을 고르고 있었든 기본 상태(Select)로 되돌린다
