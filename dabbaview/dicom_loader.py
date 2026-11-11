@@ -534,18 +534,28 @@ def slice_order_keys(slices):
     return [(4, 0.0, times[i], tail[i]) for i in range(n)]
 
 
-def series_order_key(series):
-    """시리즈 순서: 검사 → 시리즈 번호 → 찍은 때 → 설명 → UID (늘 같은 순서)
+def series_in_study_key(series):
+    """한 검사 안에서 시리즈를 줄 세우는 기준 — 목록 · 불러오기가 같은 순서가 되게 한곳에서
 
-    검사 안에서는 SeriesNumber 순 — GE·INFINITT 콘솔에 나오는 순서와 같다.
-    번호는 반드시 숫자로 견준다 (3 < 10 < 600 < 2000 < 52337).
-    '찍은 때'를 먼저 보면, SeriesTime을 적지 않는 시리즈(ADC · 재구성 등)가
-    장마다 다른 ContentTime으로 떨어져 엉뚱한 자리에 끼어든다.
+    1) 원본 촬영이 먼저, 만들어낸 영상(T1 Map · R_Squared · ADC · 재구성)이 뒤
+       — 원본 1 · 2 · 3 … 을 쭉 보고 나서 리컨 영상을 몰아서 보게 (ImageType으로 가림)
+    2) 그 안에서는 SeriesNumber 순, 반드시 숫자로 (3 < 10 < 600 < 2000 < 52337)
+       — GE · INFINITT 콘솔에 나오는 순서와 같다
+    3) 번호가 없으면 뒤로 보내고 찍은 때 · 설명 · UID 순
+
+    '찍은 때'를 먼저 보면, SeriesTime을 적지 않는 시리즈가 장마다 다른 ContentTime으로
+    떨어져 8 · 801 · 21 · 2101처럼 엉뚱한 자리에 끼어든다.
     """
     number = series.series_number
-    return (series.study_date, _time_text(series.study_time), series.study_uid or "",
+    return (series.is_derived,
             number is None, number if number is not None else 0,
-            series_stamp(series), series.description, series.series_uid)
+            series_stamp(series), series.description or "", series.series_uid or "")
+
+
+def series_order_key(series):
+    """여러 검사가 섞인 목록 전체의 순서: 검사 → (검사 안에서는 series_in_study_key)"""
+    return (series.study_date, _time_text(series.study_time), series.study_uid or "") \
+        + series_in_study_key(series)
 
 
 def series_stamp(series):
@@ -596,6 +606,28 @@ class DicomSeries:
             self.description = str(ds.SeriesDescription)
         if not self.modality and hasattr(ds, 'Modality'):
             self.modality = str(ds.Modality)
+
+    @property
+    def is_derived(self):
+        """원본 촬영인가, 만들어낸 영상인가 (T1 Map · ADC · MIP · 재구성 등)
+
+        DICOM ImageType(0008,0008)의 값으로 가린다.
+          ORIGINAL\\PRIMARY…  → 원본 (False)
+          DERIVED… 또는 SECONDARY가 들어 있으면 → 만들어낸 영상 (True)
+        태그가 없으면 원본으로 본다 (그러면 시리즈 번호 순서 그대로).
+        """
+        cached = getattr(self, "_is_derived", None)
+        if cached is None:
+            cached = False
+            for ds in self.slices[:1]:
+                values = getattr(ds, "ImageType", None) or []
+                try:
+                    words = {str(v).strip().upper() for v in values}
+                except TypeError:
+                    words = {str(values).strip().upper()}
+                cached = bool(words & {"DERIVED", "SECONDARY"})
+            self._is_derived = cached
+        return cached
 
     def sort_slices(self):
         """슬라이스를 늘 같은 순서로 (찍은 순서 기준, slice_order_keys 참고)"""

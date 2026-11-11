@@ -289,7 +289,7 @@ class SettingsDialog(QDialog):
         return page
 
     # ─── 조작감 (감도 · 무게감 · 관성) ───
-    FEEL_LABELS = (("feel_wl", "W/L 감도", "%", "Width · Level을 바꾸는 빠르기 (한 픽셀 = 지금 Width의 1/100 × 감도)"),
+    FEEL_LABELS = (("feel_wl", "W/L 감도", "%", "Width · Level을 바꾸는 빠르기 (한 픽셀 = 지금 Width의 1/250 × 감도)\n숫자를 줄이면 더 둔감해져 섬세하게 맞출 수 있습니다"),
                    ("feel_pan", "Pan 감도", "%", "끄는 만큼 영상이 움직이는 비율"),
                    ("feel_zoom", "Zoom 감도", "%", "Zoom 드래그 · 휠 확대 빠르기"),
                    ("feel_scroll", "드래그 넘기기 감도", "%", "끌어서 슬라이스 넘길 때 빠르기"),

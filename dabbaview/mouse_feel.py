@@ -91,15 +91,22 @@ def _smoothstep(t):
     return t * t * (3.0 - 2.0 * t)
 
 
+WL_PER_PX = 250.0   # 한 픽셀 = 지금 Width의 1/250 (0.4%) — 숫자가 클수록 둔감
+
+
 def wl_unit(width, value_range=None):
-    """W/L 한 픽셀이 바꾸는 값 — 드래그를 시작할 때 Width의 1/100 (좁은 창은 섬세하게)
+    """W/L 한 픽셀이 바꾸는 값 — 드래그를 시작할 때 Width의 1/250 (좁은 창은 섬세하게)
 
     드래그 중에는 같은 값을 써야 Width가 커질수록 더 빨리 커지는(복리) 일이 없다.
 
-    Width 400이면 4 (예전 고정값과 같음). 영상 값 범위를 알면 그 0.02%~2% 사이로 제한해
-    너무 좁은 창에서 꿈쩍 않거나 넓은 창에서 튀지 않게 한다.
+    화면을 가로로 250px 끌면 Width가 지금의 두 배가 된다. 1/100이던 때는 100px 만에
+    두 배가 되어, 심장 MRI처럼 Width가 1800쯤 되는 영상에서는 한 픽셀에 18씩 뛰어
+    "조금만 움직여도 확 바뀌는" 느낌이었다.
+
+    영상 값 범위를 알면 그 0.02%~2% 사이로 제한해 너무 좁은 창에서 꿈쩍 않거나
+    넓은 창에서 튀지 않게 한다.
     """
-    unit = max(float(width), 1e-6) / 100.0
+    unit = max(float(width), 1e-6) / WL_PER_PX
     if value_range:
         span = max(float(value_range), 1e-6)
         unit = max(span * 0.0002, min(span * 0.02, unit))

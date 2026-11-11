@@ -183,10 +183,12 @@ def format_patient_name(value):
 
 
 def _series_sort_key(series):
-    """한 검사 안의 시리즈: 찍은 때(SeriesDate/Time) → 시리즈 번호 → 설명 → UID"""
-    number = series.series_number
-    return (getattr(series, "series_datetime", ""), number is None, number if number is not None else 0,
-            series.description, getattr(series, "series_uid", ""))
+    """한 검사 안의 시리즈 순서 — dicom_loader와 같은 기준을 쓴다
+
+    목록(여기)과 불러오기가 따로 놀지 않게 정의를 한 곳에만 둔다.
+    """
+    from .dicom_loader import series_in_study_key
+    return series_in_study_key(series)
 
 
 def _study_time_key(value):
