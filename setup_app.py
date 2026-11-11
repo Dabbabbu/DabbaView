@@ -94,7 +94,7 @@ OPTIONS = {
                  'oauthlib', 'requests_oauthlib', 'uritemplate', 'msal', 'jwt',
                  'requests', 'urllib3', 'keyring'],
     'includes': ['PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtCore', 'PyQt5.QtGui',
-                 'PyQt5.QtPrintSupport', 'vtk', 'google_auth_httplib2',
+                 'PyQt5.QtPrintSupport', 'PyQt5.QtSvg', 'vtk', 'google_auth_httplib2',
                  'google.auth', 'google.auth.transport.requests', 'google.oauth2.credentials',
                  'google.api_core.client_options', 'google.api_core.exceptions',
                  'google.protobuf', 'jaraco.context', 'jaraco.functools',

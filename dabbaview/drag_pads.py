@@ -2,20 +2,25 @@
 # This file is part of DabbaView, licensed under GPL-3.0.
 # See LICENSE for details.
 """
-Zoom · W/L 조절 칸 - 맨 아래 상태바에 있어 영상을 가리지 않고, 마우스 끌기로 확대 · W/L 조절
+Zoom · W/L · 원본 W/L · 그리기 칸 - 맨 아래 상태바에 있어 영상을 가리지 않는다
 
 - 🔍 Zoom: 누른 채 위로 끌면 확대, 아래로 축소 (두 번 클릭: 화면 맞춤)
-- ◐ W/L: 좌우 = Width, 위아래 = Level — 영상 위 우클릭 드래그와 같음 (두 번 클릭: DICOM 기본값)
+- ◐ W/L: 좌우 = Width, 위아래 = Level — 영상 위 우클릭 드래그와 같음 (두 번 클릭: 원본 W/L)
+- ◑↺ 원본 W/L: 한 번 눌러 DICOM 태그의 Window Center/Width로 되돌리기
+- ✏️ 그리기: 눌러서 측정 도구 고르기 (그리는 중이면 지금 도구 이름 · 눌러서 끄기)
 - 대상은 지금 보는 영상 (Multi View에서는 선택한 칸)
 """
 from PyQt5.QtCore import QPoint, Qt, pyqtSignal
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QWidget
+from PyQt5.QtWidgets import QHBoxLayout, QLabel, QMenu, QWidget
+
+from . import icons
 
 PAD_STYLE = """
 QLabel#DragPad { background: #262a30; color: #cfd6df; border: 1px solid #3a414a; border-radius: 4px;
                  font-size: 11px; padding: 1px 8px; }
 QLabel#DragPad:hover { background: #2f3945; border-color: #3d8bfd; color: #fff; }
 QLabel#DragPad[dragging="true"] { background: #094771; border-color: #3d8bfd; color: #fff; }
+QLabel#DragPad[on="true"] { background: #0e3a5f; border-color: #3d8bfd; color: #9ccaff; }
 """
 
 ZOOM_PER_PX = 0.008      # 1px 끌 때 확대 비율 (위로 100px ≈ 2.2배)
@@ -68,12 +73,44 @@ class DragPad(QLabel):
         self.style().polish(self)
 
 
-class DragPadStrip(QWidget):
-    """상태바에 넣는 [🔍 Zoom ↕] [◐ W/L ✥]. target() → 조절할 DicomViewport (없으면 None)"""
+class TapPad(QLabel):
+    """끌지 않고 한 번 누르는 칸 (원본 W/L · 그리기)"""
 
-    def __init__(self, target, parent=None):
+    clicked = pyqtSignal()
+
+    def __init__(self, text, tip, width=116, parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("DragPad")
+        self.base_text = text
+        self.setAlignment(Qt.AlignCenter)
+        self.setToolTip(tip)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedWidth(width)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+    def set_on(self, on):
+        self.setProperty("on", "true" if on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
+class DragPadStrip(QWidget):
+    """상태바에 넣는 [🔍 Zoom ↕] [◐ W/L ✥] [◑ 원본 W/L] [✏️ 그리기]
+
+    target()    → 조절할 DicomViewport (없으면 None)
+    draw_tools  → [(글자, 아이콘 이름, 도구 번호), …] 그리기 칸 메뉴에 넣을 도구들
+    set_tool    → 도구를 바꾸는 함수, current_tool → 지금 도구 번호를 돌려주는 함수
+    """
+
+    def __init__(self, target, parent=None, draw_tools=(), set_tool=None, current_tool=None):
         super().__init__(parent)
         self.target = target
+        self._draw_tools = list(draw_tools)
+        self._set_tool = set_tool
+        self._current_tool = current_tool
         self.setObjectName("DragPadStrip")
         self.setStyleSheet(PAD_STYLE)
         layout = QHBoxLayout(self)
@@ -91,6 +128,57 @@ class DragPadStrip(QWidget):
             pad.released.connect(lambda p=pad: p.setText(p.base_text))
             layout.addWidget(pad)
         self.wl.released.connect(self._end_window)
+
+        # 원본 W/L — 한 번 누르면 DICOM 태그 값으로
+        self.reset_wl = TapPad("◑↺ 원본 W/L",
+                               "DICOM 원본의 Window Center/Width로 되돌리기\n"
+                               "W/L 칸을 두 번 클릭해도 됩니다")
+        self.reset_wl.clicked.connect(self._reset_window)
+        layout.addWidget(self.reset_wl)
+
+        # 그리기 — 눌러서 측정 도구 고르기
+        self.draw = TapPad("✏️ 그리기", "측정 도구 고르기 — 거리 · 각도 · 사각 · 타원 · 자유 등")
+        self.draw.clicked.connect(self._open_draw_menu)
+        layout.addWidget(self.draw)
+        if not self._draw_tools:
+            self.draw.hide()
+
+    # ── 그리기 칸 ──
+    def _open_draw_menu(self):
+        """칸 바로 위에 도구 목록. 그리는 중이면 '그리기 끄기'도 같이"""
+        if not self._draw_tools or self._set_tool is None:
+            return
+        now = self._current_tool() if self._current_tool else None
+        menu = QMenu(self)
+        for label, icon_name, tool_id in self._draw_tools:
+            action = menu.addAction(icons.icon(icon_name), label)
+            action.setCheckable(True)
+            action.setChecked(tool_id == now)
+            action.triggered.connect(lambda _=False, t=tool_id: self._choose_tool(t))
+        if any(tool_id == now for _l, _i, tool_id in self._draw_tools):
+            menu.addSeparator()
+            off = menu.addAction(icons.icon("select"), "그리기 끄기 (Select로)")
+            off.triggered.connect(lambda: self._choose_tool(None))
+        pos = self.draw.mapToGlobal(self.draw.rect().topLeft())
+        menu.exec_(pos - QPoint(0, menu.sizeHint().height() + 2))
+
+    def _choose_tool(self, tool_id):
+        if self._set_tool is not None:
+            self._set_tool(tool_id)
+        self.refresh_tool()
+
+    def refresh_tool(self):
+        """지금 도구에 맞춰 그리기 칸의 글자 · 켜짐 상태를 고친다"""
+        if not self._draw_tools:
+            return
+        now = self._current_tool() if self._current_tool else None
+        for label, _icon_name, tool_id in self._draw_tools:
+            if tool_id == now:
+                self.draw.setText(f"✏️ {label}")
+                self.draw.set_on(True)
+                return
+        self.draw.setText(self.draw.base_text)
+        self.draw.set_on(False)
 
     def _viewport(self):
         vp = self.target()

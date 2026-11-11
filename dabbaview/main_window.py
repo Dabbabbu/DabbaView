@@ -34,6 +34,7 @@ from .ai.segmentation import SegmentationController
 from .ai.worklist import Worklist
 from .formats import OPEN_FILTERS
 from . import APP_NAME, GITHUB_URL, __version__
+from . import icons
 from .about_dialog import AboutDialog
 from .analysis import colormaps
 from .analysis.console import PythonConsoleDock
@@ -879,9 +880,15 @@ class MainWindow(QMainWindow):
                 continue
             label, tool_id, shortcut, tooltip = entry
             action = QAction(label, self)
+            icon_name = icons.TOOL_ICONS.get(label)
+            if icon_name:
+                action.setIcon(icons.icon(icon_name))
             action.setCheckable(True)
             action.setShortcut(QKeySequence(shortcut))
-            action.setToolTip(f"{tooltip} ({shortcut})")
+            # 그림만 보이므로 이름을 설명 맨 앞에 (올리면 이름 · 단축키 · 쓰는 법)
+            clean = label.lstrip("⬚📍 ").strip()
+            action.setToolTip(f"{clean} ({shortcut})\n{tooltip}" if icon_name
+                              else f"{tooltip} ({shortcut})")
             action.triggered.connect(
                 lambda checked, t=tool_id: self._set_tool_all(t))
             tool_group.addAction(action)
@@ -1118,7 +1125,17 @@ class MainWindow(QMainWindow):
         # 맨 아래 Zoom · W/L 조절 칸: 영상을 가리지 않고 끌어서 조절.
         # 상태바 배치에 넣지 않고 '뷰어 창 가운데 아래'에 직접 놓음 → 옆 패널을 열고 닫아도 가운데 유지
         from .drag_pads import DragPadStrip
-        self._drag_pads = DragPadStrip(self._target_viewport, self._statusbar)
+        V = DicomViewport
+        draw_tools = [("거리", "dist", V.TOOL_MEASURE), ("각도", "angle", V.TOOL_ANGLE),
+                      ("사각", "rect", V.TOOL_RECT), ("타원", "ellipse", V.TOOL_ELLIPSE),
+                      ("자유 ROI", "roi", V.TOOL_ROI), ("면적", "area", V.TOOL_AREA),
+                      ("화살표", "arrow", V.TOOL_ARROW), ("텍스트", "text", V.TOOL_TEXT)]
+        self._drag_pads = DragPadStrip(
+            self._target_viewport, self._statusbar,
+            draw_tools=draw_tools,
+            set_tool=lambda t: self._set_tool_all(t if t is not None else V.TOOL_SELECT),
+            current_tool=lambda: getattr(self, "_current_tool_id", None))
+        self._drag_pads.refresh_tool()
         self._drag_pads.adjustSize()
         self._pad_watcher = _GeometryWatcher(self._place_drag_pads, self)
         for widget in (self._tab_widget, self._tab_widget.parentWidget(), self._statusbar):
@@ -3810,6 +3827,12 @@ class MainWindow(QMainWindow):
         self._seg.set_tool(None)  # 툴바 도구를 고르면 세그멘테이션 도구 해제
         for vp in self._all_viewports():
             vp.set_tool(tool)
+        action = self._tool_actions.get(tool)     # 하단 칸에서 골랐을 때도 도구 막대에 표시
+        if action is not None and not action.isChecked():
+            action.setChecked(True)
+        pads = getattr(self, "_drag_pads", None)  # 하단 '✏️ 그리기' 칸도 따라가게
+        if pads is not None:
+            pads.refresh_tool()
 
     def _set_value_lens_all(self, enabled):
         for vp in self._all_viewports():
