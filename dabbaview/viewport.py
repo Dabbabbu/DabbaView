@@ -88,6 +88,7 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     profile_measured = pyqtSignal(object)  # 라인 프로파일 결과 dict (하단 패널 그래프)
     selection_changed = pyqtSignal(list)   # 선택한 주석 id 목록 (ROI Manager 동기화)
     select_tool_requested = pyqtSignal()   # Esc: 점 찍기 등 도구에서 Select로 돌아가기
+    context_menu_requested = pyqtSignal(object)   # 영상 위에서 우클릭(끌지 않음) → 전역 좌표
 
     # 도구 모드
     TOOL_WINDOW = 0
@@ -812,8 +813,11 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     def mousePressEvent(self, event):
         both = Qt.LeftButton | Qt.RightButton
         if (event.buttons() & both) == both and event.button() in (Qt.LeftButton, Qt.RightButton):
+            self._right_press_pos = None
             self._begin_chord_scroll(event)
             return
+        if event.button() == Qt.RightButton:
+            self._right_press_pos = event.pos()   # 끌었는지 눌렀다 뗐는지 보려고 (메뉴)
         if (self._seg_active() and event.button() == Qt.LeftButton
                 and not event.modifiers() & (Qt.AltModifier | CTRL_MODIFIERS)):
             # 세그멘테이션 도구: 좌클릭 드래그 = 칠하기 (Alt/Ctrl 드래그는 기존 동작)
@@ -1026,8 +1030,24 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         elif tool == self.TOOL_ZOOM:
             self._feel_drag("zoom", dx, dy, speed)
 
+    RIGHT_CLICK_PX = 5      # 이만큼 안 움직이고 떼면 '끈 것'이 아니라 '누른 것'
+
     def mouseReleaseEvent(self, event):
         action = self._drag_action
+        # 우클릭을 끌지 않고 떼면 메뉴 (끌었으면 W/L 조절이었으므로 메뉴를 띄우지 않는다)
+        if event.button() == Qt.RightButton and action != "chord_scroll":
+            start = getattr(self, "_right_press_pos", None)
+            if start is not None and math.hypot(event.pos().x() - start.x(),
+                                                event.pos().y() - start.y()) <= self.RIGHT_CLICK_PX:
+                self._right_press_pos = None
+                self._mouse_pressed = False
+                self._mouse_button = Qt.NoButton
+                self._drag_action = None
+                self._wl_drag_unit = None
+                self.set_tool_cursor()
+                self.context_menu_requested.emit(event.globalPos())
+                return
+            self._right_press_pos = None
         if action == "chord_scroll":
             if event.buttons() & (Qt.LeftButton | Qt.RightButton):
                 return                            # 한쪽만 뗐음 → 남은 버튼으로 계속 넘김
@@ -1743,6 +1763,17 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         """현재 영상의 마지막 주석 삭제"""
         self._store.remove_last(self._image_key())
         self.update()
+
+    def clear_annotations_here(self):
+        """지금 보는 슬라이스의 주석만 삭제 → 지운 개수 (다른 슬라이스는 그대로)"""
+        key = self._image_key()
+        ids = [a.get("id") for a in self._store.items(key)]
+        for ann_id in ids:
+            if ann_id is not None:
+                self._store.remove(key, ann_id)
+        self._draft = None
+        self.update()
+        return len(ids)
 
     def clear_measurements(self):
         """모든 영상의 주석 삭제 (공유 저장소)"""

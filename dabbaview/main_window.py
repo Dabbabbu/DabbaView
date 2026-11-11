@@ -895,6 +895,14 @@ class MainWindow(QMainWindow):
             toolbar.addAction(action)
             self._tool_actions[tool_id] = action
         self._tool_actions[V.TOOL_SELECT].setChecked(True)
+        # 도구 막대 빈 곳 우클릭 = Qt 기본 '도구 모음 목록' 메뉴가 떠서 기능처럼 보였다 → 막는다
+        toolbar.setContextMenuPolicy(Qt.PreventContextMenu)
+        # 📍 Landmark 버튼만 우클릭하면 랜드마크 관련 기능
+        lm_button = toolbar.widgetForAction(self._tool_actions[V.TOOL_LANDMARK])
+        if lm_button is not None:
+            lm_button.setContextMenuPolicy(Qt.CustomContextMenu)
+            lm_button.customContextMenuRequested.connect(
+                lambda pos, b=lm_button: self.landmark_menu(b).exec_(b.mapToGlobal(pos)))
 
         # 🔍 기능 찾기 — 뷰어 탭 줄(2D View … 3D Volume) 오른쪽 끝에 검색창처럼 (자리가 늘 있음)
         key = QKeySequence(QKeySequence.Find).toString(QKeySequence.NativeText)
@@ -3209,7 +3217,9 @@ class MainWindow(QMainWindow):
             vp.set_annotation_store(self._annotation_store)
             vp.set_segmentation(self._seg)
             vp.set_landmark_store(self._landmarks)
-            vp.select_tool_requested.connect(lambda: self.select_tool_by_id("select"))
+            vp.select_tool_requested.connect(self.back_to_select)
+            vp.context_menu_requested.connect(
+                lambda pos, v=vp: self.viewport_menu(v).exec_(pos))
             vp.profile_measured.connect(self._plot_dock.show_profile)
             vp.slice_changed.connect(self._on_any_slice_changed)
         self._tile_view.set_annotation_store(self._annotation_store)
@@ -3941,6 +3951,105 @@ class MainWindow(QMainWindow):
         pads = getattr(self, "_drag_pads", None)  # 하단 '✏️ 그리기' 칸도 따라가게
         if pads is not None:
             pads.refresh_tool()
+
+    def viewport_menu(self, viewport):
+        """영상 위에서 우클릭(끌지 않고) — 보기 끄고 켜기 · 이 슬라이스의 측정 · 랜드마크 지우기
+
+        우클릭을 '끌면' 전처럼 W/L 조절이고, '그냥 누르면' 이 메뉴가 뜬다.
+        """
+        menu = self.annotation_menu(viewport)
+        menu.addSeparator()
+        demo = menu.addAction("🪪 환자 정보 글자\tO")
+        demo.setCheckable(True)
+        demo.setChecked(viewport.overlay_visible)
+        demo.triggered.connect(lambda on: self._set_overlay_all(on))
+        menu.addSeparator()
+        n_here = len(list(viewport.annotations_here()))
+        clear_here = menu.addAction(f"🗑 이 슬라이스의 측정 지우기 ({n_here}개)")
+        clear_here.setEnabled(n_here > 0)
+        clear_here.triggered.connect(lambda: self._clear_slice_annotations(viewport))
+        series = getattr(viewport, "series", None)
+        uid = getattr(series, "series_uid", "") if series is not None else ""
+        n_lm = sum(1 for p in self._landmarks if str(p.get("series_uid") or "") == str(uid)) if uid else 0
+        clear_lm = menu.addAction(f"🗑 이 시리즈의 랜드마크 지우기 ({n_lm}개)")
+        clear_lm.setEnabled(n_lm > 0)
+        clear_lm.triggered.connect(self._clear_series_landmarks)
+        return menu
+
+    def _set_overlay_all(self, on):
+        for vp in self._all_viewports():
+            vp.set_overlay_visible(bool(on))
+        self._statusbar.showMessage("환자 정보 글자: " + ("보임" if on else "숨김"), 4000)
+
+    def _clear_slice_annotations(self, viewport):
+        """지금 보는 슬라이스에 그린 측정만 지운다 (다른 슬라이스는 그대로)"""
+        items = list(viewport.annotations_here())
+        if not items:
+            return
+        if QMessageBox.question(
+                self, "측정 지우기",
+                f"이 슬라이스에 그린 측정 {len(items)}개를 지울까요?\n되돌릴 수 없습니다.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        removed = viewport.clear_annotations_here()
+        for vp in self._all_viewports():
+            vp.update()
+        self._statusbar.showMessage(f"측정 {removed}개를 지웠습니다.", 5000)
+
+    def landmark_menu(self, parent):
+        """📍 Landmark 버튼 우클릭 — 표시 · 목록 · 이 시리즈의 점 지우기"""
+        menu = QMenu(parent)
+        show = menu.addAction("📍 영상에 표시")
+        show.setCheckable(True)
+        show.setChecked(DicomViewport.landmark_display != "hidden")
+        show.triggered.connect(self._toggle_landmarks)
+        menu.addAction("📍 랜드마크 목록…\tShift+F", self.show_landmark_list)
+        menu.addSeparator()
+        series = getattr(self._target_viewport(), "series", None)
+        uid = getattr(series, "series_uid", "") if series is not None else ""
+        n = sum(1 for p in self._landmarks if str(p.get("series_uid") or "") == str(uid)) if uid else 0
+        clear = menu.addAction(f"🗑 이 시리즈의 랜드마크 모두 지우기 ({n}개)")
+        clear.setEnabled(n > 0)
+        clear.triggered.connect(self._clear_series_landmarks)
+        return menu
+
+    def _clear_series_landmarks(self):
+        """지금 보는 시리즈에서 찍은 랜드마크만 지운다 (되돌릴 수 없으므로 한 번 묻는다)"""
+        series = getattr(self._target_viewport(), "series", None)
+        uid = getattr(series, "series_uid", "") if series is not None else ""
+        n = sum(1 for p in self._landmarks if str(p.get("series_uid") or "") == str(uid)) if uid else 0
+        if not n:
+            self._statusbar.showMessage("이 시리즈에는 랜드마크가 없습니다.", 4000)
+            return
+        name = (getattr(series, "description", "") or "이 시리즈").strip()
+        if QMessageBox.question(
+                self, "랜드마크 지우기",
+                f"'{name}'에서 찍은 랜드마크 {n}개를 모두 지울까요?\n되돌릴 수 없습니다.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        removed = self._landmarks.clear_series(uid)
+        for vp in self._all_viewports():
+            vp.update()
+        self._statusbar.showMessage(f"랜드마크 {removed}개를 지웠습니다.", 5000)
+
+    def back_to_select(self):
+        """Esc — 무엇을 고르고 있었든 기본 상태(Select)로 되돌린다
+
+        도구뿐 아니라 HU Lens처럼 '켜 둔 모드'도 같이 끈다. Esc를 눌렀는데
+        여전히 값이 따라다니면 빠져나온 것 같지 않기 때문이다.
+        """
+        off = []
+        lens = getattr(self, "_act_value_lens", None)
+        if lens is not None and lens.isChecked():
+            lens.setChecked(False)
+            self._set_value_lens_all(False)
+            off.append("HU Lens")
+        seg = getattr(self, "_seg", None)
+        if seg is not None:
+            seg.set_tool(None)
+        self.select_tool_by_id("select")
+        self._statusbar.showMessage(
+            "Select로 돌아왔습니다" + (f" ({' · '.join(off)} 끔)" if off else ""), 3000)
 
     def _set_value_lens_all(self, enabled):
         for vp in self._all_viewports():

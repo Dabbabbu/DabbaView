@@ -144,6 +144,21 @@ class LandmarkStore(QObject):
         self._counter = 0
         self.changed.emit()
 
+    def clear_series(self, series_uid):
+        """이 시리즈에서 찍은 점만 지우기 → 지운 개수
+
+        다른 검사 · 다른 시리즈의 점은 건드리지 않는다.
+        """
+        uid = str(series_uid or "")
+        if not uid:
+            return 0
+        before = len(self._points)
+        self._points[:] = [p for p in self._points if str(p.get("series_uid") or "") != uid]
+        removed = before - len(self._points)
+        if removed:
+            self.changed.emit()
+        return removed
+
     def update(self, index, **fields):
         if 0 <= index < len(self._points):
             self._points[index].update(fields)
