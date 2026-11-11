@@ -2,11 +2,13 @@
 # This file is part of DabbaView, licensed under GPL-3.0.
 # See LICENSE for details.
 """
-영상 오른쪽 슬라이스 막대 (INFINITT PACS 방식)
+영상에 붙는 막대 (INFINITT PACS 방식)
 
-- 지금 슬라이스 위치를 보여 주고, 끌어서 빠르게 넘김 (칸마다 하나씩, 칸 크기에 맞게 붙음)
+- 오른쪽 세로 막대 = 슬라이스 (SliceScrollBar)
+- 아래쪽 가로 막대 = 위상 (PhaseScrollBar) — 위상이 여럿인 cine 영상에서만
+- 지금 위치를 보여 주고, 끌어서 빠르게 넘김 (칸마다 하나씩, 칸 크기에 맞게 붙음)
 - 빈 곳을 누르면 그 위치로 바로 이동, 휠은 뷰포트와 같게 한 장씩
-- 영상이 한 장뿐이면 숨김. View ▸ 슬라이스 막대에서 끄고 켬
+- 하나뿐이면 숨김. View ▸ 슬라이스 막대에서 끄고 켬
 """
 from PyQt5.QtCore import QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
@@ -142,3 +144,81 @@ class SliceScrollBar(QWidget):
             parent.wheelEvent(event)
         else:
             event.ignore()
+
+
+class PhaseScrollBar(SliceScrollBar):
+    """뷰포트 아래쪽에 붙는 가로 위상 막대
+
+    세로 막대와 같은 모양 · 조작이고, 방향만 가로다 (왼쪽 = 첫 위상).
+    cine처럼 한 자리에서 시간에 따라 여러 장을 찍은 영상에서만 나온다.
+    """
+
+    phase_requested = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.slice_requested.connect(self.phase_requested)   # 이름만 바꿔 다시 내보냄
+
+    def _apply_visible(self):
+        self.setVisible(self._total > 1 and self.width() >= MIN_HEIGHT
+                        and not self.property("disabled"))
+
+    def place(self, parent_width, parent_height, left=0, right=0):
+        """부모(뷰포트) 아래쪽 끝에 붙임. left·right는 좌우로 비울 여백"""
+        width = max(0, parent_width - left - right)
+        self.setGeometry(left, parent_height - WIDTH, width, WIDTH)
+        self._apply_visible()
+
+    def _thumb(self):
+        """(왼쪽, 길이) — 위상 하나가 차지하는 길이에 맞춤"""
+        track = self.width()
+        total = max(1, self._total)
+        length = max(THUMB_MIN, track / total)
+        if total <= 1:
+            return 0.0, track
+        return (track - length) * (self._index / (total - 1)), length
+
+    def _index_at(self, x):
+        _left, length = self._thumb()
+        free = max(1.0, self.width() - length)
+        ratio = (x - length / 2) / free
+        return int(round(max(0.0, min(1.0, ratio)) * max(0, self._total - 1)))
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        painter.setPen(QPen(TRACK_BORDER, 1))
+        painter.setBrush(TRACK_COLOR)
+        painter.drawRoundedRect(rect, 3, 3)
+
+        left, length = self._thumb()
+        thumb = QRectF(left + 1, 2.5, max(6.0, length - 2), self.height() - 5)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(THUMB_ACTIVE if (self._dragging or self._hover) else THUMB_COLOR)
+        painter.drawRoundedRect(thumb, 2, 2)
+
+        if self._dragging or self._hover:      # 몇 번째 위상인지 (막대 위쪽에)
+            text = f"Phase {self._index + 1}/{self._total}"
+            fm = painter.fontMetrics()
+            width = fm.horizontalAdvance(text) + 8
+            x = max(0.0, min(self.width() - width, left + length / 2 - width / 2))
+            box = QRectF(x, -fm.height() - 4, width, fm.height() + 2)
+            painter.setBrush(QColor(0, 0, 0, 170))
+            painter.drawRoundedRect(box, 3, 3)
+            painter.setPen(TEXT_COLOR)
+            painter.drawText(box, Qt.AlignCenter, text)
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            event.ignore()
+            return
+        self._dragging = True
+        self.slice_requested.emit(self._index_at(event.pos().x()))
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        self._hover = True
+        if self._dragging:
+            self.slice_requested.emit(self._index_at(event.pos().x()))
+        self.update()

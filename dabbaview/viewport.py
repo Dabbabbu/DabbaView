@@ -35,7 +35,7 @@ from . import __version__, dicom_info
 from .annotations import ROI_TYPES, AnnotationStore, image_key
 from .annotation_edit import AnnotationEditMixin, fmt_area, fmt_length
 from . import mouse_feel
-from .slice_bar import SliceScrollBar, WIDTH as SLICE_BAR_W
+from .slice_bar import SliceScrollBar, PhaseScrollBar, WIDTH as SLICE_BAR_W
 from . import roi_tools
 from .app_settings import MouseBindings
 from .geometry import reference_line
@@ -145,6 +145,10 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         self._slice_bar = SliceScrollBar(self)
         self._slice_bar.set_enabled_by_user(DicomViewport.slice_bar_enabled)
         self._slice_bar.slice_requested.connect(lambda i: self.go_to_slice(i))
+        # 아래쪽 가로 막대 = 위상 (cine처럼 한 자리를 여러 번 찍은 영상에서만 보인다)
+        self._phase_bar_widget = PhaseScrollBar(self)
+        self._phase_bar_widget.set_enabled_by_user(DicomViewport.slice_bar_enabled)
+        self._phase_bar_widget.phase_requested.connect(self._go_to_phase)
 
         # 시리즈 데이터
         self._series = None
@@ -2748,14 +2752,14 @@ class DicomViewport(AnnotationEditMixin, QWidget):
         if phase is not None:
             value, horizontal, letters = phase
             bl.append(f"Phase enc: {letters} {'↔' if horizontal else '↕'} ({value})")
-        y = self.height() - margin - fm.descent()
+        y = self._content_bottom() - margin - fm.descent()
         for line in reversed(bl):
             self._draw_text_shadow(painter, margin, y, line)
             y -= line_h
 
         if self._cine_playing:
             painter.setPen(QColor(0, 255, 0))
-            painter.drawText(QPointF(self.width() / 2 - 30, self.height() - margin),
+            painter.drawText(QPointF(self.width() / 2 - 30, self._content_bottom() - margin),
                              f"▶ {self._cine_fps} fps")
 
     def _mm_per_screen_px(self):
@@ -2831,21 +2835,76 @@ class DicomViewport(AnnotationEditMixin, QWidget):
     # 슬라이스 막대 (모든 뷰포트 공통 — View ▸ 슬라이스 막대)
     slice_bar_enabled = True
 
+    def _phase_map(self):
+        """이 시리즈의 위상 표 (cine이 아니면 None) — 결과를 시리즈별로 기억한다"""
+        series = self._series
+        if series is None:
+            return None
+        cached = getattr(self, "_phase_map_cache", None)
+        if cached is not None and cached[0] is series:
+            return cached[1]
+        from .phases import phase_map
+        result = phase_map(series)
+        if result is not None and result.n_phases <= 1:
+            result = None
+        self._phase_map_cache = (series, result)
+        return result
+
+    def _go_to_phase(self, phase):
+        """아래 가로 막대에서 고른 위상으로 (지금 슬라이스 위치는 그대로)"""
+        pmap = self._phase_map()
+        if pmap is None:
+            return
+        where = pmap.where(self._current_slice)
+        position = where[0] if where else 0
+        index = pmap.slice_at(position, phase)
+        if index is not None:
+            self.go_to_slice(index, user=True)
+
     def refresh_slice_bar(self):
-        """막대 위치 · 범위를 지금 상태에 맞춤 (칸 크기가 바뀌거나 시리즈 · 슬라이스가 바뀔 때)"""
+        """막대 위치 · 범위를 지금 상태에 맞춤 (칸 크기가 바뀌거나 시리즈 · 슬라이스가 바뀔 때)
+
+        오른쪽 세로 = 슬라이스(위치), 아래쪽 가로 = 위상.
+        위상이 있는 영상에서는 세로 막대도 '위치' 기준으로 센다 (장 번호가 아니라).
+        """
         bar = getattr(self, "_slice_bar", None)
         if bar is None:
             return
+        pmap = self._phase_map()
+        phase_bar = getattr(self, "_phase_bar_widget", None)
+
         bar.set_enabled_by_user(DicomViewport.slice_bar_enabled)
-        bar.place(self.width(), self.height(), top=4, bottom=4)
-        bar.set_range(self._current_slice, self._series.num_slices if self._series else 0)
+        bottom = 4 + (SLICE_BAR_W if (phase_bar is not None and phase_bar.isVisible()) else 0)
+        bar.place(self.width(), self.height(), top=4, bottom=bottom)
+        if pmap is not None:
+            where = pmap.where(self._current_slice)
+            bar.set_range(where[0] if where else 0, pmap.n_positions)
+        else:
+            bar.set_range(self._current_slice, self._series.num_slices if self._series else 0)
         if bar.isVisible():
             bar.raise_()
+
+        if phase_bar is not None:
+            phase_bar.set_enabled_by_user(DicomViewport.slice_bar_enabled)
+            right = 4 + (SLICE_BAR_W if bar.isVisible() else 0)
+            phase_bar.place(self.width(), self.height(), left=4, right=right)
+            if pmap is not None:
+                where = pmap.where(self._current_slice)
+                phase_bar.set_range(where[1] if where else 0, pmap.n_phases)
+            else:
+                phase_bar.set_range(0, 0)
+            if phase_bar.isVisible():
+                phase_bar.raise_()
 
     def _content_right(self):
         """오버레이 글자 · 스케일 바가 쓸 수 있는 오른쪽 끝 (슬라이스 막대를 비켜서)"""
         bar = getattr(self, "_slice_bar", None)
         return self.width() - (SLICE_BAR_W + 2 if bar is not None and bar.isVisible() else 0)
+
+    def _content_bottom(self):
+        """오버레이 글자가 쓸 수 있는 아래 끝 (아래쪽 위상 막대를 비켜서)"""
+        bar = getattr(self, "_phase_bar_widget", None)
+        return self.height() - (SLICE_BAR_W + 2 if bar is not None and bar.isVisible() else 0)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
