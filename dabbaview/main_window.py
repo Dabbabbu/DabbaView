@@ -3300,19 +3300,40 @@ class MainWindow(QMainWindow):
     def _setup_update_check(self):
         from .update_check import UpdateChecker
         self._update_seen = False
+        self._update_asked = False          # Help ▸ 새 버전 확인으로 직접 눌렀는가
         self._update_checker = UpdateChecker(self)
         self._update_checker.found.connect(self._on_update_found)
+        self._update_checker.checked.connect(self._on_update_checked)
         if self._app_settings.update_check():
             QTimer.singleShot(3000, lambda: self._update_checker.check(
                 self._app_settings.update_skip_version()))
 
     def check_updates_now(self):
         """Help ▸ 새 버전 확인 (건너뛴 버전도 다시 알림)"""
-        self._statusbar.showMessage("새 버전 확인 중…", 3000)
         self._update_seen = False
-        self._update_checker.check(skip_version=None)
-        QTimer.singleShot(9000, lambda: None if self._update_seen else
-                          self._statusbar.showMessage(f"이미 최신 버전입니다 (v{__version__}).", 5000))
+        self._update_asked = True
+        if self._update_checker.check(skip_version=None):
+            self._statusbar.showMessage("새 버전 확인 중…", 3000)
+        else:
+            self._statusbar.showMessage("이미 확인하고 있습니다…", 3000)
+
+    def _on_update_checked(self, ok, info):
+        """확인이 끝났을 때 — 직접 눌러서 확인했을 때만 결과를 알린다
+
+        네트워크가 끊겼는데 '최신입니다'라고 하면 안 되므로 성공·실패를 가려서 말한다.
+        새 버전이 있으면 _on_update_found가 알림 창을 띄우므로 여기서는 아무 말도 하지 않는다.
+        """
+        if not self._update_asked:
+            return                           # 시작할 때 저절로 한 확인은 조용히
+        self._update_asked = False
+        if not ok:
+            self._statusbar.showMessage(
+                "새 버전을 확인하지 못했습니다 — 인터넷 연결을 확인하고 잠시 뒤 다시 해 보세요.", 8000)
+            return
+        from .update_check import is_newer
+        if not is_newer(info.get("tag")):
+            self._statusbar.showMessage(
+                f"이미 최신 버전입니다 (v{__version__} · 최신 {info.get('tag', '?')}).", 6000)
 
     def _on_update_found(self, info):
         """새 버전 알림 — 이 컴퓨터에 맞는 설치 파일을 바로 받을 수 있게"""

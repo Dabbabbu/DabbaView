@@ -90,33 +90,41 @@ def fetch_latest(url=API_URL):
 
 
 class UpdateChecker(QObject):
-    """백그라운드로 최신 버전 확인. 새 버전이 있을 때만 found를 보냄"""
+    """백그라운드로 최신 버전 확인
 
-    found = pyqtSignal(object)     # fetch_latest()의 dict (새 버전일 때만)
+    found   : 새 버전이 있을 때만 (알림 창을 띄우는 쪽)
+    checked : 확인이 끝날 때마다 (성공 여부, 최신 정보) — '최신입니다'와 '확인 못 했습니다'를
+              가려서 말하려면 이게 필요하다. 네트워크가 끊겨도 최신이라고 말하면 안 되므로.
+    """
+
+    found = pyqtSignal(object)        # fetch_latest()의 dict (새 버전일 때만)
+    checked = pyqtSignal(bool, object)  # (확인 성공, fetch_latest()의 dict 또는 None)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._thread = None
 
     def check(self, skip_version=None):
+        """확인을 시작했으면 True, 이미 확인 중이면 False"""
         if self._thread is not None:
-            return
+            return False
 
         class Worker(QThread):
-            result = pyqtSignal(object)
+            result = pyqtSignal(bool, object)
 
             def run(self):
                 try:
-                    self.result.emit(fetch_latest())
-                except Exception:  # noqa: BLE001 - 네트워크가 없으면 조용히 넘어감
-                    self.result.emit(None)
+                    self.result.emit(True, fetch_latest())
+                except Exception:  # noqa: BLE001 - 네트워크가 없으면 '확인 못 함'으로
+                    self.result.emit(False, None)
 
         worker = Worker(self)
         self._thread = worker
 
-        def done(found):
+        def done(ok, found):
             self._thread = None
             worker.deleteLater()
+            self.checked.emit(bool(ok) and found is not None, found)
             if not found:
                 return
             tag = found.get("tag")
@@ -124,3 +132,4 @@ class UpdateChecker(QObject):
                 self.found.emit(found)
         worker.result.connect(done)
         worker.start()
+        return True
