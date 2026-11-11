@@ -10,9 +10,54 @@ on:
 permissions:
   contents: write         # Release 만들기
 
+# main에 올릴 때마다 .app · .exe를 통째로 다시 만들면 한 번에 7~9분이 걸리고,
+# 태그까지 같이 올리면 같은 커밋으로 빌드가 둘 떠서 줄을 섭니다.
+# 그래서 main 푸시에는 가벼운 점검만 하고, 설치 파일은 '태그를 올릴 때'만 만듭니다.
+# (PR과 수동 실행(workflow_dispatch)은 전처럼 전체 빌드를 합니다)
+
 jobs:
+  check:
+    name: 빠른 점검 (main 푸시)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: 문법 검사 (모든 .py)
+        run: python -m compileall -q dabbaview run.py setup_app.py
+
+      - name: 버전 표기가 서로 맞는지
+        run: |
+          python3 - <<'EOF'
+          import re, sys, pathlib
+          version = re.search(r'__version__ = "(.+?)"',
+                              pathlib.Path("dabbaview/__init__.py").read_text(encoding="utf-8")).group(1)
+          problems = []
+          readme = pathlib.Path("README.md").read_text(encoding="utf-8")
+          if f"**Version** {version}" not in readme:
+              problems.append("README.md의 **Version**")
+          manual = pathlib.Path("docs/manual.md").read_text(encoding="utf-8")
+          if f"버전 {version}" not in manual:
+              problems.append("docs/manual.md의 '버전'")
+          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          if not re.search(rf"^## {re.escape(version)}\b", changelog, re.M):
+              problems.append(f"CHANGELOG.md의 '## {version}' 항목")
+          if problems:
+              print(f"__version__ = {version} 인데 다음이 안 맞습니다:")
+              for p in problems:
+                  print(f"  - {p}")
+              sys.exit(1)
+          print(f"버전 {version} — README · 사용설명서 · CHANGELOG 모두 일치")
+          EOF
+
   macos:
     name: macOS (.app, py2app)
+    # main 푸시에서는 건너뜀 (태그 · PR · 수동 실행에서만)
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -56,6 +101,7 @@ jobs:
 
   windows:
     name: Windows (.exe, PyInstaller)
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
