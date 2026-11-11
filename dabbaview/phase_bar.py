@@ -112,6 +112,12 @@ class PhaseBar(QWidget):
         self.setStyleSheet("PhaseBar { background: #232323; border-bottom: 1px solid #3d3d3d; }")
         self.hide()
 
+    def _set_phase_rows_visible(self, on):
+        """위상 번호 · 슬라이스 번호 띠와 🔒를 보이거나 숨긴다 (재생기는 늘 보인다)"""
+        for widget in (self.slice_title, self._slice_scroll, self.slice_lock,
+                       self.title, self._scroll):
+            widget.setVisible(on)
+
     @staticmethod
     def _make_strip():
         """번호 버튼이 줄줄이 들어갈 가로 스크롤 띠 → (속 widget, layout, scroll)"""
@@ -217,8 +223,13 @@ class PhaseBar(QWidget):
         self._slice_buttons = []
         self.all_button = None
         if self._map is None:
-            self.hide()
+            # 위상이 없는 보통 시리즈: 번호 띠는 숨기고 재생기만 남긴다
+            # (도구 막대에 있던 ▶ · FPS를 여기로 모았으므로 여기서도 재생할 수 있어야 한다)
+            has_images = self._series is not None and self._series.num_slices > 1
+            self._set_phase_rows_visible(False)
+            self.setVisible(has_images)
             return
+        self._set_phase_rows_visible(True)
         for i, text in enumerate(self._map.labels):
             b = QPushButton(text)
             b.setCheckable(True)
@@ -324,7 +335,7 @@ class PhaseBar(QWidget):
             self.set_series(self._viewport.series)
             return
         if self._map is None:
-            return
+            return                      # 재생기만 보이는 상태 — 갱신할 번호가 없다
         where = self._map.where(self._viewport.current_slice)
         if where is None:
             return

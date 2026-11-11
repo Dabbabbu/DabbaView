@@ -974,13 +974,13 @@ class MainWindow(QMainWindow):
         view_bar.setContextMenuPolicy(Qt.CustomContextMenu)
         view_bar.customContextMenuRequested.connect(self._view_bar_menu)
         self._apply_bar_icons(view_bar)
-        self._tile_grid = QComboBox()
+        self._tile_grid = QComboBox()     # 화면에는 두지 않고 값만 들고 있는다 (▦ Tile 우클릭에서 고름)
         self._tile_grid.addItems([f"{n}x{n}" for n in range(2, 7)])
         self._tile_grid.setCurrentText("4x4")
         self._tile_grid.setToolTip("Tile 격자 크기")
         self._tile_grid.currentTextChanged.connect(
             lambda t: self._tile_view.set_grid(int(t.split("x")[0])))
-        view_bar.addWidget(self._tile_grid)
+        self._tile_grid.hide()
         view_bar.addAction(self._act_compare)
 
         # ─── 셋째 줄: 출력 + 시네/슬라이스 ───
@@ -1001,24 +1001,17 @@ class MainWindow(QMainWindow):
         output_bar.customContextMenuRequested.connect(self._output_bar_menu)
         output_bar.addSeparator()
 
-        # 시네 재생
-        cine_action = QAction("▶ Play", self)
+        # ▶ 재생 · FPS는 아래 Phase 띠로 옮겼다 (4.6.30) — 단축키 P와 메뉴는 그대로
+        cine_action = QAction("Play", self)
         cine_action.setShortcut(QKeySequence("P"))
+        cine_action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        self._tab_widget.addAction(cine_action)
         cine_action.triggered.connect(self._viewport.toggle_cine)
-        output_bar.addAction(cine_action)
         self._act_cine = cine_action
-        # 다른 버튼과 같이 아이콘 + 글자 (모양을 따로 고정하지 않는다)
         self._set_cine_button(False)
         self._viewport.cine_state_changed.connect(self._set_cine_button)
         self._apply_bar_icons(output_bar)
 
-        # FPS 조절
-        output_bar.addWidget(QLabel(" FPS: "))
-        self._fps_spin = QSpinBox()
-        self._fps_spin.setRange(1, 60)
-        self._fps_spin.setValue(15)
-        self._fps_spin.valueChanged.connect(self._viewport.set_cine_fps)
-        output_bar.addWidget(self._fps_spin)
 
         # 슬라이스 슬라이더는 뺐다 (4.6.21) — 영상 오른쪽 세로 막대와 아래 가로 Phase 막대가
         # 같은 일을 하면서 영상을 가리지 않는다. 몇 장 중 몇 번째인지는 상태바에 둔다.
@@ -4070,6 +4063,20 @@ class MainWindow(QMainWindow):
             if fields:
                 DicomViewport.roi_stat_fields = fields
 
+    def tile_menu(self, parent):
+        """▦ Tile 버튼 우클릭 — 한 화면에 몇 칸으로 늘어놓을지"""
+        menu = QMenu(parent)
+        header = menu.addAction("Tile 격자 크기")
+        header.setEnabled(False)
+        now = self._tile_grid.currentText()
+        for n in range(2, 7):
+            text = f"{n}x{n}"
+            action = menu.addAction(f"{text}  ({n * n}칸)")
+            action.setCheckable(True)
+            action.setChecked(text == now)
+            action.triggered.connect(lambda _c=False, t=text: self._tile_grid.setCurrentText(t))
+        return menu
+
     def roi_stats_menu(self, parent):
         """HU Lens 버튼 우클릭 — ROI 상자에 어떤 값을 보일지 고르기"""
         menu = QMenu(parent)
@@ -4120,7 +4127,9 @@ class MainWindow(QMainWindow):
         if bar is None:
             return
         action = bar.actionAt(pos)
-        if action is self._act_value_lens:
+        if action is self._act_tile:
+            menu = self.tile_menu(bar)            # ▦ Tile: 격자 크기
+        elif action is self._act_value_lens:
             menu = self.roi_stats_menu(bar)       # HU Lens: 어떤 값을 보일지
         elif action is self._act_landmarks:
             menu = self.landmark_menu(bar)
