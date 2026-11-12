@@ -4251,12 +4251,35 @@ class MainWindow(QMainWindow):
             return
         if toast is None:
             from .toast import Toast
-            toast = self._toast = Toast(self._tab_widget,
-                                        top_offset=lambda: self._tab_widget.tabBar().height() + 8)
+            toast = self._toast = Toast(self, anchor=self._toast_spot)
         level, title, detail, (show_all, attr) = reason
         toast.show_message(title, detail, level=level, action_text="👁 다시 보이기",
                            on_action=lambda: self._show_annot_for_tool(show_all, attr))
         self._statusbar.showMessage(f"⚠ {title}", 8000)
+
+    def _toast_spot(self):
+        """주의 알림 자리 — 도구 막대 둘째 · 셋째 줄 오른쪽의 빈 곳 (🔍 기능 검색 칸 바로 위)
+
+        영상을 가리지 않게 도구 막대의 빈 자리에 둔다. 창이 좁아 버튼과 겹칠 만큼
+        자리가 없으면 전처럼 뷰어 오른쪽 위(탭 줄 아래)에 띄운다.
+        """
+        from .toast import MIN_WIDTH
+        tabs = self._tab_widget
+        origin = tabs.mapTo(self, tabs.rect().topLeft())
+        right = origin.x() + tabs.width() - 8
+        buttons_right = 0
+        for bar in (getattr(self, "_view_bar", None), getattr(self, "_output_bar", None)):
+            if bar is None or not bar.isVisible():
+                continue
+            for action in bar.actions():
+                widget = bar.widgetForAction(action)
+                if widget is not None and widget.isVisible():
+                    buttons_right = max(buttons_right,
+                                        widget.mapTo(self, widget.rect().topRight()).x())
+        room = right - buttons_right - 12
+        if room >= MIN_WIDTH:
+            return right, origin.y() - 2, room               # 아래 끝을 탭 줄 바로 위에 맞춤
+        return right, origin.y() + tabs.tabBar().height() + 8, tabs.width() - 16, "top"
 
     def _recheck_tool_warning(self):
         """표시 상태가 바뀌었을 때 — 떠 있던 알림이 더는 맞지 않으면 내린다 (새로 띄우지는 않는다)"""

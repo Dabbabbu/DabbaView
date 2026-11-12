@@ -10,27 +10,34 @@
 from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
 
-# 종류별 색 — (바탕, 글자, 테두리)
+# 종류별 색 — (바탕, 글자, 테두리). 바탕은 둘 다 주황 (어두운 화면에서 가장 잘 보인다),
+# 전부 숨긴 경우만 테두리를 빨갛게 해 구분한다
 LEVELS = {
-    "caution": ("#ffb020", "#1c1400", "#ffd27a"),   # 일부만 숨김 (주황)
-    "warning": ("#e5484d", "#ffffff", "#ff9a9e"),   # 전부 숨김 (빨강)
+    "caution": ("#ffb020", "#1c1400", "#ffd27a"),   # 일부만 숨김
+    "warning": ("#ffb020", "#1c1400", "#e5484d"),   # 전부 숨김
 }
-MARGIN = 10
+MARGIN = 8
+MAX_WIDTH = 460
+MIN_WIDTH = 240
 
 
 class Toast(QFrame):
-    """host 위젯의 오른쪽 위에 뜨는 알림 한 줄 (+ 바로 고치는 버튼)"""
+    """host 위젯 위에 뜨는 알림 한 줄 (+ 바로 고치는 버튼)
 
-    def __init__(self, host, top_offset=None):
+    anchor() → (오른쪽 끝 x, 아래 끝 y, 쓸 수 있는 폭) 또는 (오른쪽 끝 x, 위 끝 y, 폭, "top").
+    알림은 그 자리에 오른쪽 · 아래(또는 위)를 맞춰 놓인다 — 영상을 가리지 않는 빈 곳을 호출하는 쪽이 정한다.
+    """
+
+    def __init__(self, host, anchor=None):
         super().__init__(host)
         self._host = host
-        self._top_offset = top_offset or (lambda: MARGIN)
+        self._anchor = anchor
         self._on_action = None
         self.setObjectName("DabbaToast")
         self.setAttribute(Qt.WA_StyledBackground, True)
         row = QHBoxLayout(self)
-        row.setContentsMargins(12, 8, 8, 8)
-        row.setSpacing(10)
+        row.setContentsMargins(10, 6, 6, 6)
+        row.setSpacing(8)
         self._text = QLabel()
         self._text.setTextFormat(Qt.RichText)
         self._text.setWordWrap(True)
@@ -85,16 +92,23 @@ class Toast(QFrame):
             self._timer.stop()
 
     def place(self):
-        """host 오른쪽 위 (폭은 host의 절반을 넘지 않게)"""
+        """anchor가 알려 준 빈 자리에 오른쪽을 맞춰 놓는다 (못 구하면 host 오른쪽 위)"""
         host = self._host
-        width = max(280, min(460, host.width() - 2 * MARGIN))
+        spot = None
+        if self._anchor is not None:
+            try:
+                spot = self._anchor()
+            except Exception:  # noqa: BLE001 - 자리를 못 구하면 기본 자리에
+                spot = None
+        if not spot:
+            spot = (host.width() - MARGIN, MARGIN, host.width() - 2 * MARGIN, "top")
+        right, edge, room = int(spot[0]), int(spot[1]), int(spot[2])
+        from_top = len(spot) > 3 and spot[3] == "top"
+        width = max(MIN_WIDTH, min(MAX_WIDTH, room))
         self.setFixedWidth(width)
         self.adjustSize()
-        try:
-            top = int(self._top_offset())
-        except Exception:  # noqa: BLE001 - 자리를 못 구하면 맨 위에
-            top = MARGIN
-        self.move(max(MARGIN, host.width() - width - MARGIN), max(0, top))
+        top = edge if from_top else edge - self.height()
+        self.move(max(0, right - width), max(0, top))
 
     def _run_action(self):
         callback, self._on_action = self._on_action, None
