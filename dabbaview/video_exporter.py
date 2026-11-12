@@ -385,12 +385,11 @@ class VideoExportDialog(QDialog):
     """동영상 내보내기 옵션 다이얼로그"""
 
     def __init__(self, series, window_center, window_width, inverted,
-                 parent=None, viewport=None, settings=None):
+                 parent=None, viewport=None):
         super().__init__(parent)
         self.setWindowTitle("Export as Video")
         self.setMinimumWidth(430)
         self._viewport = viewport          # 화면 그대로 담을 때 쓸 칸 (없으면 원본 픽셀만)
-        self._settings = settings
         self._series = series
         self._wc = window_center
         self._ww = window_width
@@ -445,10 +444,11 @@ class VideoExportDialog(QDialog):
 
         # 함께 담을 것 — 캡처와 같은 목록 (체크한 것만 동영상에 들어간다)
         self._picker = None
-        if self._viewport is not None and self._settings is not None:
+        if self._viewport is not None:
             from .overlay_options import OverlayPicker
-            self._picker = OverlayPicker(self._settings, "video/overlay_parts", self)
+            self._picker = OverlayPicker(self._viewport, self)
             self._picker.setToolTip(
+                "지금 화면에 보이는 그대로 체크되어 있습니다\n"
                 "체크한 것만 동영상에 함께 담깁니다\n"
                 "하나라도 체크하면 '화면에 보이는 그대로'(확대 · 이동 · 그린 것 포함) 담습니다\n"
                 "모두 해제하면 원본 픽셀만 그대로 담습니다 (더 빠릅니다)")

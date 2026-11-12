@@ -8,7 +8,9 @@
 측정 · ROI · 측정 숫자 · 화살표 · 텍스트 · 판서 · 라인 프로파일 · 랜드마크 ·
 환자 정보 글자(데모그래픽)를 하나씩 체크해서 넣고 뺀다.
 
-고른 값은 설정에 남아 다음에 열 때 그대로 나온다.
+처음에는 **지금 화면에 보이는 그대로** 체크되어 열린다 — 화면에서 끈 것은 빠진 채로.
+거기서 더 빼거나 더 넣고 싶으면 체크를 바꾸면 되고, '화면에 보이는 그대로'를 누르면
+다시 화면 상태로 맞춘다. (여기서 바꿔도 화면 표시는 그대로 둔다)
 """
 from contextlib import contextmanager
 
@@ -29,20 +31,31 @@ OVERLAY_PARTS = (
     ("demographics", "🆔 환자 정보 글자 (모서리 글자)"),
 )
 ALL_KEYS = tuple(k for k, _ in OVERLAY_PARTS)
-DEFAULT_KEYS = ALL_KEYS          # 처음에는 보이는 그대로 모두 담는다
 
 
-def load(settings, key):
-    """설정에서 고른 항목 불러오기 (없으면 모두)"""
-    saved = settings.value(key, None)
-    if saved is None:
-        return set(DEFAULT_KEYS)
-    chosen = {k.strip() for k in str(saved).split(",") if k.strip()}
-    return {k for k in ALL_KEYS if k in chosen}
+def current_picked(viewport=None):
+    """지금 화면에 보이는 그대로 → 고른 항목
 
-
-def save(settings, key, picked):
-    settings.setValue(key, ",".join(k for k in ALL_KEYS if k in picked))
+    View ▸ ✎ 아노테이션 표시와 🆔 환자 정보 글자에서 끈 것은 빠진 채로 열린다.
+    """
+    V = DicomViewport
+    picked = set()
+    if V.annotations_visible:
+        if V.show_measurements:
+            picked.add("measurements")
+        if V.show_measure_labels:
+            picked.add("measure_labels")
+        if V.show_notes:
+            picked.add("notes")
+        if V.show_scribble:
+            picked.add("scribble")
+        if V.show_profile:
+            picked.add("profile")
+        if V.landmark_display != "hidden":
+            picked.add("landmarks")
+    if viewport is None or getattr(viewport, "overlay_visible", True):
+        picked.add("demographics")
+    return picked
 
 
 @contextmanager
@@ -79,19 +92,18 @@ def applied(viewport, picked):
 
 
 class OverlayPicker(QToolButton):
-    """'함께 담을 것 ▾' — 누르면 펼쳐지고, 체크한 것만 들어간다"""
+    """'함께 담을 것 ▾' — 화면에 보이는 그대로 체크된 채 열리고, 체크한 것만 들어간다"""
 
-    def __init__(self, settings=None, key="export/overlay_parts", parent=None):
+    def __init__(self, viewport=None, parent=None):
         super().__init__(parent)
-        self._settings = settings
-        self._key = key
-        self.picked = (load(settings, key) if settings is not None
-                       else set(DEFAULT_KEYS))
+        self._viewport = viewport
+        self.picked = current_picked(viewport)
         self.setPopupMode(QToolButton.InstantPopup)
         self.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        self.setMinimumWidth(220)
-        self.setToolTip("체크한 것만 그림 · 동영상에 함께 담깁니다\n"
-                        "(영상 자체는 늘 담깁니다)")
+        self.setMinimumWidth(240)
+        self.setToolTip("지금 화면에 보이는 그대로 체크되어 있습니다\n"
+                        "체크한 것만 그림 · 동영상에 함께 담깁니다 (영상 자체는 늘 담깁니다)\n"
+                        "여기서 바꿔도 화면 표시는 바뀌지 않습니다")
         self._menu = QMenu(self)
         self._menu.setToolTipsVisible(True)
         self._actions = {}
@@ -102,17 +114,22 @@ class OverlayPicker(QToolButton):
             action.toggled.connect(lambda on, kk=k: self._toggled(kk, on))
             self._actions[k] = action
         self._menu.addSeparator()
+        self._menu.addAction("🖥 화면에 보이는 그대로", self.sync_to_view)
         self._menu.addAction("모두 체크", lambda: self.set_picked(ALL_KEYS))
         self._menu.addAction("모두 해제", lambda: self.set_picked(()))
         self.setMenu(self._menu)
         self._refresh_text()
+
+    def sync_to_view(self):
+        """화면 표시(아노테이션 · 환자 정보 글자) 상태로 다시 맞추기"""
+        self.set_picked(current_picked(self._viewport))
 
     def _toggled(self, key, on):
         if on:
             self.picked.add(key)
         else:
             self.picked.discard(key)
-        self._store()
+        self._refresh_text()
 
     def set_picked(self, keys):
         self.picked = {k for k in ALL_KEYS if k in set(keys)}
@@ -120,17 +137,14 @@ class OverlayPicker(QToolButton):
             action.blockSignals(True)
             action.setChecked(k in self.picked)
             action.blockSignals(False)
-        self._store()
-
-    def _store(self):
-        if self._settings is not None:
-            save(self._settings, self._key, self.picked)
         self._refresh_text()
 
     def _refresh_text(self):
         n = len(self.picked)
-        if n == len(ALL_KEYS):
-            text = "모두 함께 담기 (영상에 보이는 그대로)"
+        if self.picked == current_picked(self._viewport):
+            text = "화면에 보이는 그대로"
+        elif n == len(ALL_KEYS):
+            text = "모두 함께 담기"
         elif n == 0:
             text = "영상만 (그린 것 없이)"
         else:
@@ -141,7 +155,7 @@ class OverlayPicker(QToolButton):
 class CaptureOptionsDialog(QDialog):
     """📷 캡처 — 바탕과 '함께 담을 것'을 고르고 저장
 
-    체크한 항목만 그림에 들어간다. 고른 값은 다음에 열 때도 그대로 남는다.
+    처음에는 화면에 보이는 그대로 체크되어 열린다. 체크한 항목만 그림에 들어간다.
     """
 
     BACKGROUNDS = (
@@ -149,7 +163,7 @@ class CaptureOptionsDialog(QDialog):
         ("transparent", "투명 배경 — 그린 것만 (PNG)"),
     )
 
-    def __init__(self, settings, parent=None):
+    def __init__(self, viewport=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("📷 캡처 — 무엇을 담을까요?")
         self.setMinimumWidth(420)
@@ -163,11 +177,13 @@ class CaptureOptionsDialog(QDialog):
                                     "(발표 자료에 겹쳐 쓰기 좋음)")
         form.addRow("바탕:", self._background)
 
-        self.picker = OverlayPicker(settings, "capture/overlay_parts", self)
+        self.picker = OverlayPicker(viewport, self)
         form.addRow("함께 담을 것:", self.picker)
         layout.addLayout(form)
 
-        hint = QLabel("누르면 목록이 펼쳐집니다 — 체크한 것만 그림에 들어갑니다.")
+        hint = QLabel("지금 화면에 보이는 그대로 체크되어 있습니다 — "
+                      "누르면 펼쳐져 더 빼거나 넣을 수 있습니다.")
+        hint.setWordWrap(True)
         hint.setStyleSheet("color: #8b949e;")
         layout.addWidget(hint)
 

@@ -1,6 +1,6 @@
 # DabbaView 사용자 매뉴얼
 
-버전 4.8.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
+버전 4.9.0 · macOS / Windows · 변경 이력은 [CHANGELOG](../CHANGELOG.md)
 
 > 이 매뉴얼의 화면은 DabbaView 2.2.x를 실제로 실행해서 찍었습니다 (MPR · 3D · 프리셋 · Send/Print 화면은 2.0.0 그대로 — 바뀐 내용 없음).
 > - 예시 영상은 GE SIGNA Architect 3.0T **심장 MRI 임상 영상**(cine · T1/T2 mapping · perfusion · LGE)과 복부 CT입니다.
@@ -481,7 +481,8 @@ macOS는 **⌘,**, Windows는 **File → Settings**로 엽니다.
 | I | 흑백 반전 | Shift+R | 회전·반전 초기화 |
 | C | Crosslink (스캔 범위) | L | HU Lens |
 | K | Key Image 표시/해제 | Shift+K | Key Image 모아보기 |
-| Shift+T | Stack ↔ Tile | T / O | 오버레이 표시/숨김 |
+| Shift+T | Stack ↔ Tile | T / O | 🆔 환자 정보 글자 표시/숨김 |
+| Shift+A | ✎ 그린 것 전체 표시/숨김 | Shift+O | 👁 둘 다 한 번에 (영상만 보기) |
 | Space | Multi View 칸 최대화 | P | 시네 재생/정지 (▶ Play ↔ ■ Stop) |
 | Esc | 그리기 취소 | | |
 | Ctrl+T | DICOM 태그 | Ctrl+I | Image 정보 패널 |

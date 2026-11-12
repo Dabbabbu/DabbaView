@@ -26,10 +26,11 @@ import os
 
 import numpy as np
 from PyQt5.QtWidgets import QWidget, QInputDialog
-from PyQt5.QtCore import Qt, QPoint, QPointF, QRect, QRectF, QTimer, pyqtSignal
+from PyQt5.QtCore import (Qt, QEvent, QPoint, QPointF, QRect, QRectF, QTimer,
+                          pyqtSignal)
 from PyQt5.QtGui import (QImage, QPixmap, QPainter, QPen, QColor, QFont, QCursor,
                          QFontDatabase, QTransform, QPainterPath, QPolygonF,
-                         QBrush)
+                         QBrush, QMouseEvent)
 
 from . import __version__, dicom_info
 from .annotations import ROI_TYPES, AnnotationStore, image_key
@@ -1055,6 +1056,12 @@ class DicomViewport(AnnotationEditMixin, QWidget):
                 target = self.snap_point(self._draft["pts"][-2], img_pos)
             self._draft["pts"][-1] = target
 
+        if self._mouse_pressed and not event.buttons():
+            # 버튼을 뗀 신호를 못 받았는데 움직임이 왔다 → 이미 뗀 것이므로 여기서 끝낸다
+            self._release_lost_drag(pos, event.modifiers())
+            self.update()
+            return
+
         if not self._mouse_pressed:
             self.update()
             return
@@ -1135,6 +1142,21 @@ class DicomViewport(AnnotationEditMixin, QWidget):
             self._feel_drag("pan", dx, dy, speed)
         elif tool == self.TOOL_ZOOM:
             self._feel_drag("zoom", dx, dy, speed)
+
+    def _release_lost_drag(self, pos, modifiers=Qt.NoModifier):
+        """버튼 뗀 신호를 못 받은 끌기를 스스로 끝낸다 (휠(가운데) 버튼 등)
+
+        macOS에서 가운데 버튼은 뗄 때 이벤트가 오지 않는 일이 있다. 그러면 버튼을
+        다 뗐는데도 계속 누른 줄 알고 영상이 따라다녔고, 다시 눌러도 풀리지 않았다.
+        눌린 버튼이 하나도 없는 움직임이 오면 그 자리에서 뗀 것으로 보고 정리한다.
+        (그리던 측정 · 판서도 평소 떼었을 때와 똑같이 마무리된다)
+        """
+        button = self._mouse_button if self._mouse_button != Qt.NoButton else Qt.LeftButton
+        self._right_press_pos = None      # 우클릭 메뉴가 뜨지 않게 (끌다 놓은 것이므로)
+        self._last_move_ms = None         # 억지로 끝낸 것이라 관성은 주지 않는다
+        self.mouseReleaseEvent(
+            QMouseEvent(QEvent.MouseButtonRelease, QPointF(pos), button,
+                        Qt.NoButton, modifiers))
 
     RIGHT_CLICK_PX = 5      # 이만큼 안 움직이고 떼면 '끈 것'이 아니라 '누른 것'
 

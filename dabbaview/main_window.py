@@ -683,10 +683,7 @@ class MainWindow(QMainWindow):
         self._act_toggle_panel.triggered.connect(self.toggle_series_panel)
         view_menu.addAction(self._act_toggle_panel)
 
-        overlay_action = QAction("Toggle Overlay (정보 + 주석)", self)
-        overlay_action.setShortcuts([QKeySequence("T"), QKeySequence("O")])
-        overlay_action.triggered.connect(self._toggle_overlay)
-        view_menu.addAction(overlay_action)
+        # 🆔 환자 정보 글자(T · O) · 👁 둘 다(Shift+O)는 위 ✎ 아노테이션 묶음에 함께 있다
         view_menu.addAction(self._act_maximize)
 
         # Reading
@@ -3059,7 +3056,7 @@ class MainWindow(QMainWindow):
         """
         on = True
         DicomViewport.annotations_visible = True
-        master = QAction("✎ Annot", self)
+        master = QAction("✎ 그린 것 전체 표시 (아노테이션)", self)
         master.setCheckable(True)
         master.setChecked(bool(on))
         master.setShortcut(QKeySequence("Shift+A"))
@@ -3069,6 +3066,26 @@ class MainWindow(QMainWindow):
         master.triggered.connect(self._set_annotations_visible)
         menu.addAction(master)
         self._act_annotations = master
+
+        demo = QAction("🆔 환자 정보 글자 (데모그래픽)", self)
+        demo.setCheckable(True)
+        demo.setChecked(self._demographics_on())
+        demo.setShortcuts([QKeySequence("T"), QKeySequence("O")])
+        demo.setToolTip("모서리의 환자 · 검사 정보 글자를 모든 칸에서 한 번에 "
+                        "보이거나 숨깁니다 (T · O)")
+        demo.triggered.connect(self._set_demographics_visible)
+        menu.addAction(demo)
+        self._act_demographics = demo
+
+        both = QAction("👁 그린 것 + 환자 정보 모두", self)
+        both.setCheckable(True)
+        both.setChecked(self._everything_on())
+        both.setShortcut(QKeySequence("Shift+O"))
+        both.setToolTip("아노테이션과 환자 정보 글자를 한 번에 모두 켜고 끕니다 (Shift+O)\n"
+                        "끄면 영상만 남습니다")
+        both.triggered.connect(self._set_everything_visible)
+        menu.addAction(both)
+        self._act_everything = both
 
         sub = menu.addMenu("✎ 아노테이션 종류별")
         self._annot_actions = {}
@@ -3086,17 +3103,65 @@ class MainWindow(QMainWindow):
         sub.addSeparator()
         self._init_landmark_display_menu(sub)
 
-    def _set_annotations_visible(self, on):
+    def _set_annotations_visible(self, on, quiet=False):
         DicomViewport.annotations_visible = bool(on)
-        action = getattr(self, "_act_annotations", None)
-        if action is not None and action.isChecked() != bool(on):
-            action.setChecked(bool(on))
+        self._sync_overlay_actions()
         for vp in self._all_viewports():
             vp.update()
-        self._statusbar.showMessage("아노테이션: " + ("보임" if on else "모두 숨김"), 4000)
+        if not quiet:
+            self._statusbar.showMessage("아노테이션: " + ("보임" if on else "모두 숨김"), 4000)
 
     def toggle_annotations(self):
         self._set_annotations_visible(not DicomViewport.annotations_visible)
+
+    def _demographics_on(self):
+        """🆔 환자 정보 글자(모서리 글자)가 지금 보이는가"""
+        try:
+            vp = self._target_viewport()
+        except AttributeError:
+            return True                      # 메뉴를 만드는 중 (칸이 아직 없음)
+        return bool(vp.overlay_visible) if vp is not None else True
+
+    def _everything_on(self):
+        return bool(DicomViewport.annotations_visible and self._demographics_on())
+
+    def _set_demographics_visible(self, on, quiet=False):
+        """🆔 환자 정보 글자를 모든 칸에서 한 번에 켜고 끄기 (T · O)
+
+        그린 것(아노테이션)과는 따로 동작한다 — 글자만 치우고 측정은 남기는 일이 많다.
+        """
+        on = bool(on)
+        for vp in self._all_viewports():
+            vp.set_overlay_visible(on)
+        self._sync_overlay_actions()
+        if not quiet:
+            self._statusbar.showMessage(
+                "환자 정보 글자: " + ("보임" if on else "숨김"), 4000)
+
+    def toggle_demographics(self):
+        self._set_demographics_visible(not self._demographics_on())
+
+    def _set_everything_visible(self, on):
+        """👁 그린 것 + 환자 정보 글자를 한 번에 (Shift+O)"""
+        on = bool(on)
+        self._set_annotations_visible(on, quiet=True)
+        self._set_demographics_visible(on, quiet=True)
+        self._statusbar.showMessage(
+            "그린 것 · 환자 정보 글자: " + ("모두 보임" if on else "모두 숨김 (영상만)"), 4000)
+
+    def toggle_everything(self):
+        """하나라도 켜져 있으면 모두 끄고, 모두 꺼져 있으면 모두 켠다"""
+        on = not (DicomViewport.annotations_visible or self._demographics_on())
+        self._set_everything_visible(on)
+
+    def _sync_overlay_actions(self):
+        """메뉴의 체크 표시를 지금 상태에 맞춘다"""
+        for name, value in (("_act_annotations", DicomViewport.annotations_visible),
+                            ("_act_demographics", self._demographics_on()),
+                            ("_act_everything", self._everything_on())):
+            action = getattr(self, name, None)
+            if action is not None and action.isChecked() != bool(value):
+                action.setChecked(bool(value))
 
     def _set_annotation_part(self, key, attr, on):
         setattr(DicomViewport, attr, bool(on))
@@ -3118,10 +3183,20 @@ class MainWindow(QMainWindow):
     def annotation_menu(self, parent):
         """✎ 아노테이션 표시 세부 메뉴 (도구 막대 버튼 우클릭 · 하단 그리기 칸 우클릭 공용)"""
         menu = QMenu(parent)
-        master = menu.addAction("✎ 전체 표시\tShift+A")
+        master = menu.addAction("✎ 그린 것 전체 표시\tShift+A")
         master.setCheckable(True)
         master.setChecked(DicomViewport.annotations_visible)
         master.triggered.connect(self.toggle_annotations)
+        demo = menu.addAction("🆔 환자 정보 글자 (데모그래픽)\tT · O")
+        demo.setCheckable(True)
+        demo.setChecked(self._demographics_on())
+        demo.setToolTip("모서리의 환자 · 검사 정보 글자 (그린 것과 따로 켜고 끕니다)")
+        demo.triggered.connect(self.toggle_demographics)
+        both = menu.addAction("👁 둘 다 한 번에\tShift+O")
+        both.setCheckable(True)
+        both.setChecked(self._everything_on())
+        both.setToolTip("그린 것과 환자 정보 글자를 한 번에 — 끄면 영상만 남습니다")
+        both.triggered.connect(self.toggle_everything)
         menu.addSeparator()
         for _key, attr, label, shortcut, _name in self.ANNOT_PARTS:
             action = menu.addAction(f"{label}\t{shortcut}" if shortcut else label)
@@ -4499,7 +4574,7 @@ class MainWindow(QMainWindow):
         """
         if kind is None:
             from .overlay_options import CaptureOptionsDialog
-            dialog = CaptureOptionsDialog(self._settings, self)
+            dialog = CaptureOptionsDialog(self._target_viewport(), self)
             if not dialog.exec_():
                 return
             kind, picked = dialog.kind(), dialog.picked
@@ -4507,7 +4582,8 @@ class MainWindow(QMainWindow):
             from .overlay_options import applied
             with applied(self._target_viewport(), picked):
                 return self._capture_to_file(kind, "demographics" in picked)
-        return self._capture_to_file(kind, True)
+        # 고르지 않고 바로 저장: 지금 화면에 보이는 그대로 (환자 정보 글자를 꺼 뒀으면 빠진 채로)
+        return self._capture_to_file(kind, self._demographics_on())
 
     def _capture_to_file(self, kind, overlay=True):
         current = self._current_view()
@@ -4847,11 +4923,8 @@ class MainWindow(QMainWindow):
                 f"3D Cursor: {linked}개 칸에 표시 · {out_of_range}개 칸은 스캔 범위 밖", 6000)
 
     def _toggle_overlay(self):
-        """환자 정보 오버레이 + 측정/주석 표시 토글 (T / O)"""
-        show = not self._viewport.overlay_visible
-        for vp in self._all_viewports():
-            vp.set_overlay_visible(show)
-        self._statusbar.showMessage(f"Overlay {'ON' if show else 'OFF'}", 2000)
+        """🆔 환자 정보 글자 토글 (T · O) — 예전 이름, 지금은 한곳으로 모았다"""
+        self.toggle_demographics()
 
     def _toggle_maximize(self):
         """Space: Multi View에서 선택한 칸만 크게 ↔ 원래 배치"""
@@ -4939,8 +5012,7 @@ class MainWindow(QMainWindow):
             self._viewport._window_center,
             self._viewport._window_width,
             self._viewport._inverted, self,
-            viewport=vp if same else None,
-            settings=self._settings if same else None)
+            viewport=vp if same else None)
         if dialog.exec_():
             self._statusbar.showMessage(dialog.result_message, 8000)
 
