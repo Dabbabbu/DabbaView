@@ -3060,9 +3060,8 @@ class MainWindow(QMainWindow):
         master.setCheckable(True)
         master.setChecked(bool(on))
         master.setShortcut(QKeySequence("Shift+A"))
-        master.setToolTip("영상 위에 그린 것을 한 번에 보이거나 숨깁니다 (Shift+A)\n"
-                          "환자 정보 글자(O · T)와는 따로 동작합니다\n"
-                          "우클릭: 종류별로 골라서 켜고 끄기")
+        master.setIconText("Annot")            # 아이콘을 못 그리는 설치본에서 도구 막대에 나올 짧은 글자
+        master.setIconVisibleInMenu(False)     # 메뉴에서는 체크 표시가 보이게 (눈 그림은 도구 막대에만)
         master.triggered.connect(self._set_annotations_visible)
         menu.addAction(master)
         self._act_annotations = master
@@ -3102,10 +3101,57 @@ class MainWindow(QMainWindow):
             self._annot_actions[attr] = action
         sub.addSeparator()
         self._init_landmark_display_menu(sub)
+        self._refresh_annot_button()
+
+    # 👁 아노테이션 버튼의 눈 모양 — 상태 → (아이콘, 색, 한 줄 설명)
+    ANNOT_EYES = {
+        "all": ("eye", icons.ICON_COLOR, "모두 보임"),
+        "partial": ("eyeclosed", icons.ICON_COLOR_CAUTION, "일부 숨김"),
+        "none": ("eyeoff", icons.ICON_COLOR_WARNING, "모두 숨김"),
+    }
+
+    def _hidden_annot_parts(self):
+        """지금 꺼 둔 아노테이션 종류의 이름들 (전체 표시와는 별개로)"""
+        names = [name for _k, attr, _l, _s, name in self.ANNOT_PARTS
+                 if not getattr(DicomViewport, attr)]
+        if DicomViewport.landmark_display == "hidden":
+            names.append("랜드마크")
+        return names
+
+    def annot_state(self):
+        """'all' 모두 보임 · 'partial' 종류 몇 개만 숨김 · 'none' 전체 숨김"""
+        if not DicomViewport.annotations_visible:
+            return "none"
+        return "partial" if self._hidden_annot_parts() else "all"
+
+    def _refresh_annot_button(self):
+        """👁 버튼의 눈 모양 · 색 · 설명을 지금 상태에 맞춘다
+
+        뜬 눈 = 모두 보임 / 감은 눈(주황) = 일부 숨김 / X 친 눈(빨강) = 모두 숨김.
+        꺼 둔 것을 잊고 "그려지지 않는다"고 오해하지 않게, 버튼만 봐도 상태가 보이도록.
+        """
+        action = getattr(self, "_act_annotations", None)
+        if action is None:
+            return
+        state = self.annot_state()
+        name, color, text = self.ANNOT_EYES[state]
+        icon = icons.icon(name, color=color)
+        if not icon.isNull():
+            action.setIcon(icon)
+        hidden = self._hidden_annot_parts()
+        if state == "partial":
+            text += " — " + ", ".join(hidden)
+        action.setToolTip(
+            f"아노테이션 표시  (Shift+A)\n지금: {text}\n"
+            "영상 위에 그린 것을 한 번에 보이거나 숨깁니다\n"
+            "환자 정보 글자(O · T)와는 따로 동작합니다\n"
+            "우클릭: 종류별로 골라서 켜고 끄기")
+        self._recheck_tool_warning()
 
     def _set_annotations_visible(self, on, quiet=False):
         DicomViewport.annotations_visible = bool(on)
         self._sync_overlay_actions()
+        self._refresh_annot_button()
         for vp in self._all_viewports():
             vp.update()
         if not quiet:
@@ -3169,6 +3215,7 @@ class MainWindow(QMainWindow):
         if action is not None and action.isChecked() != bool(on):
             action.setChecked(bool(on))
         name = next((n for k, a, _l, _s, n in self.ANNOT_PARTS if a == attr), attr)
+        self._refresh_annot_button()
         for vp in self._all_viewports():
             vp.update()
         self._statusbar.showMessage(f"{name}: " + ("보임" if on else "숨김"), 4000)
@@ -3268,6 +3315,7 @@ class MainWindow(QMainWindow):
         action = getattr(self, "_landmark_display_actions", {}).get(mode)
         if action is not None:
             action.setChecked(True)
+        self._refresh_annot_button()
         for vp in self._all_viewports():
             vp.update()
         self._statusbar.showMessage(f"랜드마크 표시: {self.LANDMARK_DISPLAY_TEXT[mode]}", 5000)
@@ -4156,6 +4204,79 @@ class MainWindow(QMainWindow):
         pads = getattr(self, "_drag_pads", None)  # 하단 '✏️ 그리기' 칸도 따라가게
         if pads is not None:
             pads.refresh_tool()
+        self._warn_if_tool_hidden(tool)
+
+    def _tool_annot_part(self, tool):
+        """이 도구로 그린 것이 속한 아노테이션 종류 → (뷰포트 속성 | 'landmark', 이름). 그리는 도구가 아니면 None"""
+        V = DicomViewport
+        if tool in (V.TOOL_MEASURE, V.TOOL_PATH, V.TOOL_ANGLE, V.TOOL_COBB,
+                    V.TOOL_ROI, V.TOOL_ELLIPSE, V.TOOL_RECT, V.TOOL_AREA):
+            if V.show_measurements and not V.show_measure_labels:
+                return "show_measure_labels", "측정 숫자"     # 선은 보이는데 값만 안 보이는 경우
+            return "show_measurements", "측정 · ROI"
+        return {V.TOOL_ARROW: ("show_notes", "화살표 · 텍스트"),
+                V.TOOL_TEXT: ("show_notes", "화살표 · 텍스트"),
+                V.TOOL_SCRIBBLE: ("show_scribble", "판서"),
+                V.TOOL_PROFILE: ("show_profile", "라인 프로파일"),
+                V.TOOL_LANDMARK: ("landmark", "랜드마크")}.get(tool)
+
+    def _tool_hidden_reason(self, tool):
+        """이 도구로 그려도 지금은 화면에 안 보이는 까닭 → (수준, 제목, 설명, 되살릴 것들) 또는 None"""
+        V = DicomViewport
+        part = self._tool_annot_part(tool)
+        if part is None:
+            return None
+        attr, name = part
+        part_off = (V.landmark_display == "hidden") if attr == "landmark" else not getattr(V, attr)
+        action = self._tool_actions.get(tool)
+        tool_name = (action.text().lstrip("⬚📍✍ ").strip() if action is not None else "") or "이 도구"
+        if not V.annotations_visible:
+            return ("warning", "아노테이션을 모두 숨겨 둔 상태입니다",
+                    f"<b>{tool_name}</b>(으)로 그려도 지금은 화면에 보이지 않습니다.",
+                    (True, attr if part_off else None))
+        if part_off:
+            detail = (f"<b>{tool_name}</b>(으)로 그리면 선과 도형은 보이지만 측정값 숫자는 보이지 않습니다."
+                      if attr == "show_measure_labels"
+                      else f"<b>{tool_name}</b>(으)로 그려도 지금은 화면에 보이지 않습니다.")
+            return "caution", f"'{name}' 표시를 꺼 둔 상태입니다", detail, (False, attr)
+        return None
+
+    def _warn_if_tool_hidden(self, tool):
+        """그리는 도구를 골랐는데 그 종류를 숨겨 둔 상태면 뷰어 오른쪽 위에 색 띠로 알린다"""
+        toast = getattr(self, "_toast", None)
+        reason = self._tool_hidden_reason(tool)
+        if reason is None:
+            if toast is not None:
+                toast.hide()
+            return
+        if toast is None:
+            from .toast import Toast
+            toast = self._toast = Toast(self._tab_widget,
+                                        top_offset=lambda: self._tab_widget.tabBar().height() + 8)
+        level, title, detail, (show_all, attr) = reason
+        toast.show_message(title, detail, level=level, action_text="👁 다시 보이기",
+                           on_action=lambda: self._show_annot_for_tool(show_all, attr))
+        self._statusbar.showMessage(f"⚠ {title}", 8000)
+
+    def _recheck_tool_warning(self):
+        """표시 상태가 바뀌었을 때 — 떠 있던 알림이 더는 맞지 않으면 내린다 (새로 띄우지는 않는다)"""
+        toast = getattr(self, "_toast", None)
+        if toast is None or not toast.isVisible():
+            return
+        if self._tool_hidden_reason(getattr(self, "_current_tool_id", None)) is None:
+            toast.hide()
+
+    def _show_annot_for_tool(self, show_all, attr):
+        """알림의 '다시 보이기' — 고른 도구로 그린 것이 보이도록 필요한 것만 켠다"""
+        if show_all:
+            self._set_annotations_visible(True, quiet=True)
+        if attr == "landmark":
+            self._set_landmark_display("subtle")
+        elif attr:
+            key = next(k for k, a, _l, _s, _n in self.ANNOT_PARTS if a == attr)
+            self._set_annotation_part(key, attr, True)
+        elif show_all:
+            self._statusbar.showMessage("아노테이션: 보임", 4000)
 
     def viewport_menu(self, viewport):
         """영상 위에서 우클릭(끌지 않고) — 보기 끄고 켜기 · 이 슬라이스의 측정 · 랜드마크 지우기
